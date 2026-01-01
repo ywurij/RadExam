@@ -125,21 +125,44 @@ function QuizContent() {
             // Merge Progress & Genres
             const combinedProgress = { ...userProg };
             const uniqueGenres = new Set();
+
+            const addGenre = (g) => {
+                if (!g) return;
+                if (Array.isArray(g)) {
+                    g.forEach(item => addGenre(item));
+                } else if (typeof g === 'string') {
+                    g.split(/[,、]/).forEach(s => {
+                        const trimmed = s.trim();
+                        if (trimmed) uniqueGenres.add(trimmed);
+                    });
+                }
+            };
+
             getAllQuestions().forEach(q => {
-                if (q.genre) uniqueGenres.add(q.genre);
+                addGenre(q.genre);
             });
 
-            Object.keys(overrides).forEach(globalQid => { // overrides use global keys?
-                // Actually overrides might need global keys too?
-                // Let's assume overrides collection keys are also global ID for consistency.
+            // Map user progress 'note' to 'overrideExplanation' for the UI
+            Object.keys(combinedProgress).forEach(key => {
+                const p = combinedProgress[key];
+                if (p.note) {
+                    p.overrideExplanation = p.note;
+                }
+                addGenre(p.overrideGenre);
+            });
+
+            // (Optional) Global Overrides Fallback:
+            Object.keys(overrides).forEach(globalQid => {
                 const ov = overrides[globalQid];
+                const existing = combinedProgress[globalQid] || {};
+
                 combinedProgress[globalQid] = {
-                    ...(combinedProgress[globalQid] || {}),
-                    overrideAnswer: ov.answer,
-                    overrideGenre: ov.genre,
-                    overrideExplanation: ov.explanation
+                    ...existing,
+                    overrideAnswer: existing.overrideAnswer || ov.answer,
+                    overrideGenre: existing.overrideGenre || ov.genre,
+                    overrideExplanation: existing.note || ov.explanation
                 };
-                if (ov.genre) uniqueGenres.add(ov.genre);
+                addGenre(ov.genre);
             });
 
             setAllGenres(Array.from(uniqueGenres).sort());
@@ -168,11 +191,6 @@ function QuizContent() {
     const handleUpdateStatus = async (qid, updates) => {
         const globalId = getGlobalQuestionId(examId, qid);
 
-        // Update local state (keyed by globalId now?)
-        // Wait, progress state comes from DB (global keys).
-        // BUT overrides are loaded from DB (questionId keys?).
-        // Let's ensure consistency. getUserExamProgress returns global keys.
-
         setProgress(prev => ({
             ...prev,
             [globalId]: { ...prev[globalId], ...updates }
@@ -184,20 +202,27 @@ function QuizContent() {
 
     const handleSaveOverride = async (qid, overrideData) => {
         const globalId = getGlobalQuestionId(examId, qid);
+
+        // Update local state
         setProgress(prev => ({
             ...prev,
             [globalId]: {
                 ...prev[globalId],
                 overrideAnswer: overrideData.answer,
                 overrideGenre: overrideData.genre,
-                overrideExplanation: overrideData.explanation
+                overrideExplanation: overrideData.explanation, // UI uses this
+                note: overrideData.explanation // DB uses this (for Export compatibility)
             }
         }));
-        await saveQuestionOverride(globalId, {
-            answer: overrideData.answer,
-            genre: overrideData.genre,
-            explanation: overrideData.explanation,
-        });
+
+        if (user) {
+            // Save as Personal Private Data
+            await saveUserProgress(user.uid, globalId, {
+                overrideAnswer: overrideData.answer,
+                overrideGenre: overrideData.genre,
+                note: overrideData.explanation // Mapped to 'note' for consistency/export
+            });
+        }
     };
 
     const handleFinish = () => {

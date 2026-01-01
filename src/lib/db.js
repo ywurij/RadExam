@@ -491,3 +491,179 @@ export const migrateLegacyData = async (uid) => {
         return { success: false, message: e.message };
     }
 };
+
+/**
+ * Export user data (progress) to JSON object with granular filtering.
+ * @param {string} uid 
+ * @param {Object} options { history: boolean, answers: boolean, notes: boolean, genres: boolean }
+ */
+export const exportUserData = async (uid, options = { history: true, answers: true, notes: true, genres: true }) => {
+    if (!uid) throw new Error("User ID required");
+
+    try {
+        const progressRef = collection(db, 'users', uid, 'progress');
+        const snap = await getDocs(progressRef);
+
+        const data = {};
+        snap.forEach(doc => {
+            const raw = doc.data();
+            const exported = {};
+            let hasContent = false;
+
+            // Study History (Status, Likes, etc.)
+            if (options.history) {
+                if (raw.status) { exported.status = raw.status; hasContent = true; }
+                if (raw.isLiked) { exported.isLiked = raw.isLiked; hasContent = true; }
+                if (raw.updatedAt) { exported.updatedAt = raw.updatedAt; } // Always keep metadata if history is on?
+            }
+
+            // My Answers
+            if (options.answers && raw.overrideAnswer) {
+                exported.overrideAnswer = raw.overrideAnswer;
+                hasContent = true;
+            }
+
+            // My Notes
+            if (options.notes && raw.note) {
+                exported.note = raw.note;
+                hasContent = true;
+            }
+
+            // My Genres
+            if (options.genres && raw.overrideGenre) {
+                exported.overrideGenre = raw.overrideGenre;
+                hasContent = true;
+            }
+
+            if (hasContent) {
+                data[doc.id] = exported;
+            }
+        });
+
+        return {
+            version: 1,
+            timestamp: Date.now(),
+            userId: uid,
+            options: options,
+            data: data
+        };
+    } catch (e) {
+        console.error("Export failed:", e);
+        throw e;
+    }
+};
+
+/**
+ * Import user data from JSON object.
+ * @param {string} uid
+ * @param {Object} jsonData
+ * @param {string} strategy 'overwrite' | 'keep' (default: 'overwrite')
+ */
+export const importUserData = async (uid, jsonData, strategy = 'overwrite') => {
+    if (!uid) throw new Error("User ID required");
+    if (!jsonData || !jsonData.data) throw new Error("Invalid data format");
+
+    try {
+        const entries = Object.entries(jsonData.data);
+        const importKeys = new Set(Object.keys(jsonData.data));
+
+        // Operations list to execute in batches
+        // Each op: { type: 'set' | 'update' | 'delete', ref: docRef, data: ... }
+        let operations = [];
+
+        // 1. If strategy is 'overwrite', we need to DELETE existing docs that are NOT in the import file.
+        //    (Mirroring / Sync behavior)
+        if (strategy === 'overwrite') {
+            const progressRef = collection(db, 'users', uid, 'progress');
+            const snap = await getDocs(progressRef);
+
+            snap.forEach(docSnap => {
+                if (!importKeys.has(docSnap.id)) {
+                    // This doc exists locally but is NOT in the import file -> Delete it
+                    operations.push({
+                        type: 'delete',
+                        ref: doc(db, 'users', uid, 'progress', docSnap.id)
+                    });
+                }
+            });
+        }
+
+        // 2. If strategy is 'keep', we need existing data to check for conflicts (don't overwrite existing).
+        let existingData = {};
+        if (strategy === 'keep') {
+            const progressRef = collection(db, 'users', uid, 'progress');
+            const snap = await getDocs(progressRef);
+            snap.forEach(doc => {
+                existingData[doc.id] = doc.data();
+            });
+        }
+
+        // 3. Prepare Import Operations (Set / Update)
+        entries.forEach(([docId, docData]) => {
+            const docRef = doc(db, 'users', uid, 'progress', docId);
+
+            if (strategy === 'overwrite') {
+                // Force Overwrite: Replace doc
+                operations.push({
+                    type: 'set',
+                    ref: docRef,
+                    data: docData
+                });
+            } else if (strategy === 'keep') {
+                const local = existingData[docId];
+                if (!local) {
+                    // No local data -> Safe to write
+                    operations.push({
+                        type: 'set',
+                        ref: docRef,
+                        data: docData
+                    });
+                } else {
+                    // Local exists -> Merge only missing fields
+                    const updates = {};
+                    let hasUpdates = false;
+                    Object.keys(docData).forEach(key => {
+                        if (local[key] === undefined || local[key] === null) {
+                            updates[key] = docData[key];
+                            hasUpdates = true;
+                        }
+                    });
+                    if (hasUpdates) {
+                        operations.push({
+                            type: 'update',
+                            ref: docRef,
+                            data: updates
+                        });
+                    }
+                }
+            }
+        });
+
+        if (operations.length === 0) return { success: true, count: 0 };
+
+        // 4. Execute Batches (Limit 500)
+        const chunkedOps = [];
+        for (let i = 0; i < operations.length; i += 450) { // Safety margin < 500
+            chunkedOps.push(operations.slice(i, i + 450));
+        }
+
+        for (const chunk of chunkedOps) {
+            const batch = writeBatch(db);
+            chunk.forEach(op => {
+                if (op.type === 'delete') {
+                    batch.delete(op.ref);
+                } else if (op.type === 'set') {
+                    batch.set(op.ref, op.data); // No merge:true for overwrite
+                } else if (op.type === 'update') {
+                    batch.update(op.ref, op.data);
+                }
+            });
+            await batch.commit();
+        }
+
+        return { success: true, count: entries.length, deleted: operations.filter(o => o.type === 'delete').length };
+    } catch (e) {
+        console.error("Import failed:", e);
+        throw e;
+    }
+};

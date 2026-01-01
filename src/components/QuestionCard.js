@@ -33,8 +33,11 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveO
     // Memoize slides
     const slides = useMemo(() => question.images?.map(img => ({ src: `/${img.path}` })) || [], [question.images]);
 
+    // Stable reference for empty array
+    const EMPTY_ARRAY = useMemo(() => [], []);
+
     // Derived states
-    const currentAnswer = userProgress?.overrideAnswer || question.answer || [];
+    const currentAnswer = userProgress?.overrideAnswer || question.answer || EMPTY_ARRAY;
     const currentGenre = userProgress?.overrideGenre || question.genre || "";
     const currentExplanation = userProgress?.overrideExplanation || question.explanation || "";
 
