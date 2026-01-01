@@ -1,0 +1,296 @@
+.editorWrapper {
+    border: 1px solid #e2e8f0;
+    border-radius: 0.5rem;
+    background: #fff;
+    /* display: flex; flex causes issues with sticky in some contexts, regular block flow is safer here */
+    display: block;
+}
+
+.menubar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    padding: 0.5rem;
+    background: #f8fafc;
+    border-bottom: 1px solid #e2e8f0;
+    align-items: center;
+    border-radius: 0.5rem 0.5rem 0 0;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    /* Increased z-index */
+}
+
+.group {
+    display: flex;
+    gap: 0.25rem;
+    padding-right: 0.5rem;
+    border-right: 1px solid #e2e8f0;
+    align-items: center;
+
+    &:last-child {
+        border-right: none;
+    }
+}
+
+.menubar button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 2rem;
+    padding: 0;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 0.25rem;
+    cursor: pointer;
+    color: #4a5568;
+    transition: all 0.2s;
+    font-weight: 600;
+
+    .group & {
+        border: none;
+    }
+
+    &:hover {
+        background: #edf2f7;
+        color: #2d3748;
+    }
+
+    &.active {
+        background: #e2e8f0;
+        color: #2b6cb0;
+
+    }
+
+    &:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+}
+
+.tableControls {
+    display: flex;
+    gap: 0.25rem;
+    margin-left: 0.5rem;
+    padding-left: 0.5rem;
+    border-left: 1px solid #cbd5e0;
+    align-items: center;
+
+    button {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 2rem;
+        height: 2rem;
+        padding: 0;
+        background: transparent;
+        border: 1px solid transparent;
+        border-radius: 0.25rem;
+        cursor: pointer;
+        color: #4a5568;
+        transition: all 0.2s;
+
+        &:hover {
+            background: #edf2f7;
+            color: #2d3748;
+        }
+    }
+}
+
+.deleteAction {
+    color: #e53e3e !important;
+
+    &:hover {
+        background: #fff5f5 !important;
+        color: #c53030 !important;
+    }
+}
+
+.divider {
+    width: 1px;
+    height: 1.5rem;
+    background: #e2e8f0;
+    margin: 0 0.25rem;
+}
+
+.content {
+    padding: 1rem;
+    min-height: 200px;
+    flex-grow: 1;
+    overflow-y: auto;
+
+    :global(.ProseMirror) {
+        outline: none;
+
+        >*+* {
+            margin-top: 0.75em;
+        }
+
+        ul,
+        ol {
+            padding: 0 1.5rem;
+        }
+
+        ul {
+            list-style-type: disc;
+        }
+
+        ol {
+            list-style-type: decimal;
+        }
+
+        /* Basic Formatting */
+        h1 {
+            font-size: 1.8em;
+            font-weight: bold;
+        }
+
+        h2 {
+            font-size: 1.5em;
+            font-weight: bold;
+        }
+
+        h3 {
+            font-size: 1.25em;
+            font-weight: bold;
+        }
+
+        /* Table Styles - Scrollable wrapper? Tiptap renders table directly. 
+           Mobile responsive table usually needs overflow-x auto on parent.
+        */
+        /* Table Styles */
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            margin: 0;
+            overflow: hidden;
+            table-layout: fixed;
+            /* Better for resizing */
+
+            td,
+            th {
+                min-width: 1em;
+                border: 2px solid #ced4da;
+                padding: 3px 5px;
+                vertical-align: top;
+                box-sizing: border-box;
+                position: relative;
+            }
+
+            th {
+                font-weight: bold;
+                text-align: left;
+                background-color: #f1f3f5;
+            }
+
+            :global(.selectedCell) {
+                background-color: rgba(66, 153, 225, 0.2) !important;
+                border: 2px solid #63b3ed !important;
+            }
+        }
+
+        /* Images */
+        img {
+            max-width: 100%;
+            height: auto;
+            border-radius: 0.25rem;
+        }
+
+        /* Math Node */
+
+        /* Math Node */
+        :global(.math-node) {
+            display: inline-block;
+            padding: 0 0.2rem;
+            background: #f0f0f0;
+            border-radius: 0.2rem;
+            font-size: 1.1em;
+        }
+
+        sup,
+        sub {
+            font-size: 75%;
+            line-height: 0;
+            position: relative;
+            vertical-align: baseline;
+        }
+
+        sup {
+            top: -0.5em;
+        }
+
+        sub {
+            bottom: -0.25em;
+        }
+    }
+}
+
+.modalOverlay {
+    position: absolute;
+    top: 50px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 1000;
+    background: white;
+    padding: 1rem;
+    border-radius: 0.5rem;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+    border: 1px solid #e2e8f0;
+    min-width: 300px;
+
+    h4 {
+        margin: 0 0 0.5rem 0;
+        font-size: 0.875rem;
+        color: #4a5568;
+    }
+
+    input {
+        width: 100%;
+        padding: 0.5rem;
+        border: 1px solid #cbd5e0;
+        border-radius: 0.25rem;
+        margin-bottom: 1rem;
+    }
+}
+
+.modalActions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+
+    button {
+        padding: 0.5rem 1rem;
+        /* Increased padding */
+        border-radius: 0.25rem;
+        font-size: 0.875rem;
+        cursor: pointer;
+        white-space: nowrap;
+        /* Prevent text wrapping */
+        min-width: 80px;
+        /* Ensure minimum width */
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+}
+
+.cancelBtn {
+    background: #fff;
+    border: 1px solid #cbd5e0;
+    color: #4a5568;
+
+    &:hover {
+        background: #f7fafc;
+    }
+}
+
+.insertBtn {
+    background: #3b82f6;
+    border: 1px solid #3b82f6;
+    color: white;
+
+    &:hover {
+        background: #2563eb;
+    }
+}
