@@ -10,11 +10,11 @@ export default function SearchPage() {
     const [query, setQuery] = useState('');
     const [results, setResults] = useState([]);
 
-    const handleSearch = (e) => {
+    const handleSearch = async (e) => {
         const q = e.target.value;
         setQuery(q);
         if (q.length > 1) { // Searching with 2+ chars
-            const res = searchQuestions(q);
+            const res = await searchQuestions(q);
             setResults(res.slice(0, 50));
         } else {
             setResults([]);

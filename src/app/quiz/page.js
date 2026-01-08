@@ -2,7 +2,7 @@
 
 import { useState, useEffect, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
-import { getExamData, getAllQuestions, getQuestionsByYear, getGlobalQuestionId } from '@/lib/data';
+import { getExamData, getAllQuestions, getQuestionsByYear, getGlobalQuestionId, getGenres } from '@/lib/data';
 import QuestionCard from '@/components/QuestionCard';
 import styles from './quiz.module.scss';
 import { auth } from '@/lib/firebase';
@@ -61,11 +61,11 @@ function QuizContent() {
                     const session = JSON.parse(savedSession);
                     // Verify data integrity - fetch questions from the SPECIFIC exam to avoid ID collisions
                     const targetExamId = session.examId || examId;
-                    const sourceQs = getExamData(targetExamId);
+                    const sourceQs = await getExamData(targetExamId);
 
                     if (sourceQs.length === 0) {
                         console.warn(`No data found for examId: ${targetExamId}`);
-                        data = getQuestionsByYear(examId, yearFilter);
+                        data = await getQuestionsByYear(examId, yearFilter);
                     } else {
                         const questionMap = new Map(sourceQs.map(q => [q.id, q]));
                         data = session.questionIds.map(id => questionMap.get(id)).filter(Boolean);
@@ -73,18 +73,18 @@ function QuizContent() {
                         if (data.length > 0) {
                             setCurrentIndex(session.currentIndex || 0);
                         } else {
-                            data = getQuestionsByYear(examId, yearFilter);
+                            data = await getQuestionsByYear(examId, yearFilter);
                         }
                     }
                 } catch (e) {
                     console.error("Failed to resume session:", e);
-                    data = getQuestionsByYear(examId, yearFilter);
+                    data = await getQuestionsByYear(examId, yearFilter);
                 }
             } else if (idFilter) {
-                const allQs = getAllQuestions();
+                const allQs = await getAllQuestions();
                 data = allQs.filter(q => q.id.toString() === idFilter);
             } else {
-                data = getQuestionsByYear(examId, yearFilter);
+                data = await getQuestionsByYear(examId, yearFilter);
 
                 // Status Filter
                 const statuses = statusFilter !== 'all' ? statusFilter.split(',') : [];
@@ -138,12 +138,15 @@ function QuizContent() {
                 }
             };
 
-            getAllQuestions().forEach(q => {
-                addGenre(q.genre);
-            });
+            // Static Genres for CURRENT exam only
+            const staticGenres = getGenres(examId);
+            staticGenres.forEach(g => addGenre(g));
 
             // Map user progress 'note' to 'overrideExplanation' for the UI
             Object.keys(combinedProgress).forEach(key => {
+                // Only consider progress for the current exam
+                if (!key.includes(`_${examId}_`)) return;
+
                 const p = combinedProgress[key];
                 if (p.note) {
                     p.overrideExplanation = p.note;
@@ -153,6 +156,9 @@ function QuizContent() {
 
             // (Optional) Global Overrides Fallback:
             Object.keys(overrides).forEach(globalQid => {
+                // Only consider overrides for the current exam
+                if (!globalQid.includes(`_${examId}_`)) return;
+
                 const ov = overrides[globalQid];
                 const existing = combinedProgress[globalQid] || {};
 
