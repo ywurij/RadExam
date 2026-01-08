@@ -24,7 +24,7 @@ export const getExamTypes = () => {
     const order = ['radiology', 'diagnostic', 'nuclear', 'ivr'];
     return order.map(key => ({
         id: key,
-        name: EXAMS_NAMES[key] || key,
+        name: EXAM_NAMES[key] || key,
         count: metadata[key]?.count || 0
     }));
 };
