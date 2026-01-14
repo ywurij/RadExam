@@ -71,29 +71,28 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveO
         setIsEditingAnswer(false);
         setIsEditingGenre(false);
         setIsEditingExplanation(false);
+        // Reset drafts to avoid stale content
+        setEditAnswerKey("");
+        setEditGenre("");
+        setDraftExplanation("");
     }, [question.id]);
 
-    // Initialize draft state correctly
-    // Ensure editAnswerKey is a string even if currentAnswer is array
-    // Initialize draft state when entering edit mode
-    useEffect(() => {
-        if (isEditingAnswer) {
-            const ansStr = Array.isArray(currentAnswer) ? currentAnswer.join(',') : (currentAnswer || "");
-            setEditAnswerKey(ansStr);
-        }
-    }, [isEditingAnswer, currentAnswer]);
+    // Handlers for starting edit
+    const startEditingAnswer = () => {
+        const ansStr = Array.isArray(currentAnswer) ? currentAnswer.join(',') : (currentAnswer || "");
+        setEditAnswerKey(ansStr);
+        setIsEditingAnswer(true);
+    };
 
-    useEffect(() => {
-        if (isEditingGenre) {
-            setEditGenre(currentGenre);
-        }
-    }, [isEditingGenre, currentGenre]);
+    const startEditingGenre = () => {
+        setEditGenre(currentGenre);
+        setIsEditingGenre(true);
+    };
 
-    useEffect(() => {
-        if (isEditingExplanation) {
-            setDraftExplanation(currentExplanation);
-        }
-    }, [isEditingExplanation, currentExplanation]);
+    const startEditingExplanation = () => {
+        setDraftExplanation(currentExplanation);
+        setIsEditingExplanation(true);
+    };
 
     const toggleOption = (key) => {
         if (showAnswer) return;
@@ -299,7 +298,7 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveO
                                                 {Array.isArray(currentAnswer) ? currentAnswer.join(', ') : currentAnswer} です
                                             </span>
                                         </div>
-                                        <button onClick={() => setIsEditingAnswer(true)} className={styles.iconEditBtn} title="編集">✎</button>
+                                        <button onClick={startEditingAnswer} className={styles.iconEditBtn} title="編集">✎</button>
                                     </>
                                 )}
                             </div>
@@ -310,7 +309,7 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveO
                             <div className={styles.expHeader}>
                                 <h3>解説</h3>
                                 {!isEditingExplanation && (
-                                    <button onClick={() => setIsEditingExplanation(true)} className={styles.iconEditBtn} title="編集">✎</button>
+                                    <button onClick={startEditingExplanation} className={styles.iconEditBtn} title="編集">✎</button>
                                 )}
                             </div>
 
@@ -363,7 +362,7 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveO
                                             ))}
                                         </div>
                                     </div>
-                                    <button onClick={() => setIsEditingGenre(true)} className={styles.iconEditBtn} title="編集">✎</button>
+                                    <button onClick={startEditingGenre} className={styles.iconEditBtn} title="編集">✎</button>
                                 </>
                             )}
                         </div>

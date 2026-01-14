@@ -534,3 +534,147 @@
         background: #2b6cb0;
     }
 }
+/* --- Dark Mode Overrides --- */
+@media (prefers-color-scheme: dark) {
+    .card {
+        background: #1a202c;
+        color: #e2e8f0;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+    }
+
+    .header {
+        border-bottom-color: #2d3748;
+    }
+
+    .questionId {
+        color: #e2e8f0;
+    }
+
+    .statusBtn {
+        background: #2d3748;
+        border-color: #4a5568;
+        color: #e2e8f0;
+    }
+
+    .questionText, .richTextContent {
+        color: #e2e8f0;
+    }
+
+    .optionBtn {
+        background: #2d3748;
+        border-color: #4a5568;
+        color: #e2e8f0;
+
+        &:hover {
+            background: #4a5568;
+            border-color: #718096;
+        }
+
+        &.selected {
+            background: #2c5282;
+            border-color: #4299e1;
+        }
+
+        &.correct {
+            background: #22543d !important;
+            border-color: #48bb78 !important;
+            color: #f0fff4;
+        }
+
+        &.wrong {
+            background: #742a2a !important;
+            border-color: #f56565 !important;
+            color: #fff5f5;
+        }
+    }
+
+    .optionKey {
+        background: #4a5568;
+        color: #e2e8f0;
+
+        .selected & {
+            background: #3182ce;
+            color: #fff;
+        }
+    }
+
+    .revealBtn {
+        background: #e2e8f0;
+        color: #1a202c;
+
+        &:hover:not(:disabled) {
+            background: #edf2f7;
+        }
+    }
+    
+    /* Result Area */
+    .explicitAnswer {
+        /* Default (Incorrect/Unknown) Dark Mode */
+        background: #742a2a;
+        border-color: #fc8181;
+        color: #fed7d7;
+
+        &.correct {
+             background: #22543d;
+             border-color: #48bb78;
+             color: #9ae6b4;
+             
+             .genreBadge {
+                background: #276749;
+                color: #f0fff4;
+             }
+        }
+    }
+
+    .genreArea {
+        background: #1a202c;
+        border-color: #2d3748;
+        color: #e2e8f0;
+    }
+
+    .genreBadge {
+        background: #2d3748;
+        color: #e2e8f0;
+    }
+    
+    /* Inputs */
+    .answerInput, .genreInput {
+        background: #2d3748;
+        color: #e2e8f0;
+        border-color: #4a5568;
+    }
+    
+    /* Buttons */
+    .cancelBtn {
+        background: #2d3748;
+        border-color: #4a5568;
+        color: #e2e8f0;
+        &:hover {
+            background: #4a5568;
+        }
+    }
+    
+    .iconEditBtn {
+         color: #718096;
+         &:hover { color: #e2e8f0; }
+    }
+    
+    /* Rich Content Extras */
+    .richTextContent {
+        table th {
+            background-color: #2d3748;
+            border-color: #4a5568;
+        }
+        table td {
+             border-color: #4a5568;
+        }
+        blockquote {
+            border-left-color: #4a5568;
+            color: #a0aec0;
+        }
+        :global(.math-node) {
+            background: #2d3748;
+            color: #e2e8f0;
+        }
+    }
+}
