@@ -1,0 +1,122 @@
+.container {
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 2rem;
+  font-family: var(--font-geist-sans), sans-serif;
+  color: #1a202c;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 2rem;
+}
+
+.title {
+  font-size: 2rem;
+  font-weight: 800;
+  color: #2d3748;
+}
+
+.backButton {
+  background: white;
+  border: 1px solid #cbd5e0;
+  padding: 0.5rem 1rem;
+  border-radius: 0.5rem;
+  color: #4a5568;
+  cursor: pointer;
+  font-size: 0.9rem;
+  transition: all 0.2s;
+
+  &:hover {
+    background: #f7fafc;
+    border-color: #a0aec0;
+  }
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.card {
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.75rem;
+  padding: 1.5rem;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1);
+  transition: transform 0.2s;
+
+  &:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+  }
+}
+
+.date {
+  display: inline-block;
+  font-size: 0.8rem;
+  color: #718096;
+  background: #edf2f7;
+  padding: 0.2rem 0.6rem;
+  border-radius: 9999px;
+  margin-bottom: 0.5rem;
+}
+
+.cardTitle {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: #2d3748;
+  margin-bottom: 0.75rem;
+}
+
+.content {
+  color: #4a5568;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+/* --- Dark Mode Overrides --- */
+@media (prefers-color-scheme: dark) {
+  .container {
+    color: #e2e8f0;
+  }
+
+  .title {
+    color: #e2e8f0;
+  }
+
+  .backButton {
+    background: #1a202c;
+    border-color: #4a5568;
+    color: #e2e8f0;
+
+    &:hover {
+      background: #2d3748;
+    }
+  }
+
+  .card {
+    background: #1a202c;
+    border-color: #2d3748;
+
+    &:hover {
+      border-color: #4a5568;
+    }
+  }
+
+  .date {
+    background: #2d3748;
+    color: #cbd5e0;
+  }
+
+  .cardTitle {
+    color: #e2e8f0;
+  }
+
+  .content {
+    color: #a0aec0;
+  }
+}

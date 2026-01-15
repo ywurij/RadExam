@@ -55,7 +55,7 @@
   &.active {
     border-color: #3b82f6;
     background: #eff6ff;
-    
+
     .examName {
       color: #1e40af;
     }
@@ -121,7 +121,7 @@
 .toggleGroup {
   display: flex;
   gap: 0.5rem;
-  
+
   button {
     padding: 0.5rem 1rem;
     border-radius: 9999px;
@@ -173,7 +173,7 @@
 
 .checkboxGroup {
   margin-top: 1rem;
-  
+
   label {
     display: flex;
     align-items: center;
@@ -205,7 +205,7 @@
   border-radius: 0.75rem;
   cursor: pointer;
   transition: transform 0.2s, box-shadow 0.2s;
-  
+
   &:hover {
     transform: translateY(-2px);
     box-shadow: 0 10px 20px rgba(59, 130, 246, 0.3);
@@ -213,5 +213,199 @@
 
   &:active {
     transform: translateY(0);
+  }
+}
+
+/* Modal Styles */
+.modalOverlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+  padding: 1rem;
+  backdrop-filter: blur(2px);
+}
+
+.modalContent {
+  background: white;
+  padding: 2rem;
+  border-radius: 1rem;
+  max-width: 450px;
+  width: 100%;
+  max-height: 90vh;
+  overflow-y: auto;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+  position: relative;
+}
+
+.modalTitle {
+  margin-top: 0;
+  font-size: 1.5rem;
+  font-weight: 700;
+  margin-bottom: 0.5rem;
+}
+
+.modalDesc {
+  font-size: 0.9rem;
+  color: #666;
+  margin-bottom: 1.5rem;
+}
+
+.modalSectionTitle {
+  font-size: 1rem;
+  margin-bottom: 0.5rem;
+  border-bottom: 2px solid #e2e8f0;
+  padding-bottom: 0.2rem;
+  display: inline-block;
+}
+
+.modalCloseBtn {
+  padding: 0.5rem 1rem;
+  background: #edf2f7;
+  border: none;
+  border-radius: 0.5rem;
+  cursor: pointer;
+  font-weight: 600;
+  color: #4a5568;
+
+  &:hover {
+    background: #e2e8f0;
+  }
+}
+
+/* --- Dark Mode Overrides --- */
+@media (prefers-color-scheme: dark) {
+  .container {
+    color: #e2e8f0;
+  }
+
+  .title {
+    background: linear-gradient(135deg, #60a5fa 0%, #a78bfa 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  .label {
+    color: #cbd5e0;
+  }
+
+  .examCard {
+    background: #1a202c;
+    border-color: #2d3748;
+
+    &:hover {
+      border-color: #60a5fa;
+      background: #2d3748;
+    }
+
+    &.active {
+      background: #2c5282;
+      border-color: #63b3ed;
+
+      .examName {
+        color: #fff;
+      }
+    }
+  }
+
+  .examName {
+    color: #e2e8f0;
+  }
+
+  .examCount {
+    color: #a0aec0;
+  }
+
+  .filterGroup {
+    label {
+      color: #cbd5e0;
+    }
+
+    select {
+      background-color: #1a202c;
+      color: #e2e8f0;
+      border-color: #4a5568;
+      background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%23a0aec0' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e");
+    }
+  }
+
+  .toggleGroup {
+    button {
+      background: #1a202c;
+      color: #e2e8f0;
+      border-color: #4a5568;
+
+      &:hover {
+        background: #2d3748;
+      }
+
+      &.activeToggle {
+        background: #3b82f6;
+        color: #fff;
+        border-color: #3b82f6;
+      }
+    }
+  }
+
+  .genreTags {
+    .tag {
+      background: #2d3748;
+      color: #e2e8f0;
+
+      &:hover {
+        background: #4a5568;
+      }
+
+      &.tagActive {
+        background: #065f46;
+        color: #9ae6b4;
+      }
+    }
+  }
+
+  .checkboxGroup {
+    label {
+      color: #e2e8f0;
+    }
+
+    input[type="checkbox"] {
+      border-color: #4a5568;
+      background: #2d3748;
+    }
+  }
+
+  /* Modal Dark Mode */
+  .modalContent {
+    background: #1a202c;
+    border: 1px solid #2d3748;
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+  }
+
+  .modalTitle {
+    color: #e2e8f0;
+  }
+
+  .modalDesc {
+    color: #a0aec0;
+  }
+
+  .modalSectionTitle {
+    border-color: #4a5568;
+    color: #e2e8f0;
+  }
+
+  .modalCloseBtn {
+    background: #2d3748;
+    color: #e2e8f0;
+
+    &:hover {
+      background: #4a5568;
+    }
   }
 }

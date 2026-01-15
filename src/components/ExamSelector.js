@@ -2,6 +2,7 @@
 
 import { useState, useMemo, useEffect } from 'react';
 import { getExamTypes, getYears, getGenres } from '@/lib/data';
+import { getLatestAnnouncementId } from '@/lib/announcementsData';
 import styles from './ExamSelector.module.scss';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
@@ -11,22 +12,26 @@ export default function ExamSelector() {
     const { isAdmin, user, userData, logout, migrationDebugMsg } = useAuth();
     const exams = getExamTypes();
     const [selectedExam, setSelectedExam] = useState(exams[0]?.id || 'diagnostic');
-    const [userGenres, setUserGenres] = useState({}); // { [examId]: Set(genres) }
+    const [userGenres, setUserGenres] = useState({});
 
     // Filters
     const [selectedYear, setSelectedYear] = useState('all');
     const [selectedGenres, setSelectedGenres] = useState([]);
-    const [count, setCount] = useState('all'); // Default to All
-    const [statusFilter, setStatusFilter] = useState([]); // Array: ['incorrect', 'liked']
-    const [logicFilter, setLogicFilter] = useState('or'); // 'and' | 'or'
+    const [count, setCount] = useState('all');
+    const [statusFilter, setStatusFilter] = useState([]);
+    const [logicFilter, setLogicFilter] = useState('or');
     const [isShuffle, setIsShuffle] = useState(false);
+
+    // Offline Download State
+    const [downloadingExamId, setDownloadingExamId] = useState(null);
+    const [downloadProgress, setDownloadProgress] = useState({ current: 0, total: 0 });
+    const [hasUnreadAnnouncements, setHasUnreadAnnouncements] = useState(false);
 
     // Derived options based on selected exam
     const years = useMemo(() => getYears(selectedExam), [selectedExam]);
     const genres = useMemo(() => {
         const staticGenres = getGenres(selectedExam);
         const uGenres = userGenres[selectedExam] || new Set();
-        // Merge static and user genres
         const combined = new Set(staticGenres);
         uGenres.forEach(g => combined.add(g));
         return Array.from(combined).sort();
@@ -34,15 +39,17 @@ export default function ExamSelector() {
 
     const [hasSession, setHasSession] = useState(false);
 
-    // Check for previous session AND Load last settings
     useEffect(() => {
-        // 1. Resume Session
         const session = localStorage.getItem('radexam_session');
-        if (session) {
-            setHasSession(true);
+        if (session) setHasSession(true);
+
+        // Check if there are unread announcements
+        const latestId = getLatestAnnouncementId();
+        const lastRead = localStorage.getItem('radexam_last_read_announcement');
+        if (latestId && (!lastRead || lastRead !== latestId)) {
+            setHasUnreadAnnouncements(true);
         }
 
-        // 2. Load Last Settings
         const lastSettings = localStorage.getItem('radexam_last_settings');
         if (lastSettings) {
             try {
@@ -58,41 +65,20 @@ export default function ExamSelector() {
                 console.error("Failed to load last settings", e);
             }
         }
-
-
-        // 3. Load User Custom Genres
-        // We need to fetch all overrides or iterate progress to find custom genres across ALL questions? 
-        // Or just for this exam? Ideally for all or filtered by exam if possible.
-        // For simplicity, let's fetch all overrides since they contain the custom genres.
-        // Importing getAllOverrides dynamically or using a prop would be better if passed down,
-        // but here we can fetch it once on mount if user is logged in.
     }, []);
 
     // Fetch user genres effect
     useEffect(() => {
         if (!user) return;
-
         const fetchUserGenres = async () => {
-            // We need a way to get ALL user genres. 
-            // Option A: Fetch all progress/overrides and extract.
-            // Option B: Store unique genres in a separate user field/doc? (Not implemented)
-            // Let's go with Option A as it matches our current architecture (client-heavy for now).
-            // We'll import getUserExamProgress/getAllOverrides dynamically to avoid server-side issues if any.
-
             try {
                 const { getAllOverrides, getUserExamProgress } = await import('@/lib/db');
-
-                // Temp structure: { examId: Set() }
                 const genreMap = {};
-
                 const processGenre = (globalKey, genreVal) => {
-                    // Parse Key: test_{examId}_{number}
-                    // e.g. test_radiology_2015001
                     const parts = globalKey.split('_');
                     if (parts.length >= 3) {
-                        const examId = parts[1]; // 'radiology', 'diagnostic', etc.
+                        const examId = parts[1];
                         if (!genreMap[examId]) genreMap[examId] = new Set();
-
                         const add = (val) => {
                             if (Array.isArray(val)) {
                                 val.forEach(g => genreMap[examId].add(g));
@@ -104,23 +90,14 @@ export default function ExamSelector() {
                     }
                 };
 
-                // Check overrides
                 const overrides = await getAllOverrides();
                 Object.entries(overrides).forEach(([key, ov]) => {
-                    if (ov.genre) {
-                        processGenre(key, ov.genre);
-                    }
+                    if (ov.genre) processGenre(key, ov.genre);
                 });
 
-                // Check progress (includes overrides usually)
-                // Actually progress merges overrides, so overrides collection is the source of truth for "custom" things usually?
-                // Wait, migrateLegacyData writes to `users/{uid}/progress`.
-                // So we must check `getUserExamProgress`.
                 const progress = await getUserExamProgress(user.uid);
                 Object.entries(progress).forEach(([key, p]) => {
-                    if (p.overrideGenre) {
-                        processGenre(key, p.overrideGenre);
-                    }
+                    if (p.overrideGenre) processGenre(key, p.overrideGenre);
                 });
 
                 setUserGenres(genreMap);
@@ -128,12 +105,10 @@ export default function ExamSelector() {
                 console.error("Failed to fetch user genres", e);
             }
         };
-
         fetchUserGenres();
     }, [user]);
 
     const handleStart = () => {
-        // Construct query params
         const params = new URLSearchParams();
         params.set('exam', selectedExam);
         params.set('year', selectedYear);
@@ -153,10 +128,8 @@ export default function ExamSelector() {
             params.set('genres', selectedGenres.join(','));
         }
 
-        // Clear session when starting NEW exam
         localStorage.removeItem('radexam_session');
 
-        // SAVE Settings
         const settingsToSave = {
             examId: selectedExam,
             year: selectedYear,
@@ -187,6 +160,79 @@ export default function ExamSelector() {
         router.push(`/quiz?${query}`);
     };
 
+    const handleDownloadOffline = async (e, examId, isAuto = false) => {
+        if (e) e.stopPropagation();
+        if (downloadingExamId) return;
+
+        // Cooldown check for Auto mode
+        if (isAuto) {
+            const lastDl = localStorage.getItem(`radexam_dl_${examId}`);
+            const now = Date.now();
+            if (lastDl && (now - parseInt(lastDl)) < 24 * 60 * 60 * 1000) {
+                // Skiping auto download (Cooldown active)
+                return;
+            }
+        } else {
+            // Manual mode: Confirm
+            if (!confirm(`${examId} の全画像をダウンロードしますか？\n(Wi-Fi環境推奨)`)) return;
+        }
+
+        setDownloadingExamId(examId);
+        setDownloadProgress({ current: 0, total: 0 });
+
+        try {
+            const res = await fetch('/data/image-manifest.json');
+            if (!res.ok) throw new Error("Manifest not found");
+            const manifest = await res.json();
+            const images = manifest[examId] || [];
+
+            if (images.length === 0) {
+                if (!isAuto) alert("ダウンロード対象の画像がありません。");
+                setDownloadingExamId(null);
+                return;
+            }
+
+            setDownloadProgress({ current: 0, total: images.length });
+
+            const cache = await caches.open('question-images');
+            const BATCH_SIZE = 10;
+
+            for (let i = 0; i < images.length; i += BATCH_SIZE) {
+                const batch = images.slice(i, i + BATCH_SIZE);
+                await Promise.all(batch.map(async (url) => {
+                    try {
+                        await cache.add(url);
+                    } catch (err) {
+                        console.warn(`Failed to cache ${url}`, err);
+                    }
+                }));
+                setDownloadProgress(prev => ({ ...prev, current: Math.min(prev.current + BATCH_SIZE, images.length) }));
+            }
+
+            if (!isAuto) alert("ダウンロードが完了しました。");
+
+            // Mark timestamp
+            localStorage.setItem(`radexam_dl_${examId}`, Date.now().toString());
+
+        } catch (e) {
+            console.error(e);
+            if (!isAuto) alert("ダウンロードに失敗しました: " + e.message);
+        } finally {
+            setDownloadingExamId(null);
+        }
+    };
+
+    // Auto-download Trigger
+    useEffect(() => {
+        if (selectedExam) {
+            // Wait 1s to allow UI to settle and avoid conflict with initial mount
+            const timer = setTimeout(() => {
+                handleDownloadOffline(null, selectedExam, true);
+            }, 1000);
+            return () => clearTimeout(timer);
+        }
+    }, [selectedExam]);
+
     const toggleGenre = (genre) => {
         if (selectedGenres.includes(genre)) {
             setSelectedGenres(prev => prev.filter(g => g !== genre));
@@ -199,49 +245,32 @@ export default function ExamSelector() {
         if (id === 'all') {
             setStatusFilter([]);
             return;
-            // eslint-disable-next-line
-        } // Add lint check fix if needed or just remove unreachable
-
+        }
         setStatusFilter(prev => {
-            if (prev.includes(id)) {
-                return prev.filter(s => s !== id);
-            } else {
-                return [...prev, id];
-            }
+            if (prev.includes(id)) return prev.filter(s => s !== id);
+            else return [...prev, id];
         });
     };
 
     // --- Data Management ---
     const [showDataModal, setShowDataModal] = useState(false);
     const [isProcessingData, setIsProcessingData] = useState(false);
-
-    // Export Options
     const [exportOptions, setExportOptions] = useState({
-        history: true,
-        answers: true,
-        notes: true,
-        genres: true
+        history: true, answers: true, notes: true, genres: true
     });
-
-    // Import Strategy
-    const [importStrategy, setImportStrategy] = useState('overwrite'); // 'overwrite' | 'keep'
+    const [importStrategy, setImportStrategy] = useState('overwrite');
 
     const handleExport = async () => {
         if (!user || isProcessingData) return;
         setIsProcessingData(true);
         try {
             const { exportUserData } = await import('@/lib/db');
-
-            // Pass options
             const data = await exportUserData(user.uid, exportOptions);
-
-            // Don't export if empty
             if (Object.keys(data.data).length === 0) {
                 alert('出力対象のデータがありませんでした。');
                 setIsProcessingData(false);
                 return;
             }
-
             const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
@@ -251,7 +280,6 @@ export default function ExamSelector() {
             a.click();
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
-
             alert('エクスポートが完了しました。');
             setShowDataModal(false);
         } catch (e) {
@@ -265,23 +293,17 @@ export default function ExamSelector() {
     const handleImport = async (e) => {
         const file = e.target.files[0];
         if (!file || !user || isProcessingData) return;
-
         const strategyLabel = importStrategy === 'overwrite' ? '【上書き】' : '【既存優先】';
         if (!confirm(`現在の設定: ${strategyLabel}\nデータをインポートしてよろしいですか？`)) {
-            e.target.value = ''; // Reset input
+            e.target.value = '';
             return;
         }
-
         setIsProcessingData(true);
         try {
             const text = await file.text();
             const json = JSON.parse(text);
-
             const { importUserData } = await import('@/lib/db');
-
-            // Pass strategy
             const result = await importUserData(user.uid, json, importStrategy);
-
             alert(`インポート完了: ${result.count} 件のデータを処理しました。画面をリロードします。`);
             window.location.reload();
         } catch (e) {
@@ -289,7 +311,7 @@ export default function ExamSelector() {
             alert('インポートに失敗しました: ' + e.message);
         } finally {
             setIsProcessingData(false);
-            e.target.value = ''; // Reset input
+            e.target.value = '';
         }
     };
 
@@ -298,14 +320,12 @@ export default function ExamSelector() {
             <h1 className={styles.title}>RadTest</h1>
 
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem', marginBottom: '2rem' }}>
-                {/* User Info & Logout */}
                 {user && (
                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.2rem' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.9rem', color: '#718096' }}>
                             <span>ログイン中: <b>{user.email}</b></span>
                             <LogoutButton user={user} logout={logout} />
                         </div>
-                        {/* Migration Status Indicator */}
                         {userData && (
                             <div style={{ fontSize: '0.75rem', color: userData.migrationToNextJsAppDone ? '#38a169' : '#e53e3e', marginBottom: '4px' }}>
                                 {userData.migrationToNextJsAppDone
@@ -313,8 +333,6 @@ export default function ExamSelector() {
                                     : '⚠ データ移行保留中 (自動実行待ち)'}
                             </div>
                         )}
-
-
                     </div>
                 )}
 
@@ -327,6 +345,24 @@ export default function ExamSelector() {
                         style={{ background: 'transparent', border: '1px solid #cbd5e0', padding: '0.5rem 1rem', borderRadius: '0.5rem', cursor: 'pointer', color: '#4a5568', fontSize: '1rem' }}
                     >
                         💾 データ管理
+                    </button>
+                    <button
+                        onClick={() => router.push('/announcements')}
+                        style={{ position: 'relative', background: 'transparent', border: '1px solid #cbd5e0', padding: '0.5rem 1rem', borderRadius: '0.5rem', cursor: 'pointer', color: '#4a5568', fontSize: '1rem' }}
+                    >
+                        🔔 お知らせ
+                        {hasUnreadAnnouncements && (
+                            <span style={{
+                                position: 'absolute',
+                                top: '-5px',
+                                right: '-5px',
+                                width: '12px',
+                                height: '12px',
+                                background: '#e53e3e',
+                                borderRadius: '50%',
+                                border: '2px solid white'
+                            }} />
+                        )}
                     </button>
                     {isAdmin && (
                         <button
@@ -343,21 +379,61 @@ export default function ExamSelector() {
                 <h2 className={styles.label}>試験を選択</h2>
                 <div className={styles.examGrid}>
                     {exams.map(exam => (
-                        <button
-                            key={exam.id}
-                            className={`${styles.examCard} ${selectedExam === exam.id ? styles.active : ''}`}
-                            onClick={() => setSelectedExam(exam.id)}
-                        >
-                            <span className={styles.examName}>{exam.name}</span>
-                            <span className={styles.examCount}>{exam.count} 問</span>
-                        </button>
+                        <div key={exam.id} style={{ position: 'relative' }}>
+                            <button
+                                className={`${styles.examCard} ${selectedExam === exam.id ? styles.active : ''}`}
+                                onClick={() => setSelectedExam(exam.id)}
+                                style={{ width: '100%', paddingRight: '2.5rem' }}
+                            >
+                                <span className={styles.examName}>{exam.name}</span>
+                                <span className={styles.examCount}>{exam.count} 問</span>
+                            </button>
+                            {/* Download Button */}
+                            <button
+                                onClick={(e) => handleDownloadOffline(e, exam.id)}
+                                disabled={!!downloadingExamId}
+                                title="オフライン用に画像をダウンロード"
+                                style={{
+                                    position: 'absolute',
+                                    right: '10px',
+                                    top: '50%',
+                                    transform: 'translateY(-50%)',
+                                    background: 'none',
+                                    border: 'none',
+                                    cursor: 'pointer',
+                                    fontSize: '1.2rem',
+                                    opacity: 0.6,
+                                    transition: 'opacity 0.2s',
+                                    zIndex: 10
+                                }}
+                                onMouseEnter={e => e.target.style.opacity = 1}
+                                onMouseLeave={e => e.target.style.opacity = 0.6}
+                            >
+                                {downloadingExamId === exam.id ? '⏳' : '📥'}
+                            </button>
+                        </div>
                     ))}
                 </div>
+                {/* Progress Bar */}
+                {downloadingExamId && (
+                    <div style={{ marginTop: '0.5rem', fontSize: '0.8rem', color: '#4a5568', textAlign: 'center' }}>
+                        ダウンロード中: {downloadProgress.current} / {downloadProgress.total} 枚完了 (画面を閉じないでください)
+                        <div style={{ width: '100%', height: '4px', background: '#e2e8f0', borderRadius: '2px', marginTop: '4px', overflow: 'hidden' }}>
+                            <div style={{
+                                width: `${(downloadProgress.current / downloadProgress.total) * 100}%`,
+                                height: '100%',
+                                background: '#3182ce',
+                                transition: 'width 0.3s'
+                            }} />
+                        </div>
+                    </div>
+                )}
             </div>
 
             <div className={styles.section}>
                 <h2 className={styles.label}>フィルター設定</h2>
 
+                {/* ... (Existing Filters) ... */}
                 <div className={styles.filterRow}>
                     <div className={styles.filterGroup}>
                         <label>年度</label>
@@ -387,43 +463,15 @@ export default function ExamSelector() {
                     <label>ステータス</label>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
                         <div className={styles.toggleGroup}>
-                            <button
-                                className={statusFilter.length === 0 ? styles.activeToggle : ''}
-                                onClick={() => toggleStatus('all')}
-                            >
-                                すべて
-                            </button>
-                            <button
-                                className={statusFilter.includes('incorrect') ? styles.activeToggle : ''}
-                                onClick={() => toggleStatus('incorrect')}
-                            >
-                                不正解のみ
-                            </button>
-                            <button
-                                className={statusFilter.includes('liked') ? styles.activeToggle : ''}
-                                onClick={() => toggleStatus('liked')}
-                            >
-                                お気に入り
-                            </button>
+                            <button className={statusFilter.length === 0 ? styles.activeToggle : ''} onClick={() => toggleStatus('all')}>すべて</button>
+                            <button className={statusFilter.includes('incorrect') ? styles.activeToggle : ''} onClick={() => toggleStatus('incorrect')}>不正解のみ</button>
+                            <button className={statusFilter.includes('liked') ? styles.activeToggle : ''} onClick={() => toggleStatus('liked')}>お気に入り</button>
                         </div>
-
                         {statusFilter.length > 1 && (
                             <div className={styles.toggleGroup} style={{ borderLeft: '1px solid #e2e8f0', paddingLeft: '1rem' }}>
                                 <small style={{ marginRight: '0.5rem', fontWeight: 600, color: '#4a5568' }}>条件:</small>
-                                <button
-                                    className={logicFilter === 'or' ? styles.activeToggle : ''}
-                                    onClick={() => setLogicFilter('or')}
-                                    style={{ fontSize: '0.75rem', padding: '0.25rem 0.75rem' }}
-                                >
-                                    OR (いずれか)
-                                </button>
-                                <button
-                                    className={logicFilter === 'and' ? styles.activeToggle : ''}
-                                    onClick={() => setLogicFilter('and')}
-                                    style={{ fontSize: '0.75rem', padding: '0.25rem 0.75rem' }}
-                                >
-                                    AND (すべて)
-                                </button>
+                                <button className={logicFilter === 'or' ? styles.activeToggle : ''} onClick={() => setLogicFilter('or')} style={{ fontSize: '0.75rem', padding: '0.25rem 0.75rem' }}>OR (いずれか)</button>
+                                <button className={logicFilter === 'and' ? styles.activeToggle : ''} onClick={() => setLogicFilter('and')} style={{ fontSize: '0.75rem', padding: '0.25rem 0.75rem' }}>AND (すべて)</button>
                             </div>
                         )}
                     </div>
@@ -433,13 +481,7 @@ export default function ExamSelector() {
                     <label>ジャンル</label>
                     <div className={styles.genreTags}>
                         {genres.map(g => (
-                            <button
-                                key={g}
-                                className={`${styles.tag} ${selectedGenres.includes(g) ? styles.tagActive : ''}`}
-                                onClick={() => toggleGenre(g)}
-                            >
-                                {g}
-                            </button>
+                            <button key={g} className={`${styles.tag} ${selectedGenres.includes(g) ? styles.tagActive : ''}`} onClick={() => toggleGenre(g)}>{g}</button>
                         ))}
                     </div>
                 </div>
@@ -479,97 +521,44 @@ export default function ExamSelector() {
 
             {/* Data Management Modal */}
             {showDataModal && (
-                <div style={{
-                    position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-                    background: 'rgba(0,0,0,0.5)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000
-                }}>
-                    <div style={{ background: 'white', padding: '2rem', borderRadius: '1rem', maxWidth: '90%', width: '450px', maxHeight: '90vh', overflowY: 'auto' }}>
-                        <h3 style={{ marginTop: 0 }}>データ管理</h3>
-                        <p style={{ fontSize: '0.9rem', color: '#666' }}>
+                <div className={styles.modalOverlay}>
+                    <div className={styles.modalContent}>
+                        <h3 className={styles.modalTitle}>データ管理</h3>
+                        <p className={styles.modalDesc}>
                             学習履歴やメモをJSON形式でバックアップ・共有できます。
                         </p>
 
-                        {/* Export Section */}
                         <div style={{ marginTop: '1.5rem' }}>
-                            <h4 style={{ fontSize: '1rem', marginBottom: '0.5rem', borderBottom: '2px solid #3182ce', paddingBottom: '0.2rem', display: 'inline-block' }}>📤 エクスポート (保存)</h4>
-
+                            <h4 className={styles.modalSectionTitle} style={{ borderBottomColor: '#3182ce' }}>📤 エクスポート (保存)</h4>
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', marginBottom: '1rem' }}>
-                                <label style={{ fontSize: '0.9rem', display: 'flex', alignItems: 'center', cursor: 'pointer' }}>
-                                    <input type="checkbox" checked={exportOptions.history} onChange={e => setExportOptions({ ...exportOptions, history: e.target.checked })} style={{ marginRight: '0.3rem' }} />
-                                    学習履歴 (正誤/★)
-                                </label>
-                                <label style={{ fontSize: '0.9rem', display: 'flex', alignItems: 'center', cursor: 'pointer' }}>
-                                    <input type="checkbox" checked={exportOptions.answers} onChange={e => setExportOptions({ ...exportOptions, answers: e.target.checked })} style={{ marginRight: '0.3rem' }} />
-                                    自分の解答
-                                </label>
-                                <label style={{ fontSize: '0.9rem', display: 'flex', alignItems: 'center', cursor: 'pointer' }}>
-                                    <input type="checkbox" checked={exportOptions.notes} onChange={e => setExportOptions({ ...exportOptions, notes: e.target.checked })} style={{ marginRight: '0.3rem' }} />
-                                    解説メモ
-                                </label>
-                                <label style={{ fontSize: '0.9rem', display: 'flex', alignItems: 'center', cursor: 'pointer' }}>
-                                    <input type="checkbox" checked={exportOptions.genres} onChange={e => setExportOptions({ ...exportOptions, genres: e.target.checked })} style={{ marginRight: '0.3rem' }} />
-                                    ジャンル設定
-                                </label>
+                                <label style={{ fontSize: '0.9rem', display: 'flex', alignItems: 'center', cursor: 'pointer', color: 'inherit' }}><input type="checkbox" checked={exportOptions.history} onChange={e => setExportOptions({ ...exportOptions, history: e.target.checked })} style={{ marginRight: '0.3rem' }} />学習履歴 (正誤/★)</label>
+                                <label style={{ fontSize: '0.9rem', display: 'flex', alignItems: 'center', cursor: 'pointer', color: 'inherit' }}><input type="checkbox" checked={exportOptions.answers} onChange={e => setExportOptions({ ...exportOptions, answers: e.target.checked })} style={{ marginRight: '0.3rem' }} />自分の解答</label>
+                                <label style={{ fontSize: '0.9rem', display: 'flex', alignItems: 'center', cursor: 'pointer', color: 'inherit' }}><input type="checkbox" checked={exportOptions.notes} onChange={e => setExportOptions({ ...exportOptions, notes: e.target.checked })} style={{ marginRight: '0.3rem' }} />解説メモ</label>
+                                <label style={{ fontSize: '0.9rem', display: 'flex', alignItems: 'center', cursor: 'pointer', color: 'inherit' }}><input type="checkbox" checked={exportOptions.genres} onChange={e => setExportOptions({ ...exportOptions, genres: e.target.checked })} style={{ marginRight: '0.3rem' }} />ジャンル設定</label>
                             </div>
-
-                            <button
-                                onClick={handleExport}
-                                disabled={isProcessingData}
-                                style={{
-                                    width: '100%', padding: '0.75rem', background: '#3182ce', color: 'white', border: 'none', borderRadius: '0.5rem', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem',
-                                    opacity: isProcessingData ? 0.7 : 1
-                                }}
-                            >
+                            <button onClick={handleExport} disabled={isProcessingData} style={{ width: '100%', padding: '0.75rem', background: '#3182ce', color: 'white', border: 'none', borderRadius: '0.5rem', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', opacity: isProcessingData ? 0.7 : 1 }}>
                                 ⬇️ JSONファイルをダウンロード
                             </button>
                         </div>
 
-                        {/* Import Section */}
                         <div style={{ marginTop: '2rem' }}>
-                            <h4 style={{ fontSize: '1rem', marginBottom: '0.5rem', borderBottom: '2px solid #38a169', paddingBottom: '0.2rem', display: 'inline-block' }}>📥 インポート (復元・結合)</h4>
-
-                            <div style={{ marginBottom: '1rem', background: '#f7fafc', padding: '0.8rem', borderRadius: '0.5rem' }}>
+                            <h4 className={styles.modalSectionTitle} style={{ borderBottomColor: '#38a169' }}>📥 インポート (復元・結合)</h4>
+                            <div style={{ marginBottom: '1rem', background: 'rgba(0,0,0,0.05)', padding: '0.8rem', borderRadius: '0.5rem' }}>
                                 <div style={{ marginBottom: '0.5rem', fontSize: '0.9rem', fontWeight: 'bold' }}>競合時の動作:</div>
                                 <label style={{ display: 'flex', alignItems: 'center', marginBottom: '0.4rem', fontSize: '0.9rem', cursor: 'pointer' }}>
-                                    <input
-                                        type="radio"
-                                        name="strategy"
-                                        value="overwrite"
-                                        checked={importStrategy === 'overwrite'}
-                                        onChange={() => setImportStrategy('overwrite')}
-                                        style={{ marginRight: '0.5rem' }}
-                                    />
-                                    <span><b>完全同期 (Mirror)</b><br /><span style={{ fontSize: '0.8rem', color: '#666' }}>ファイルの状態と完全に一致させます (ファイルにないデータは消えます)</span></span>
+                                    <input type="radio" name="strategy" value="overwrite" checked={importStrategy === 'overwrite'} onChange={() => setImportStrategy('overwrite')} style={{ marginRight: '0.5rem' }} />
+                                    <span><b>完全同期 (Mirror)</b><br /><span style={{ fontSize: '0.8rem', opacity: 0.8 }}>ファイルの状態と完全に一致させます (ファイルにないデータは消えます)</span></span>
                                 </label>
                                 <label style={{ display: 'flex', alignItems: 'center', fontSize: '0.9rem', cursor: 'pointer' }}>
-                                    <input
-                                        type="radio"
-                                        name="strategy"
-                                        value="keep"
-                                        checked={importStrategy === 'keep'}
-                                        onChange={() => setImportStrategy('keep')}
-                                        style={{ marginRight: '0.5rem' }}
-                                    />
-                                    <span><b>既存を優先 (Keep Local)</b><br /><span style={{ fontSize: '0.8rem', color: '#666' }}>自分のデータを残し、空白のみ埋めます</span></span>
+                                    <input type="radio" name="strategy" value="keep" checked={importStrategy === 'keep'} onChange={() => setImportStrategy('keep')} style={{ marginRight: '0.5rem' }} />
+                                    <span><b>既存を優先 (Keep Local)</b><br /><span style={{ fontSize: '0.8rem', opacity: 0.8 }}>自分のデータを残し、空白のみ埋めます</span></span>
                                 </label>
                             </div>
-
-                            <input
-                                type="file"
-                                accept=".json"
-                                onChange={handleImport}
-                                disabled={isProcessingData}
-                                style={{ fontSize: '0.9rem', width: '100%' }}
-                            />
+                            <input type="file" accept=".json" onChange={handleImport} disabled={isProcessingData} style={{ fontSize: '0.9rem', width: '100%' }} />
                         </div>
 
                         <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1.5rem' }}>
-                            <button
-                                onClick={() => setShowDataModal(false)}
-                                style={{ padding: '0.5rem 1rem', background: '#edf2f7', border: 'none', borderRadius: '0.5rem', cursor: 'pointer' }}
-                            >
-                                閉じる
-                            </button>
+                            <button onClick={() => setShowDataModal(false)} className={styles.modalCloseBtn}>閉じる</button>
                         </div>
                     </div>
                 </div>
@@ -585,11 +574,9 @@ function LogoutButton({ logout }) {
     const handleLogout = async () => {
         if (!confirming) {
             setConfirming(true);
-            // Auto reset after 3 seconds
             setTimeout(() => setConfirming(false), 3000);
             return;
         }
-
         try {
             await logout();
         } catch (e) {
