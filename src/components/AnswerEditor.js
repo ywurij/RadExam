@@ -18,6 +18,7 @@ import Highlight from '@tiptap/extension-highlight';
 import Subscript from '@tiptap/extension-subscript';
 import Superscript from '@tiptap/extension-superscript';
 import TextAlign from '@tiptap/extension-text-align';
+import Placeholder from '@tiptap/extension-placeholder';
 import styles from './AnswerEditor.module.scss';
 
 import { MathExtension } from './MathExtension';
@@ -55,6 +56,45 @@ const Icons = {
 };
 
 
+// LaTeX Cheat Sheet Data
+const LATEX_CHEAT_SHEET = {
+    '基本': [
+        { label: '分数', code: '\\frac{a}{b}' },
+        { label: '上付き', code: '^{2}' },
+        { label: '下付き', code: '_{1}' },
+        { label: 'ルート', code: '\\sqrt{x}' },
+    ],
+    '演算子': [
+        { label: '×', code: '\\times' },
+        { label: '÷', code: '\\div' },
+        { label: '±', code: '\\pm' },
+        { label: '≠', code: '\\neq' },
+        { label: '≒', code: '\\approx' },
+        { label: '≈', code: '\\approx' },
+        { label: '≪', code: '\\ll' },
+        { label: '≫', code: '\\gg' },
+        { label: '≦', code: '\\leq' },
+        { label: '≧', code: '\\geq' },
+        { label: 'Σ', code: '\\sum' },
+        { label: '∫', code: '\\int' },
+    ],
+    '矢印': [
+        { label: '→', code: '\\rightarrow' },
+        { label: '←', code: '\\leftarrow' },
+        { label: '⇒', code: '\\Rightarrow' },
+    ],
+    'ギリシャ文字': [
+        { label: 'α', code: '\\alpha' },
+        { label: 'β', code: '\\beta' },
+        { label: 'γ', code: '\\gamma' },
+        { label: 'θ', code: '\\theta' },
+        { label: 'λ', code: '\\lambda' },
+        { label: 'π', code: '\\pi' },
+        { label: 'μ', code: '\\mu' },
+        { label: 'Ω', code: '\\Omega' },
+    ]
+};
+
 const MenuBar = ({ editor }) => {
     // ... (state hooks) ...
     const [modalType, setModalType] = useState(null);
@@ -65,13 +105,17 @@ const MenuBar = ({ editor }) => {
 
     if (!editor) { return null; }
 
-    const openModal = (type) => { setModalType(type); setInputValue(type === 'math' ? 'E = mc^2' : ''); };
+    const openModal = (type) => { setModalType(type); setInputValue(""); }; // Always empty init
     const closeModal = () => { setModalType(null); setInputValue(""); setIsUploading(false); };
     const handleInsert = () => {
         if (!inputValue) { closeModal(); return; }
         if (modalType === 'image') { editor.chain().focus().setImage({ src: inputValue }).run(); }
         else if (modalType === 'math') { editor.chain().focus().insertMath(inputValue).run(); }
         closeModal();
+    };
+
+    const handleCheatSheetClick = (code) => {
+        setInputValue(prev => prev + code);
     };
 
     const handleFileUpload = async (e) => {
@@ -189,9 +233,34 @@ const MenuBar = ({ editor }) => {
                             value={inputValue}
                             onChange={(e) => setInputValue(e.target.value)}
                             onKeyDown={(e) => { if (e.key === 'Enter') handleInsert(); }}
-                            placeholder={modalType === 'image' ? "またはURLを直接入力" : ""}
+                            placeholder={modalType === 'image' ? "またはURLを直接入力" : "例: E = mc^2"}
                             autoFocus
                         />
+
+                        {/* LaTeX Cheat Sheet */}
+                        {modalType === 'math' && (
+                            <div className={styles.cheatSheet}>
+                                <div style={{ fontSize: '0.8rem', marginBottom: '0.5rem', color: '#666' }}>よく使う記号 (クリックで挿入):</div>
+                                {Object.entries(LATEX_CHEAT_SHEET).map(([category, items]) => (
+                                    <div key={category} className={styles.cheatSheetGroup}>
+                                        <span className={styles.cheatCategory}>{category}:</span>
+                                        <div className={styles.cheatItems}>
+                                            {items.map(item => (
+                                                <button
+                                                    key={item.label}
+                                                    className={styles.cheatBtn}
+                                                    onClick={() => handleCheatSheetClick(item.code)}
+                                                    title={item.code}
+                                                >
+                                                    {item.label}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+
                         <div className={styles.modalActions}>
                             <button onClick={closeModal} className={styles.cancelBtn}>キャンセル</button>
                             <button onClick={handleInsert} className={styles.insertBtn}>挿入</button>
@@ -234,6 +303,9 @@ export default function AnswerEditor({ content, onChange }) {
         TextAlign.configure({
             types: ['heading', 'paragraph', 'tableCell', 'tableHeader'],
         }),
+        Placeholder.configure({
+            placeholder: '解説を入力...',
+        }),
     ];
 
 
@@ -253,7 +325,7 @@ export default function AnswerEditor({ content, onChange }) {
 
     const editor = useEditor({
         extensions: extensionConfig,
-        content: content || '<p>解説を入力...</p>',
+        content: content || '',
         immediatelyRender: false,
         onUpdate: ({ editor }) => {
             onChange(editor.getHTML());

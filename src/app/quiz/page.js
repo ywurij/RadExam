@@ -221,6 +221,23 @@ function QuizContent() {
             }
         }));
 
+        // Dynamically update available genres if new one is added
+        if (overrideData.genre) {
+            const newGenres = new Set(allGenres);
+            const process = (val) => {
+                if (Array.isArray(val)) {
+                    val.forEach(g => newGenres.add(g));
+                } else if (typeof val === 'string') {
+                    val.split(/[,、\s]+/).forEach(g => g && newGenres.add(g.trim()));
+                }
+            };
+            process(overrideData.genre);
+
+            if (newGenres.size > allGenres.length) {
+                setAllGenres(Array.from(newGenres).sort());
+            }
+        }
+
         if (user) {
             // Save as Personal Private Data
             await saveUserProgress(user.uid, globalId, {
