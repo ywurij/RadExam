@@ -5,6 +5,7 @@ const withPWA = withPWAInit({
   disable: process.env.NODE_ENV === "development",
   register: true,
   skipWaiting: true,
+  reloadOnOnline: false, // PREVENT AUTO RELOAD ON RECONNECT
   // Exclude images from being precached (public folder scan)
   publicExcludes: ["!assets/images/**/*"],
   runtimeCaching: [
