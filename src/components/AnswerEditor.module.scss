@@ -300,6 +300,44 @@
     flex: 1;
 }
 
+.searchResults {
+    max-height: 250px;
+    overflow-y: auto;
+    border: 1px solid #e2e8f0;
+    border-radius: 0.25rem;
+    margin-bottom: 1rem;
+}
+
+.searchResultItem {
+    padding: 0.5rem;
+    border-bottom: 1px solid #f7fafc;
+    cursor: pointer;
+    transition: background 0.2s;
+
+    &:last-child {
+        border-bottom: none;
+    }
+
+    &:hover {
+        background: #f7fafc;
+    }
+}
+
+.resultMeta {
+    font-size: 0.75rem;
+    color: #718096;
+    font-weight: bold;
+    margin-bottom: 0.25rem;
+}
+
+.previewText {
+    font-size: 0.875rem;
+    color: #2d3748;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
 .cheatBtn {
     padding: 0.25rem 0.5rem;
     font-size: 0.75rem;
@@ -355,5 +393,166 @@
 
     &:hover {
         background: #2563eb;
+    }
+}
+
+/* --- Dark Mode Overrides --- */
+@media (prefers-color-scheme: dark) {
+    .editorWrapper {
+        background: #1a202c;
+        border-color: #2d3748;
+    }
+
+    .menubar {
+        background: #2d3748;
+        border-bottom-color: #4a5568;
+    }
+
+    .menubar button {
+        color: #e2e8f0;
+
+        &:hover {
+            background: #4a5568;
+            color: #fff;
+        }
+
+        &.active {
+            background: #2c5282;
+            color: #90cdf4;
+        }
+    }
+
+    .tableControls button {
+        color: #e2e8f0;
+
+        &:hover {
+            background: #4a5568;
+            color: #fff;
+        }
+    }
+
+    .divider {
+        background: #4a5568;
+    }
+
+    .content {
+        color: #e2e8f0;
+
+        :global(.ProseMirror) {
+
+            h1,
+            h2,
+            h3,
+            h4,
+            h5,
+            p,
+            ul,
+            ol {
+                color: #e2e8f0;
+            }
+
+            /* Table Dark Mode */
+            table {
+
+                td,
+                th {
+                    border-color: #4a5568;
+                    color: #e2e8f0;
+                }
+
+                th {
+                    background-color: #2d3748;
+                }
+            }
+
+            /* Math Node Dark Mode */
+            :global(.math-node) {
+                background: #2d3748;
+                color: #e2e8f0;
+            }
+
+            p:global(.is-empty)::before {
+                color: #718096;
+            }
+        }
+    }
+
+    /* Modal Dark Mode */
+    .modalOverlay {
+        background: #1a202c;
+        border-color: #4a5568;
+
+        h4 {
+            color: #e2e8f0;
+        }
+
+        input {
+            background: #2d3748;
+            border-color: #4a5568;
+            color: #e2e8f0;
+        }
+
+        /* Image Upload Label */
+        label {
+            color: #a0aec0 !important;
+        }
+    }
+
+    /* Cheat Sheet Dark Mode */
+    .cheatSheet {
+        background: #2d3748;
+        border-color: #4a5568;
+
+        div {
+            color: #a0aec0 !important;
+        }
+
+        /* Helper text */
+    }
+
+    .cheatCategory {
+        color: #cbd5e0;
+    }
+
+    .cheatBtn {
+        background: #1a202c;
+        border-color: #4a5568;
+        color: #e2e8f0;
+
+        &:hover {
+            background: #2c5282;
+            border-color: #4299e1;
+            color: #fff;
+        }
+    }
+
+    .searchResults {
+        border-color: #4a5568;
+    }
+
+    .searchResultItem {
+        border-bottom-color: #2d3748;
+
+        &:hover {
+            background: #2d3748;
+        }
+    }
+
+    .resultMeta {
+        color: #a0aec0;
+    }
+
+    .previewText {
+        color: #e2e8f0;
+    }
+
+    .cancelBtn {
+        background: #2d3748;
+        border-color: #4a5568;
+        color: #e2e8f0;
+
+        &:hover {
+            background: #4a5568;
+        }
     }
 }

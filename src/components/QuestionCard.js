@@ -100,7 +100,11 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveO
         if (selectedOptions.includes(key)) {
             setSelectedOptions(prev => prev.filter(k => k !== key));
         } else {
-            if (selectedOptions.length < maxSelection) {
+            if (maxSelection === 1) {
+                // Single choice: Replace
+                setSelectedOptions([key]);
+            } else if (selectedOptions.length < maxSelection) {
+                // Multi choice: Add if within limit
                 setSelectedOptions(prev => [...prev, key]);
             }
         }
@@ -334,19 +338,67 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveO
                         <div className={styles.genreArea}>
                             {isEditingGenre ? (
                                 <div className={styles.genreEdit}>
-                                    <span className={styles.label}>ジャンル:</span>
-                                    <input
-                                        type="text"
-                                        value={editGenre}
-                                        onChange={(e) => setEditGenre(e.target.value)}
-                                        className={styles.genreInput}
-                                        placeholder="ジャンル (カンマ区切り)"
-                                        list="genre-list"
-                                    />
-                                    <datalist id="genre-list">
-                                        {availableGenres?.map(g => <option key={g} value={g} />)}
-                                    </datalist>
-                                    <small>カンマ区切りで複数指定可能</small>
+                                    <span className={styles.label}>ジャンルを選択:</span>
+                                    <div className={styles.genreSelectionGrid}>
+                                        {availableGenres?.map(g => {
+                                            const isSelected = editGenre.split(/[,、\s]+/).includes(g);
+                                            return (
+                                                <label key={g} className={styles.genreCheckbox}>
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={isSelected}
+                                                        onChange={(e) => {
+                                                            const currentList = editGenre.split(/[,、\s]+/).filter(x => x && x.trim() !== '');
+                                                            let newList;
+                                                            if (e.target.checked) {
+                                                                newList = [...currentList, g];
+                                                            } else {
+                                                                newList = currentList.filter(item => item !== g);
+                                                            }
+                                                            // Unique and clean
+                                                            const uniqueList = Array.from(new Set(newList));
+                                                            setEditGenre(uniqueList.join(', '));
+                                                        }}
+                                                    />
+                                                    <span>{g}</span>
+                                                </label>
+                                            );
+                                        })}
+                                    </div>
+
+                                    <div className={styles.customGenreInput}>
+                                        <label>新規/その他:</label>
+                                        <input
+                                            type="text"
+                                            value={(() => {
+                                                // Extract items NOT in availableGenres to show in input?
+                                                // Or just allow appending?
+                                                // Simpler: Just allow append. But that's messy if they untoggle.
+                                                // Let's keep it simple: reliable checklist + free text appending is complex in one string.
+                                                // Let's purely rely on the Checkbox to MANAGE the string for known genres.
+                                                // And simple text input for "Everything else".
+                                                // Strategy:
+                                                // The `editGenre` state holds the FULL string.
+                                                // The input field shows items that are NOT in `availableGenres`.
+                                                const currentList = editGenre.split(/[,、\s]+/).filter(x => x && x.trim() !== '');
+                                                const customItems = currentList.filter(item => !availableGenres?.includes(item));
+                                                return customItems.join(', ');
+                                            })()}
+                                            onChange={(e) => {
+                                                const val = e.target.value;
+                                                const customParts = val.split(/[,、\s]+/).filter(x => x && x.trim() !== '');
+                                                // Get currently selected KNOWN genres
+                                                const currentList = editGenre.split(/[,、\s]+/).filter(x => x && x.trim() !== '');
+                                                const knownSelected = currentList.filter(item => availableGenres?.includes(item));
+
+                                                // Combine
+                                                const final = [...knownSelected, ...customParts];
+                                                setEditGenre(final.join(', '));
+                                            }}
+                                            placeholder="リストにないジャンルを入力"
+                                        />
+                                    </div>
+
                                     <div className={styles.miniActions}>
                                         <button onClick={handleSaveGenre} className={styles.saveBtn}>保存</button>
                                         <button onClick={() => setIsEditingGenre(false)} className={styles.cancelBtn}>キャンセル</button>

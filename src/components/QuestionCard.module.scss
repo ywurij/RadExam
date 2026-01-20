@@ -302,11 +302,64 @@
 .genreEdit {
     display: flex;
     flex-direction: column;
-    gap: 0.25rem;
+    gap: 0.75rem;
     width: 100%;
+}
 
-    small {
+.genreSelectionGrid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+}
+
+.genreCheckbox {
+    cursor: pointer;
+    user-select: none;
+
+    input {
+        display: none; // Hide actual checkbox
+    }
+
+    span {
+        display: inline-block;
+        padding: 0.25rem 0.75rem;
+        border-radius: 9999px;
+        background: #f7fafc;
+        border: 1px solid #cbd5e0;
+        color: #4a5568;
+        font-size: 0.875rem;
+        transition: all 0.2s;
+    }
+
+    input:checked+span {
+        background: #3182ce;
+        color: white;
+        border-color: #3182ce;
+    }
+
+    &:hover span {
+        border-color: #a0aec0;
+    }
+}
+
+.customGenreInput {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+
+    label {
+        font-size: 0.875rem;
         color: #718096;
+        white-space: nowrap;
+    }
+
+    input {
+        flex: 1;
+        padding: 0.4rem;
+        border: 1px solid #cbd5e0;
+        border-radius: 0.25rem;
+        font-size: 0.9rem;
     }
 }
 
@@ -534,6 +587,7 @@
         background: #2b6cb0;
     }
 }
+
 /* --- Dark Mode Overrides --- */
 @media (prefers-color-scheme: dark) {
     .card {
@@ -556,7 +610,8 @@
         color: #e2e8f0;
     }
 
-    .questionText, .richTextContent {
+    .questionText,
+    .richTextContent {
         color: #e2e8f0;
     }
 
@@ -606,7 +661,7 @@
             background: #edf2f7;
         }
     }
-    
+
     /* Result Area */
     .explicitAnswer {
         /* Default (Incorrect/Unknown) Dark Mode */
@@ -615,14 +670,14 @@
         color: #fed7d7;
 
         &.correct {
-             background: #22543d;
-             border-color: #48bb78;
-             color: #9ae6b4;
-             
-             .genreBadge {
+            background: #22543d;
+            border-color: #48bb78;
+            color: #9ae6b4;
+
+            .genreBadge {
                 background: #276749;
                 color: #f0fff4;
-             }
+            }
         }
     }
 
@@ -636,42 +691,69 @@
         background: #2d3748;
         color: #e2e8f0;
     }
-    
+
     /* Inputs */
-    .answerInput, .genreInput {
+    .answerInput,
+    .genreInput,
+    .customGenreInput input {
         background: #2d3748;
         color: #e2e8f0;
         border-color: #4a5568;
     }
-    
+
+    .genreCheckbox {
+        span {
+            background: #2d3748;
+            border-color: #4a5568;
+            color: #e2e8f0;
+        }
+
+        input:checked+span {
+            background: #2b6cb0;
+            border-color: #4299e1;
+            color: white;
+        }
+
+        &:hover span {
+            border-color: #718096;
+        }
+    }
+
     /* Buttons */
     .cancelBtn {
         background: #2d3748;
         border-color: #4a5568;
         color: #e2e8f0;
+
         &:hover {
             background: #4a5568;
         }
     }
-    
+
     .iconEditBtn {
-         color: #718096;
-         &:hover { color: #e2e8f0; }
+        color: #718096;
+
+        &:hover {
+            color: #e2e8f0;
+        }
     }
-    
+
     /* Rich Content Extras */
     .richTextContent {
         table th {
             background-color: #2d3748;
             border-color: #4a5568;
         }
+
         table td {
-             border-color: #4a5568;
+            border-color: #4a5568;
         }
+
         blockquote {
             border-left-color: #4a5568;
             color: #a0aec0;
         }
+
         :global(.math-node) {
             background: #2d3748;
             color: #e2e8f0;

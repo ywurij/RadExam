@@ -23,6 +23,7 @@ import styles from './AnswerEditor.module.scss';
 
 import { MathExtension } from './MathExtension';
 import { IndentExtension } from './IndentExtension';
+import { searchQuestions } from '@/lib/data';
 import { HtmlTagExtension } from './HtmlTagExtension';
 import { useState, useEffect, useRef } from 'react';
 // ... (imports remain same)
@@ -100,17 +101,61 @@ const MenuBar = ({ editor }) => {
     const [modalType, setModalType] = useState(null);
     const [inputValue, setInputValue] = useState("");
 
+    // Search State
+    const [searchResults, setSearchResults] = useState([]);
+    const [isSearching, setIsSearching] = useState(false);
+
     const fileInputRef = useRef(null);
     const [isUploading, setIsUploading] = useState(false);
 
     if (!editor) { return null; }
 
-    const openModal = (type) => { setModalType(type); setInputValue(""); }; // Always empty init
-    const closeModal = () => { setModalType(null); setInputValue(""); setIsUploading(false); };
+    const openModal = (type) => {
+        setModalType(type);
+        setInputValue("");
+        setSearchResults([]); // Reset search
+    };
+
+    const closeModal = () => {
+        setModalType(null);
+        setInputValue("");
+        setIsUploading(false);
+        setSearchResults([]);
+    };
+
+    const handleSearch = async () => {
+        if (!inputValue || inputValue.length < 2) return;
+        setIsSearching(true);
+        try {
+            // Search text fields only (Question, Options, Explanation)
+            const keys = ['question', 'options.a', 'options.b', 'options.c', 'options.d', 'options.e', 'explanation'];
+            const results = await searchQuestions(inputValue, null, keys);
+            setSearchResults(results.slice(0, 20)); // Limit 20
+        } catch (e) {
+            console.error(e);
+        } finally {
+            setIsSearching(false);
+        }
+    };
+
+    const handleImportSelection = (item) => {
+        if (item.explanation) {
+            // Insert explanation at cursor
+            editor.chain().focus().insertContent(item.explanation).run();
+        }
+        closeModal();
+    };
+
     const handleInsert = () => {
-        if (!inputValue) { closeModal(); return; }
+        if (!inputValue && modalType !== 'import') { closeModal(); return; }
+
         if (modalType === 'image') { editor.chain().focus().setImage({ src: inputValue }).run(); }
         else if (modalType === 'math') { editor.chain().focus().insertMath(inputValue).run(); }
+        // Import is handled by selection usually, but if enter is pressed with search box, we might default to search
+        if (modalType === 'import') {
+            handleSearch();
+            return;
+        }
         closeModal();
     };
 
@@ -156,10 +201,10 @@ const MenuBar = ({ editor }) => {
         <div className={styles.menubar}>
             {/* ... Existing Groups ... */}
             <div className={styles.group}>
-                <button type="button" onClick={() => editor.chain().focus().toggleBold().run()} className={editor.isActive('bold') ? styles.active : ''} title="太字"><Icons.Bold /></button>
-                <button type="button" onClick={() => editor.chain().focus().toggleItalic().run()} className={editor.isActive('italic') ? styles.active : ''} title="斜体"><Icons.Italic /></button>
-                <button type="button" onClick={() => editor.chain().focus().toggleUnderline().run()} className={editor.isActive('underline') ? styles.active : ''} title="下線"><Icons.Underline /></button>
-                <button type="button" onClick={() => editor.chain().focus().toggleHighlight().run()} className={editor.isActive('highlight') ? styles.active : ''} title="ハイライト"><Icons.Highlight /></button>
+                <button type="button" onClick={() => editor.chain().focus().toggleBold().run()} className={editor.isActive('bold') ? styles.active : ''} title="太字 (Bold)"><Icons.Bold /></button>
+                <button type="button" onClick={() => editor.chain().focus().toggleItalic().run()} className={editor.isActive('italic') ? styles.active : ''} title="斜体 (Italic)"><Icons.Italic /></button>
+                <button type="button" onClick={() => editor.chain().focus().toggleUnderline().run()} className={editor.isActive('underline') ? styles.active : ''} title="下線 (Underline)"><Icons.Underline /></button>
+                <button type="button" onClick={() => editor.chain().focus().toggleHighlight().run()} className={editor.isActive('highlight') ? styles.active : ''} title="ハイライト (蛍光ペン)"><Icons.Highlight /></button>
             </div>
 
             <div className={styles.group}>
@@ -169,42 +214,43 @@ const MenuBar = ({ editor }) => {
             </div>
 
             <div className={styles.group}>
-                <button type="button" onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()} className={editor.isActive('heading', { level: 1 }) ? styles.active : ''} title="大見出し">H1</button>
-                <button type="button" onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()} className={editor.isActive('heading', { level: 2 }) ? styles.active : ''} title="中見出し">H2</button>
-                <button type="button" onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()} className={editor.isActive('heading', { level: 3 }) ? styles.active : ''} title="小見出し">H3</button>
+                <button type="button" onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()} className={editor.isActive('heading', { level: 1 }) ? styles.active : ''} title="見出し1 (大)">H1</button>
+                <button type="button" onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()} className={editor.isActive('heading', { level: 2 }) ? styles.active : ''} title="見出し2 (中)">H2</button>
+                <button type="button" onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()} className={editor.isActive('heading', { level: 3 }) ? styles.active : ''} title="見出し3 (小)">H3</button>
             </div>
 
             <div className={styles.group}>
                 <button type="button" onClick={() => editor.chain().focus().toggleBulletList().run()} className={editor.isActive('bulletList') ? styles.active : ''} title="箇条書き"><Icons.Bullet /></button>
-                <button type="button" onClick={() => editor.chain().focus().toggleOrderedList().run()} className={editor.isActive('orderedList') ? styles.active : ''} title="番号付リスト"><Icons.Ordered /></button>
-                <button type="button" onClick={handleIndent} title="インデント増"><Icons.Indent /></button>
-                <button type="button" onClick={handleOutdent} title="インデント減"><Icons.Outdent /></button>
+                <button type="button" onClick={() => editor.chain().focus().toggleOrderedList().run()} className={editor.isActive('orderedList') ? styles.active : ''} title="番号付きリスト"><Icons.Ordered /></button>
+                <button type="button" onClick={handleIndent} title="インデントを増やす"><Icons.Indent /></button>
+                <button type="button" onClick={handleOutdent} title="インデントを減らす"><Icons.Outdent /></button>
             </div>
 
             <div className={styles.group}>
-                <button type="button" onClick={() => editor.chain().focus().toggleSubscript().run()} className={editor.isActive('subscript') ? styles.active : ''} title="下付き">sub</button>
-                <button type="button" onClick={() => editor.chain().focus().toggleSuperscript().run()} className={editor.isActive('superscript') ? styles.active : ''} title="上付き">sup</button>
+                <button type="button" onClick={() => editor.chain().focus().toggleSubscript().run()} className={editor.isActive('subscript') ? styles.active : ''} title="下付き文字 (Sub)">sub</button>
+                <button type="button" onClick={() => editor.chain().focus().toggleSuperscript().run()} className={editor.isActive('superscript') ? styles.active : ''} title="上付き文字 (Sup)">sup</button>
             </div>
 
             <div className={styles.group}>
-                <button type="button" onClick={() => openModal('math')} title="数式挿入"><Icons.Math /></button>
-                <button type="button" onClick={() => openModal('image')} title="画像挿入"><Icons.Image /></button>
-                <button type="button" onClick={() => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()} title="表挿入"><Icons.Table /></button>
+                <button type="button" onClick={() => openModal('math')} title="数式を挿入 (LaTeX)"><Icons.Math /></button>
+                <button type="button" onClick={() => openModal('import')} title="他の解説を引用 (Import)">📖</button>
+                <button type="button" onClick={() => openModal('image')} title="画像を追加 (アップロード/URL)"><Icons.Image /></button>
+                <button type="button" onClick={() => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()} title="表を挿入 (3x3)"><Icons.Table /></button>
             </div>
 
             {editor.isActive('table') && (
                 <div className={styles.tableControls}>
-                    <button type="button" onClick={() => editor.chain().focus().addColumnBefore().run()} title="左に列追加"><Icons.ColBefore /></button>
-                    <button type="button" onClick={() => editor.chain().focus().addColumnAfter().run()} title="右に列追加"><Icons.ColAfter /></button>
-                    <button type="button" onClick={() => editor.chain().focus().deleteColumn().run()} title="列削除" className={styles.deleteAction}><Icons.DeleteCol /></button>
+                    <button type="button" onClick={() => editor.chain().focus().addColumnBefore().run()} title="左に列を挿入"><Icons.ColBefore /></button>
+                    <button type="button" onClick={() => editor.chain().focus().addColumnAfter().run()} title="右に列を挿入"><Icons.ColAfter /></button>
+                    <button type="button" onClick={() => editor.chain().focus().deleteColumn().run()} title="列を削除" className={styles.deleteAction}><Icons.DeleteCol /></button>
                     <div className={styles.divider} />
-                    <button type="button" onClick={() => editor.chain().focus().addRowBefore().run()} title="上に行追加"><Icons.RowBefore /></button>
-                    <button type="button" onClick={() => editor.chain().focus().addRowAfter().run()} title="下に行追加"><Icons.RowAfter /></button>
-                    <button type="button" onClick={() => editor.chain().focus().deleteRow().run()} title="行削除" className={styles.deleteAction}><Icons.DeleteRow /></button>
+                    <button type="button" onClick={() => editor.chain().focus().addRowBefore().run()} title="上に行を挿入"><Icons.RowBefore /></button>
+                    <button type="button" onClick={() => editor.chain().focus().addRowAfter().run()} title="下に行を挿入"><Icons.RowAfter /></button>
+                    <button type="button" onClick={() => editor.chain().focus().deleteRow().run()} title="行を削除" className={styles.deleteAction}><Icons.DeleteRow /></button>
                     <div className={styles.divider} />
-                    <button type="button" onClick={() => editor.chain().focus().mergeCells().run()} title="セル結合"><Icons.Merge /></button>
-                    <button type="button" onClick={() => editor.chain().focus().splitCell().run()} title="セル分割"><Icons.Split /></button>
-                    <button type="button" onClick={() => editor.chain().focus().deleteTable().run()} title="表全体削除" className={styles.deleteAction}><Icons.Trash /></button>
+                    <button type="button" onClick={() => editor.chain().focus().mergeCells().run()} title="セルを結合"><Icons.Merge /></button>
+                    <button type="button" onClick={() => editor.chain().focus().splitCell().run()} title="セルを分割"><Icons.Split /></button>
+                    <button type="button" onClick={() => editor.chain().focus().deleteTable().run()} title="表全体を削除" className={styles.deleteAction}><Icons.Trash /></button>
                 </div>
             )}
 
@@ -212,7 +258,12 @@ const MenuBar = ({ editor }) => {
             {modalType && (
                 <div className={styles.modalOverlay}>
                     <div className={styles.modalContent}>
-                        <h4>{modalType === 'math' ? '数式を入力 (LaTeX)' : '画像のURLを入力'}</h4>
+                        <h4>
+                            {modalType === 'math' ? '数式を入力 (LaTeX)' :
+                                modalType === 'import' ? '解説を検索・引用' :
+                                    '画像のURLを入力'}
+                        </h4>
+
                         {modalType === 'image' && (
                             <div style={{ marginBottom: '1rem' }}>
                                 <label style={{ display: 'block', fontSize: '0.8rem', color: '#666', marginBottom: '0.5rem' }}>
@@ -228,14 +279,48 @@ const MenuBar = ({ editor }) => {
                                 {isUploading && <span style={{ marginLeft: '0.5rem', fontSize: '0.8rem' }}>アップロード中...</span>}
                             </div>
                         )}
-                        <input
-                            type="text"
-                            value={inputValue}
-                            onChange={(e) => setInputValue(e.target.value)}
-                            onKeyDown={(e) => { if (e.key === 'Enter') handleInsert(); }}
-                            placeholder={modalType === 'image' ? "またはURLを直接入力" : "例: E = mc^2"}
-                            autoFocus
-                        />
+
+                        <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem' }}>
+                            <input
+                                type="text"
+                                value={inputValue}
+                                onChange={(e) => setInputValue(e.target.value)}
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                        if (modalType === 'import') handleSearch();
+                                        else handleInsert();
+                                    }
+                                }}
+                                placeholder={
+                                    modalType === 'math' ? "例: E = mc^2" :
+                                        modalType === 'import' ? "キーワード (2文字以上)" :
+                                            "またはURLを直接入力"
+                                }
+                                autoFocus
+                                style={{ flex: 1 }}
+                            />
+                            {modalType === 'import' && (
+                                <button onClick={handleSearch} className={styles.cheatBtn} style={{ alignSelf: 'center' }}>検索</button>
+                            )}
+                        </div>
+
+                        {/* Search Results */}
+                        {modalType === 'import' && (
+                            <div className={styles.searchResults}>
+                                {isSearching && <div style={{ padding: '0.5rem', fontSize: '0.9rem' }}>検索中...</div>}
+                                {!isSearching && searchResults.length === 0 && inputValue.length > 1 && (
+                                    <div style={{ padding: '0.5rem', color: '#718096', fontSize: '0.9rem' }}>結果なし</div>
+                                )}
+                                {searchResults.map(res => (
+                                    <div key={res.id || Math.random()} className={styles.searchResultItem} onClick={() => handleImportSelection(res)}>
+                                        <div className={styles.resultMeta}>{res.year} - {res.genre || 'その他'} (ID: {res.id})</div>
+                                        <div className={styles.previewText} title={res.question}>
+                                            {res.question.replace(/<[^>]+>/g, '').substring(0, 60)}...
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
 
                         {/* LaTeX Cheat Sheet */}
                         {modalType === 'math' && (
@@ -263,7 +348,9 @@ const MenuBar = ({ editor }) => {
 
                         <div className={styles.modalActions}>
                             <button onClick={closeModal} className={styles.cancelBtn}>キャンセル</button>
-                            <button onClick={handleInsert} className={styles.insertBtn}>挿入</button>
+                            {modalType !== 'import' && (
+                                <button onClick={handleInsert} className={styles.insertBtn}>挿入</button>
+                            )}
                         </div>
                     </div>
                 </div>
@@ -298,7 +385,6 @@ export default function AnswerEditor({ content, onChange }) {
         Subscript,
         Superscript,
         MathExtension,
-        IndentExtension, // Add Custom Indent
         IndentExtension, // Add Custom Indent
         TextAlign.configure({
             types: ['heading', 'paragraph', 'tableCell', 'tableHeader'],

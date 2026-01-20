@@ -1,7 +1,10 @@
 import Fuse from 'fuse.js';
 import metadata from '@/data/metadata.json';
+import { getAllOverrides, getUserExamProgress } from '@/lib/db'; // Import DB
+import { auth } from '@/lib/firebase';
 
-// Map for dynamic imports
+// ... (EXAM_LOADERS, EXAM_NAMES, CACHE remain same)
+
 const EXAM_LOADERS = {
     radiology: () => import('@/data/test_radiology.json'),
     diagnostic: () => import('@/data/test_diagnostic.json'),
@@ -39,7 +42,11 @@ export const getExamData = async (examId) => {
     try {
         const module = await loader();
         // default export for JSON is the data itself in some bundlers, or module.default
-        const data = module.default || module;
+        const rawData = module.default || module;
+
+        // Inject examId
+        const data = rawData.map(q => ({ ...q, examId }));
+
         CACHE[examId] = data;
         return data;
     } catch (e) {
@@ -58,17 +65,72 @@ export const getAllQuestions = async () => {
 
 // Client-side search using Fuse.js
 // Make Async
-export const searchQuestions = async (query, examId = null) => {
-    const data = examId ? await getExamData(examId) : await getAllQuestions();
+export const searchQuestions = async (query, examId = null, customKeys = null) => {
+    const rawData = examId ? await getExamData(examId) : await getAllQuestions();
+
+    // 1. Fetch Overrides (Global)
+    let globalOverrides = {};
+    try {
+        globalOverrides = await getAllOverrides();
+    } catch (e) {
+        console.error("Search global override fetch failed:", e);
+    }
+
+    // 2. Fetch User Progress (Personal Notes/Edits)
+    let userProgress = {};
+    const currentUser = auth.currentUser;
+    if (currentUser) {
+        try {
+            userProgress = await getUserExamProgress(currentUser.uid);
+        } catch (e) {
+            console.error("Search user progress fetch failed:", e);
+        }
+    }
+
+    // 3. Merge Data (Priority: User Note > Global Override > Original)
+    const data = rawData.map(q => {
+        // Start with the original question
+        let merged = q;
+
+        // Apply Global Override (if any)
+        const gov = globalOverrides[q.id];
+        if (gov) {
+            merged = { ...merged, ...gov };
+        }
+
+        // Apply User Progress (if any)
+        // We need the global ID to match user progress.
+        // `q.examId` is now injected by `getExamData` or `getAllQuestions`.
+        const globalId = getGlobalQuestionId(q.examId, q.id);
+        const prog = userProgress[globalId];
+        if (prog) {
+            // Merge user progress fields, prioritizing user's note as explanation
+            merged = { ...merged, ...prog };
+            if (prog.note) {
+                merged.explanation = prog.note; // User's note takes precedence for explanation
+            }
+        }
+
+        return merged;
+    });
+
+    const keys = customKeys || ['question', 'options.a', 'options.b', 'options.c', 'options.d', 'options.e', 'explanation', 'genre', 'year'];
 
     const options = {
-        keys: ['question', 'options.a', 'options.b', 'options.c', 'options.d', 'options.e', 'explanation', 'genre', 'year'],
-        threshold: 0.3, // Fuzzy matching threshold
-        ignoreLocation: true
+        keys: keys,
+        threshold: 0.3, // Fuzzy matching threshold (applies if not using extended syntax)
+        ignoreLocation: true,
+        useExtendedSearch: true
     };
 
     const fuse = new Fuse(data, options);
-    return fuse.search(query).map(result => result.item);
+
+    // Transform query for "AND" search with exact substrings
+    // e.g. "MRI 脳" -> "'MRI '脳"
+    // Split by half/full width space
+    const formattedQuery = query.trim().split(/[\s　]+/).map(term => `'${term}`).join(' ');
+
+    return fuse.search(formattedQuery).map(result => result.item);
 };
 
 // Use Metadata (Sync)
