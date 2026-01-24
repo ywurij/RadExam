@@ -83,8 +83,14 @@ export const IndentExtension = Extension.create({
 
     addKeyboardShortcuts() {
         return {
-            'Tab': () => this.editor.commands.indent(),
-            'Shift-Tab': () => this.editor.commands.outdent(),
+            'Tab': () => {
+                if (this.editor.isActive('listItem')) return false; // Delegate to List extension
+                return this.editor.commands.indent();
+            },
+            'Shift-Tab': () => {
+                if (this.editor.isActive('listItem')) return false; // Delegate to List extension
+                return this.editor.commands.outdent();
+            },
         };
     }
 });

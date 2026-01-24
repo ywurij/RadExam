@@ -53,7 +53,9 @@ const Icons = {
     Split: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" /><line x1="12" y1="3" x2="12" y2="21" /><line x1="3" y1="12" x2="21" y2="12" /></svg>,
     DeleteCol: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 3v18" /><path d="M15 3v18" /><line x1="3" y1="3" x2="21" y2="21" /><line x1="21" y1="3" x2="3" y2="21" /></svg>,
     DeleteRow: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 9h18" /><path d="M3 15h18" /><line x1="3" y1="3" x2="21" y2="21" /><line x1="21" y1="3" x2="3" y2="21" /></svg>,
-    Trash: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
+    Trash: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>,
+    Book: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" /><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" /></svg>,
+    DownChevron: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9" /></svg>
 };
 
 
@@ -100,10 +102,12 @@ const MenuBar = ({ editor }) => {
     // ... (state hooks) ...
     const [modalType, setModalType] = useState(null);
     const [inputValue, setInputValue] = useState("");
-
-    // Search State
     const [searchResults, setSearchResults] = useState([]);
     const [isSearching, setIsSearching] = useState(false);
+
+    const [filterYear, setFilterYear] = useState('all');
+    const [sortOrder, setSortOrder] = useState('relevance');
+    const [expandedIds, setExpandedIds] = useState(new Set()); // Track expanding items
 
     const fileInputRef = useRef(null);
     const [isUploading, setIsUploading] = useState(false);
@@ -114,6 +118,21 @@ const MenuBar = ({ editor }) => {
         setModalType(type);
         setInputValue("");
         setSearchResults([]); // Reset search
+        setFilterYear('all');
+        setSortOrder('relevance');
+        setExpandedIds(new Set());
+    };
+
+    const toggleExpand = (id) => {
+        setExpandedIds(prev => {
+            const next = new Set(prev);
+            if (next.has(id)) next.delete(id);
+            else next.add(id);
+            // If single expand only: 
+            // const next = new Set();
+            // if (!prev.has(id)) next.add(id);
+            return next;
+        });
     };
 
     const closeModal = () => {
@@ -127,8 +146,8 @@ const MenuBar = ({ editor }) => {
         if (!inputValue || inputValue.length < 2) return;
         setIsSearching(true);
         try {
-            // Search text fields only (Question, Options, Explanation)
-            const keys = ['question', 'options.a', 'options.b', 'options.c', 'options.d', 'options.e', 'explanation'];
+            // Search explanation only
+            const keys = ['explanation'];
             const results = await searchQuestions(inputValue, null, keys);
             setSearchResults(results.slice(0, 20)); // Limit 20
         } catch (e) {
@@ -233,7 +252,7 @@ const MenuBar = ({ editor }) => {
 
             <div className={styles.group}>
                 <button type="button" onClick={() => openModal('math')} title="数式を挿入 (LaTeX)"><Icons.Math /></button>
-                <button type="button" onClick={() => openModal('import')} title="他の解説を引用 (Import)">📖</button>
+                <button type="button" onClick={() => openModal('import')} title="他の解説を引用 (Import)"><Icons.Book /></button>
                 <button type="button" onClick={() => openModal('image')} title="画像を追加 (アップロード/URL)"><Icons.Image /></button>
                 <button type="button" onClick={() => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()} title="表を挿入 (3x3)"><Icons.Table /></button>
             </div>
@@ -308,17 +327,83 @@ const MenuBar = ({ editor }) => {
                         {modalType === 'import' && (
                             <div className={styles.searchResults}>
                                 {isSearching && <div style={{ padding: '0.5rem', fontSize: '0.9rem' }}>検索中...</div>}
+
+                                {!isSearching && searchResults.length > 0 && (
+                                    <div className={styles.modalControls}>
+                                        <select
+                                            value={sortOrder}
+                                            onChange={(e) => setSortOrder(e.target.value)}
+                                            className={styles.modalSelect}
+                                        >
+                                            <option value="relevance">関連度順</option>
+                                            <option value="newest">新しい順</option>
+                                            <option value="id">ID順</option>
+                                        </select>
+                                        <select
+                                            value={filterYear}
+                                            onChange={(e) => setFilterYear(e.target.value)}
+                                            className={styles.modalSelect}
+                                        >
+                                            <option value="all">全年度</option>
+                                            {[...new Set(searchResults.map(q => q.year))].sort((a, b) => b - a).map(year => (
+                                                <option key={year} value={year}>{year}年</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                )}
+
                                 {!isSearching && searchResults.length === 0 && inputValue.length > 1 && (
                                     <div style={{ padding: '0.5rem', color: '#718096', fontSize: '0.9rem' }}>結果なし</div>
                                 )}
-                                {searchResults.map(res => (
-                                    <div key={res.id || Math.random()} className={styles.searchResultItem} onClick={() => handleImportSelection(res)}>
-                                        <div className={styles.resultMeta}>{res.year} - {res.genre || 'その他'} (ID: {res.id})</div>
-                                        <div className={styles.previewText} title={res.question}>
-                                            {res.question.replace(/<[^>]+>/g, '').substring(0, 60)}...
-                                        </div>
-                                    </div>
-                                ))}
+
+                                {searchResults
+                                    .filter(q => filterYear === 'all' || q.year.toString() === filterYear)
+                                    .sort((a, b) => {
+                                        if (sortOrder === 'newest') return b.year - a.year || (parseInt(a.questionNumber || 0) - parseInt(b.questionNumber || 0));
+                                        if (sortOrder === 'id') return String(a.id || '').localeCompare(String(b.id || ''), undefined, { numeric: true });
+                                        return 0; // relevance
+                                    })
+                                    .map(res => {
+                                        const isExpanded = expandedIds.has(res.id);
+                                        return (
+                                            <div key={res.id || Math.random()} className={styles.searchResultItem}>
+                                                <div className={styles.resultHeader} onClick={() => toggleExpand(res.id)}>
+                                                    <div className={styles.headerContent}>
+                                                        <div className={styles.resultMeta}>{res.year} - {res.genre || 'その他'} (ID: {res.id})</div>
+                                                        {isExpanded ? (
+                                                            <div className={styles.expandedQuestion} dangerouslySetInnerHTML={{ __html: res.question }} onClick={(e) => e.stopPropagation() || toggleExpand(res.id)} />
+                                                        ) : (
+                                                            <div className={styles.previewText} title={res.question}>
+                                                                {res.question.replace(/<[^>]+>/g, '').substring(0, 60)}...
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                    <div className={`${styles.expandIcon} ${isExpanded ? styles.expanded : ''}`}>
+                                                        <Icons.DownChevron />
+                                                    </div>
+                                                </div>
+
+                                                {/* Expanded Detail */}
+                                                {isExpanded && (
+                                                    <div className={styles.fullDetail}>
+                                                        {/* Question displayed in header */}
+                                                        {/* Options hidden as per user request */}
+
+                                                        {res.explanation && (
+                                                            <div className={styles.detailSection}>
+                                                                <span className={styles.detailLabel}>解説:</span>
+                                                                <div className={styles.detailContent} dangerouslySetInnerHTML={{ __html: res.explanation }} />
+                                                            </div>
+                                                        )}
+
+                                                        <button className={styles.importActionBtn} onClick={() => handleImportSelection(res)}>
+                                                            引用
+                                                        </button>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        );
+                                    })}
                             </div>
                         )}
 

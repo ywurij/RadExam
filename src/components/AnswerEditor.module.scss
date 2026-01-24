@@ -225,7 +225,9 @@
         }
 
         /* Placeholder Styles */
-        p:global(.is-empty)::before {
+        /* Placeholder Styles - Only show when editor is truly empty */
+        /* Placeholder Styles - Show only when it's the only paragraph and empty */
+        p:global(.is-empty):only-child::before {
             color: #adb5bd;
             content: attr(data-placeholder);
             float: left;
@@ -247,6 +249,26 @@
     box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
     border: 1px solid #e2e8f0;
     min-width: 300px;
+    max-width: 500px;
+    width: 90vw;
+    width: 90vw;
+
+    .modalControls {
+        display: flex;
+        gap: 0.5rem;
+        margin-bottom: 0.5rem;
+        flex-wrap: wrap;
+        font-size: 0.85rem;
+        align-items: center;
+    }
+
+    .modalSelect {
+        padding: 0.25rem 0.5rem;
+        border: 1px solid #e2e8f0;
+        border-radius: 0.25rem;
+        font-size: 0.85rem;
+        color: #2d3748;
+    }
 
     h4 {
         margin: 0 0 0.5rem 0;
@@ -309,17 +331,97 @@
 }
 
 .searchResultItem {
-    padding: 0.5rem;
     border-bottom: 1px solid #f7fafc;
-    cursor: pointer;
     transition: background 0.2s;
 
     &:last-child {
         border-bottom: none;
     }
+}
+
+.resultHeader {
+    padding: 0.5rem;
+    cursor: pointer;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
 
     &:hover {
         background: #f7fafc;
+    }
+}
+
+.headerContent {
+    flex: 1;
+}
+
+.expandIcon {
+    color: #cbd5e0;
+    margin-left: 0.5rem;
+    transition: transform 0.2s;
+
+    &.expanded {
+        transform: rotate(180deg);
+    }
+}
+
+.fullDetail {
+    /* Accordion Body - Static */
+    background: #fff;
+    border-top: 1px solid #edf2f7;
+    padding: 1rem;
+    color: #2d3748;
+    animation: slideDown 0.2s ease-out;
+}
+
+@keyframes slideDown {
+    from {
+        opacity: 0;
+        transform: translateY(-5px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.detailSection {
+    margin-bottom: 0.75rem;
+
+    &:last-child {
+        margin-bottom: 0;
+    }
+}
+
+.detailLabel {
+    font-weight: bold;
+    font-size: 0.75rem;
+    color: #718096;
+    margin-bottom: 0.25rem;
+    display: block;
+}
+
+.detailContent {
+    font-size: 0.875rem;
+    line-height: 1.5;
+}
+
+.optionsList {
+    padding-left: 1rem;
+    margin: 0;
+    list-style-type: none;
+
+    li {
+        margin-bottom: 0.25rem;
+        position: relative;
+
+        &::before {
+            content: attr(data-label) ". ";
+            font-weight: bold;
+            margin-right: 0.25rem;
+            color: #4a5568;
+        }
     }
 }
 
@@ -330,12 +432,27 @@
     margin-bottom: 0.25rem;
 }
 
+.headerContent {
+    flex: 1;
+    min-width: 0;
+    /* Critical for text-overflow to work in flex child */
+    margin-right: 0.5rem;
+}
+
 .previewText {
     font-size: 0.875rem;
     color: #2d3748;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+
+.expandedQuestion {
+    font-size: 0.875rem;
+    color: #2d3748;
+    white-space: normal;
+    /* Allow wrapping */
+    line-height: 1.5;
 }
 
 .cheatBtn {
@@ -352,6 +469,33 @@
         background: #ebf8ff;
         border-color: #4299e1;
         color: #2b6cb0;
+    }
+}
+
+.importActionBtn {
+    appearance: none;
+    margin-top: 1rem;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 0.5rem 1rem;
+    /* Revert to standard padding */
+    background-color: #3b82f6 !important;
+    /* Force Blue BG */
+    color: #ffffff !important;
+    border: 1px solid #3b82f6 !important;
+    border-radius: 0.25rem;
+    font-size: 0.875rem;
+    /* Reverted to 14px */
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    /* gap removed */
+    white-space: nowrap;
+
+    &:hover {
+        background-color: #2563eb !important;
+        border-color: #2563eb !important;
     }
 }
 
@@ -496,6 +640,17 @@
         label {
             color: #a0aec0 !important;
         }
+
+        .modalSelect {
+            background: #2d3748;
+            border-color: #4a5568;
+            color: #e2e8f0;
+
+            option {
+                background: #2d3748;
+                color: #e2e8f0;
+            }
+        }
     }
 
     /* Cheat Sheet Dark Mode */
@@ -532,9 +687,28 @@
 
     .searchResultItem {
         border-bottom-color: #2d3748;
+    }
+
+    .resultHeader:hover {
+        background: #2d3748;
+    }
+
+    .fullDetail {
+        background: #1a202c;
+        /* Slightly darker than item to distinguish? Or same */
+        border-top-color: #4a5568;
+        color: #e2e8f0;
+    }
+
+    .importActionBtn {
+        background-color: #3182ce;
+        border: 1px solid #63b3ed;
+        /* Lighter border for visibility */
+        color: #ffffff !important;
 
         &:hover {
-            background: #2d3748;
+            background-color: #2c5282;
+            border-color: #90cdf4;
         }
     }
 
@@ -543,6 +717,10 @@
     }
 
     .previewText {
+        color: #e2e8f0;
+    }
+
+    .expandedQuestion {
         color: #e2e8f0;
     }
 
@@ -555,4 +733,6 @@
             background: #4a5568;
         }
     }
+
+
 }
