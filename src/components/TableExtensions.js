@@ -18,7 +18,7 @@ export const CustomTableCell = TableCell.extend({
                     const width = attributes.colwidth && attributes.colwidth.length ? attributes.colwidth[0] : null;
                     return {
                         colwidth: attributes.colwidth,
-                        style: width ? `width: ${width}px; border: 2px solid red` : 'border: 2px solid blue',
+                        style: width ? `width: ${width}px` : null,
                     }
                 },
             },
@@ -41,7 +41,7 @@ export const CustomTableHeader = TableHeader.extend({
                     const width = attributes.colwidth && attributes.colwidth.length ? attributes.colwidth[0] : null;
                     return {
                         colwidth: attributes.colwidth,
-                        style: width ? `width: ${width}px; border: 2px solid red` : 'border: 2px solid blue',
+                        style: width ? `width: ${width}px` : null,
                     }
                 },
             },
@@ -50,7 +50,15 @@ export const CustomTableHeader = TableHeader.extend({
 });
 
 export const CustomTable = Table.extend({
+    addOptions() {
+        return {
+            ...this.parent?.(),
+            renderWrapper: true,
+            resizable: true,
+        };
+    },
+
     renderHTML({ HTMLAttributes }) {
-        return ['div', { class: 'tableWrapper debug-wrapper' }, ['table', HTMLAttributes, ['tbody', 0]]];
+        return ['div', { class: 'tableWrapper' }, ['table', HTMLAttributes, ['tbody', 0]]];
     },
 });

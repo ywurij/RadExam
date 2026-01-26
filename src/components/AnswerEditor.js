@@ -5,10 +5,8 @@ import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { storage } from '@/lib/firebase';
 
 import StarterKit from '@tiptap/starter-kit';
-import { Table } from '@tiptap/extension-table';
+import { CustomTable, CustomTableCell, CustomTableHeader } from './TableExtensions';
 import { TableRow } from '@tiptap/extension-table-row';
-import { TableCell } from '@tiptap/extension-table-cell';
-import { TableHeader } from '@tiptap/extension-table-header';
 import ImageExtension from '@tiptap/extension-image';
 import Link from '@tiptap/extension-link';
 import Underline from '@tiptap/extension-underline';
@@ -512,12 +510,20 @@ export default function AnswerEditor({ content, onChange }) {
 
 
     // Safely add Table extensions
-    if (Table && Table.configure) {
+    if (CustomTable && CustomTable.configure) {
+        // Force the configuration explicitly
+        const configuredTable = CustomTable.configure({
+            resizable: true,
+            renderWrapper: true,
+            allowTableNodeSelection: true
+        });
+        console.log("Configuring CustomTable with:", configuredTable.options); // DEBUG
+
         extensionConfig.push(
-            Table.configure({ resizable: true }),
+            configuredTable,
             TableRow,
-            TableHeader,
-            TableCell
+            CustomTableHeader,
+            CustomTableCell
         );
     }
 
