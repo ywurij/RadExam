@@ -367,6 +367,7 @@
 .richTextContent {
     line-height: 1.6;
     color: #2d3748;
+    /* overflow-x: auto; Removed - Scroll on table only */
 
     /* Headings */
     h1 {
@@ -423,21 +424,45 @@
         list-style-type: decimal;
     }
 
-    /* Tables */
+    /* Tables - Default Fallback for Unwrapped Content */
     table {
         border-collapse: collapse;
+        min-width: 100%;
         width: 100%;
-        margin: 1em 0;
-        overflow-x: auto;
+        /* Fit container */
         display: block;
-        /* Ensure scroll if needed */
+        /* Turn into scroll container if unwrapped */
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+
+        /* Custom Scrollbar */
+        &::-webkit-scrollbar {
+            height: 10px;
+        }
+
+        &::-webkit-scrollbar-track {
+            background: #f7fafc;
+            border-radius: 5px;
+        }
+
+        &::-webkit-scrollbar-thumb {
+            background: #cbd5e0;
+            border-radius: 5px;
+            border: 2px solid #f7fafc;
+            /* Padding effect */
+        }
+
+        &::-webkit-scrollbar-thumb:hover {
+            background: #a0aec0;
+        }
 
         td,
         th {
             border: 2px solid #cbd5e0;
             padding: 0.5rem;
             vertical-align: top;
-            min-width: 2rem;
+            min-width: 120px;
+            /* Increased to force horizontal scroll */
         }
 
         th {
@@ -758,5 +783,35 @@
             background: #2d3748;
             color: #e2e8f0;
         }
+    }
+}
+
+/* Global Table Wrapper Style - Scoped to Component */
+.richTextContent :global(.tableWrapper) {
+    display: block;
+    width: 100%;
+    overflow-x: auto;
+    margin: 1em 0;
+    -webkit-overflow-scrolling: touch;
+
+    /* Custom Scrollbar */
+    &::-webkit-scrollbar {
+        height: 10px;
+    }
+
+    &::-webkit-scrollbar-track {
+        background: #f7fafc;
+        border-radius: 5px;
+    }
+
+    &::-webkit-scrollbar-thumb {
+        background: #cbd5e0;
+        border-radius: 5px;
+    }
+
+    table {
+        display: table !important;
+        width: max-content !important;
+        min-width: 100% !important;
     }
 }

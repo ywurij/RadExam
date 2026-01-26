@@ -119,6 +119,7 @@
     min-height: 200px;
     flex-grow: 1;
     overflow-y: auto;
+    /* overflow-x: auto; Removed. Scroll is now on table. */
 
     :global(.ProseMirror) {
         outline: none;
@@ -160,22 +161,103 @@
            Mobile responsive table usually needs overflow-x auto on parent.
         */
         /* Table Styles */
+        /* Table Wrapper for Horizontal Scroll */
+        :global(.tableWrapper) {
+            overflow-x: auto;
+            margin: 1em 0;
+            width: 100%;
+
+            /* Custom Scrollbar */
+            &::-webkit-scrollbar {
+                height: 10px;
+            }
+
+            &::-webkit-scrollbar-track {
+                background: #f7fafc;
+                border-radius: 5px;
+            }
+
+            &::-webkit-scrollbar-thumb {
+                background: #cbd5e0;
+                border-radius: 5px;
+            }
+        }
+
+        /* Table Styles */
         table {
             border-collapse: collapse;
-            width: 100%;
             margin: 0;
-            overflow: hidden;
-            table-layout: fixed;
-            /* Better for resizing */
+            display: table !important;
+            /* Force width to match content (columns) exactly, preventing squashing */
+            width: max-content !important;
+            min-width: 100% !important;
+            /* Fill container if smaller */
+            table-layout: fixed !important;
+            /* Respect column widths */
+
+            /* Old scroll logic moved to wrapper */
+
+            /* Old scroll logic moved to wrapper */
+
+            /* Custom Scrollbar */
+            &::-webkit-scrollbar {
+                height: 10px;
+            }
+
+            &::-webkit-scrollbar-track {
+                background: #f7fafc;
+                border-radius: 5px;
+            }
+
+            &::-webkit-scrollbar-thumb {
+                background: #cbd5e0;
+                border-radius: 5px;
+                border: 2px solid #f7fafc;
+            }
+
+            &::-webkit-scrollbar-thumb:hover {
+                background: #a0aec0;
+            }
 
             td,
             th {
-                min-width: 1em;
+                min-width: 100px;
+                /* Allow expansion */
                 border: 2px solid #ced4da;
                 padding: 3px 5px;
                 vertical-align: top;
                 box-sizing: border-box;
                 position: relative;
+
+                /* Resize Handle */
+                /* Note: Tiptap adds a div with class 'column-resize-handle' inside the cell if configured */
+                :global(.column-resize-handle) {
+                    position: absolute;
+                    right: -2px;
+                    top: 0;
+                    bottom: 0;
+                    width: 4px;
+                    background-color: #adf;
+                    pointer-events: none;
+                    /* Initially hidden/subtle */
+                    opacity: 0;
+                    transition: opacity 0.2s;
+                    z-index: 20;
+                }
+            }
+
+            /* Show handle on hover */
+            &:hover :global(.column-resize-handle) {
+                opacity: 0.5;
+                pointer-events: auto;
+            }
+
+            /* Active handle style */
+            :global(.column-resize-handle:hover),
+            :global(.resize-cursor) {
+                opacity: 1;
+                background-color: #3b82f6;
+                cursor: col-resize;
             }
 
             th {

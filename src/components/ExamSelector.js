@@ -164,21 +164,17 @@ export default function ExamSelector() {
         if (e) e.stopPropagation();
         if (downloadingExamId) return;
 
-        // Cooldown check for Auto mode
-        if (isAuto) {
-            const lastDl = localStorage.getItem(`radexam_dl_${examId}`);
-            const now = Date.now();
-            if (lastDl && (now - parseInt(lastDl)) < 24 * 60 * 60 * 1000) {
-                // Skiping auto download (Cooldown active)
-                return;
-            }
-        } else {
-            // Manual mode: Confirm
+        // Manual mode: Confirm
+        if (!isAuto) {
             if (!confirm(`${examId} の全画像をダウンロードしますか？\n(Wi-Fi環境推奨)`)) return;
         }
 
+        // We don't set downloading state yet for Auto, until we know we need to.
+        // But to avoid race conditions, let's set a temp state or just proceed carefully.
+        // Actually, fetching manifest is fast. Let's do it before setting state if possible, 
+        // OR set state and clear it quickly if skipped.
+        // Better: Set state to block duplicates.
         setDownloadingExamId(examId);
-        setDownloadProgress({ current: 0, total: 0 });
 
         try {
             const res = await fetch('/data/image-manifest.json');
@@ -192,6 +188,18 @@ export default function ExamSelector() {
                 return;
             }
 
+            // Generate content hash (Simple stringify is sufficient for list of URLs)
+            const currentHash = JSON.stringify(images);
+            const savedHash = localStorage.getItem(`radexam_img_hash_${examId}`);
+
+            if (isAuto && savedHash === currentHash) {
+                // Content unchanged, skip download
+                console.log(`[AutoDL] ${examId}: Images up to date, skipping.`);
+                setDownloadingExamId(null);
+                return;
+            }
+
+            // Proceed with download
             setDownloadProgress({ current: 0, total: images.length });
 
             const cache = await caches.open('question-images');
@@ -211,7 +219,9 @@ export default function ExamSelector() {
 
             if (!isAuto) alert("ダウンロードが完了しました。");
 
-            // Mark timestamp
+            // Save new hash
+            localStorage.setItem(`radexam_img_hash_${examId}`, currentHash);
+            // Also keep timestamp just in case/debug
             localStorage.setItem(`radexam_dl_${examId}`, Date.now().toString());
 
         } catch (e) {

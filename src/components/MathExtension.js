@@ -57,20 +57,17 @@ export const MathExtension = Node.create({
             render();
 
             dom.addEventListener('click', (e) => {
-                e.preventDefault(); // Prevent default selection behavior
+                e.preventDefault();
                 if (!editor.isEditable) return;
 
-                const newFormula = window.prompt('数式を入力 (LaTeX)', node.attrs.latex);
-                if (newFormula !== null) {
-                    if (typeof getPos === 'function') {
-                        const pos = getPos();
-                        // Dispatch transaction to update node
-                        editor.view.dispatch(
-                            editor.view.state.tr.setNodeMarkup(pos, undefined, {
-                                latex: newFormula
-                            })
-                        );
-                    }
+                if (typeof getPos === 'function') {
+                    const pos = getPos();
+                    // Dispatch custom event for React to handle
+                    const event = new CustomEvent('math-edit', {
+                        detail: { pos, latex: node.attrs.latex },
+                        bubbles: true
+                    });
+                    editor.view.dom.dispatchEvent(event);
                 }
             });
 

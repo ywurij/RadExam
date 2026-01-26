@@ -111,6 +111,23 @@ const MenuBar = ({ editor }) => {
 
     const fileInputRef = useRef(null);
     const [isUploading, setIsUploading] = useState(false);
+    const [editingMathPos, setEditingMathPos] = useState(null); // Track math node being edited
+
+    useEffect(() => {
+        if (!editor || !editor.view || !editor.view.dom) return;
+
+        const handleMathEdit = (e) => {
+            const { pos, latex } = e.detail;
+            setEditingMathPos(pos);
+            setInputValue(latex);
+            setModalType('math');
+        };
+
+        editor.view.dom.addEventListener('math-edit', handleMathEdit);
+        return () => {
+            editor.view.dom.removeEventListener('math-edit', handleMathEdit);
+        };
+    }, [editor]);
 
     if (!editor) { return null; }
 
@@ -121,6 +138,7 @@ const MenuBar = ({ editor }) => {
         setFilterYear('all');
         setSortOrder('relevance');
         setExpandedIds(new Set());
+        setEditingMathPos(null); // Reset edit state when opening normally
     };
 
     const toggleExpand = (id) => {
@@ -140,6 +158,7 @@ const MenuBar = ({ editor }) => {
         setInputValue("");
         setIsUploading(false);
         setSearchResults([]);
+        setEditingMathPos(null);
     };
 
     const handleSearch = async () => {
@@ -169,7 +188,18 @@ const MenuBar = ({ editor }) => {
         if (!inputValue && modalType !== 'import') { closeModal(); return; }
 
         if (modalType === 'image') { editor.chain().focus().setImage({ src: inputValue }).run(); }
-        else if (modalType === 'math') { editor.chain().focus().insertMath(inputValue).run(); }
+        else if (modalType === 'math') {
+            if (editingMathPos !== null) {
+                // Update existing math node
+                editor.chain().focus().command(({ tr }) => {
+                    tr.setNodeMarkup(editingMathPos, undefined, { latex: inputValue });
+                    return true;
+                }).run();
+            } else {
+                // Insert new
+                editor.chain().focus().insertMath(inputValue).run();
+            }
+        }
         // Import is handled by selection usually, but if enter is pressed with search box, we might default to search
         if (modalType === 'import') {
             handleSearch();
