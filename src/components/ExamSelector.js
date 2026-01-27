@@ -40,8 +40,24 @@ export default function ExamSelector() {
     const [hasSession, setHasSession] = useState(false);
 
     useEffect(() => {
-        const session = localStorage.getItem('radexam_session');
-        if (session) setHasSession(true);
+        // Use user-specific key if logged in
+        const sessionKey = user ? `radexam_session_${user.uid}` : 'radexam_session';
+        const session = localStorage.getItem(sessionKey);
+
+        if (session) {
+            try {
+                const parsed = JSON.parse(session);
+                // Simple validation - just check if it exists and is valid JSON
+                // ID mismatch checks are no longer needed because the key itself is user-scoped
+                setHasSession(true);
+            } catch (e) {
+                console.error("Invalid session data", e);
+                localStorage.removeItem(sessionKey);
+                setHasSession(false);
+            }
+        } else {
+            setHasSession(false);
+        }
 
         // Check if there are unread announcements
         const latestId = getLatestAnnouncementId();
@@ -65,7 +81,7 @@ export default function ExamSelector() {
                 console.error("Failed to load last settings", e);
             }
         }
-    }, []);
+    }, [user]);
 
     // Fetch user genres effect
     useEffect(() => {
@@ -145,7 +161,9 @@ export default function ExamSelector() {
     };
 
     const handleResume = () => {
-        const session = localStorage.getItem('radexam_session');
+        // Use user-specific key if logged in
+        const sessionKey = user ? `radexam_session_${user.uid}` : 'radexam_session';
+        const session = localStorage.getItem(sessionKey);
         let query = 'resume=true';
         if (session) {
             try {

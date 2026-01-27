@@ -53,8 +53,10 @@ function QuizContent() {
             let data = [];
 
             // CHECK FOR RESUME
+            // Use user-specific key if logged in, otherwise default global key
+            const sessionKey = user ? `radexam_session_${user.uid}` : 'radexam_session';
             const isResume = searchParams.get('resume') === 'true';
-            const savedSession = typeof window !== 'undefined' ? localStorage.getItem('radexam_session') : null;
+            const savedSession = typeof window !== 'undefined' ? localStorage.getItem(sessionKey) : null;
 
             if (isResume && savedSession) {
                 try {
@@ -187,12 +189,14 @@ function QuizContent() {
                 questionIds: questions.map(q => q.id),
                 currentIndex: currentIndex,
                 timestamp: Date.now(),
-                examId
+                examId,
+                userId: user?.uid // Save User ID to prevent cross-user resume
             };
             // console.log("Saving session to localStorage:", sessionData);
-            localStorage.setItem('radexam_session', JSON.stringify(sessionData));
+            const sessionKey = user ? `radexam_session_${user.uid}` : 'radexam_session';
+            localStorage.setItem(sessionKey, JSON.stringify(sessionData));
         }
-    }, [questions, currentIndex, examId, isFinished, isReviewing]);
+    }, [questions, currentIndex, examId, isFinished, isReviewing, user]);
 
     const handleUpdateStatus = async (qid, updates) => {
         const globalId = getGlobalQuestionId(examId, qid);
@@ -255,7 +259,8 @@ function QuizContent() {
 
     const handleHome = () => {
         if (typeof window !== 'undefined') {
-            localStorage.removeItem('radexam_session');
+            const sessionKey = user ? `radexam_session_${user.uid}` : 'radexam_session';
+            localStorage.removeItem(sessionKey);
         }
         router.push('/');
     };
