@@ -59,12 +59,71 @@ export default function ExamSelector() {
             setHasSession(false);
         }
 
-        // Check if there are unread announcements
-        const latestId = getLatestAnnouncementId();
-        const lastRead = localStorage.getItem('radexam_last_read_announcement');
-        if (latestId && (!lastRead || lastRead !== latestId)) {
-            setHasUnreadAnnouncements(true);
+        // Check remote session if no local session (or even if local exists, to see if remote is newer? 
+        // For "Resume Availability" just existence is enough. 
+        // If local doesn't exist but remote does, we should show resume.
+        const checkRemote = async () => {
+            if (user) {
+                try {
+                    const { getActiveSession } = await import('@/lib/db');
+                    const remote = await getActiveSession(user.uid);
+                    if (remote) {
+                        setHasSession(true);
+                    }
+                } catch (e) {
+                    console.error("Error checking remote session", e);
+                }
+            }
+        };
+        if (!session) {
+            checkRemote();
         }
+
+        // Check if there are unread announcements
+        const checkAnnouncements = async () => {
+            const latestId = getLatestAnnouncementId();
+            if (!latestId) return;
+
+            let remoteReadId = null;
+            if (user) {
+                try {
+                    const { getLastReadAnnouncement } = await import('@/lib/db');
+                    remoteReadId = await getLastReadAnnouncement(user.uid);
+                    // If remote has a newer read ID than local, update local
+                    if (remoteReadId) {
+                        const localRead = localStorage.getItem('radexam_last_read_announcement');
+                        if (!localRead || localRead < remoteReadId) {
+                            localStorage.setItem('radexam_last_read_announcement', remoteReadId);
+                        }
+                    }
+                } catch (e) {
+                    console.error("Failed to check remote announcements", e);
+                }
+            }
+
+            const lastRead = localStorage.getItem('radexam_last_read_announcement');
+
+            // Logic: If latestId > lastRead, then unread.
+            // Assumption: IDs are comparable (e.g. YYYYMMDD or incremental). 
+            // If IDs are not comparable strings, we need strict inequality check or just simple equality if we only care about "not the latest".
+            // Usually "unread" means latest is DIFFERENT from last read? Or strictly newer?
+            // Let's assume strict inequality if formatted as date/number, or just logic: "if saved != latest".
+            // But if I read ID "2", and latest is "3", then unread.
+            // If I read ID "3", and latest is "3", then read.
+            // What if I read "3" and then "2" comes out (unlikely)?
+            // Simple: lastRead !== latestId means unread (assuming user always reads the latest eventually).
+            // Better: if (!lastRead || lastRead !== latestId)
+
+            // BUT, if we synced remoteReadId, we use that effectively via localStorage update above.
+            // So just check localStorage again.
+
+            if (!lastRead || lastRead !== latestId) {
+                setHasUnreadAnnouncements(true);
+            } else {
+                setHasUnreadAnnouncements(false);
+            }
+        };
+        checkAnnouncements();
 
         const lastSettings = localStorage.getItem('radexam_last_settings');
         if (lastSettings) {

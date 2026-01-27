@@ -4,17 +4,25 @@ import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import styles from './announcements.module.scss';
 import { ANNOUNCEMENTS, getLatestAnnouncementId } from '@/lib/announcementsData';
+import { saveLastReadAnnouncement } from '@/lib/db';
+import { useAuth } from '@/context/AuthContext';
 
 export default function AnnouncementsPage() {
     const router = useRouter();
+    const { user } = useAuth(); // If no auth context usage, we need to import or assume logged in state retrieval
 
     useEffect(() => {
         // Mark as read on visit
         const latestId = getLatestAnnouncementId();
         if (latestId) {
             localStorage.setItem('radexam_last_read_announcement', latestId);
+
+            // Sync to Firestore
+            if (user) {
+                saveLastReadAnnouncement(user.uid, latestId);
+            }
         }
-    }, []);
+    }, [user]);
 
     return (
         <div className={styles.container}>

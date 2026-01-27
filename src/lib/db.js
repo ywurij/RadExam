@@ -1,6 +1,6 @@
 import { db } from './firebase';
 import {
-    doc, getDoc, setDoc, updateDoc, increment, collection, writeBatch,
+    doc, getDoc, setDoc, updateDoc, increment, collection, writeBatch, deleteDoc,
     getDocs, query, orderBy
 } from 'firebase/firestore';
 
@@ -665,5 +665,88 @@ export const importUserData = async (uid, jsonData, strategy = 'overwrite') => {
     } catch (e) {
         console.error("Import failed:", e);
         throw e;
+    }
+};
+
+// --- Active Session Management (Cross-Device Sync) ---
+
+/**
+ * Save active session to Firestore.
+ * path: users/{uid}/session/active
+ */
+export const saveActiveSession = async (uid, sessionData) => {
+    if (!uid) return;
+    try {
+        const ref = doc(db, 'users', uid, 'session', 'active');
+        await setDoc(ref, {
+            ...sessionData,
+            updatedAt: new Date() // Server timestamp would be better but local is fine for simple comparison
+        });
+    } catch (e) {
+        console.error("Error saving active session:", e);
+    }
+};
+
+/**
+ * Get active session from Firestore.
+ */
+export const getActiveSession = async (uid) => {
+    if (!uid) return null;
+    try {
+        const ref = doc(db, 'users', uid, 'session', 'active');
+        const snap = await getDoc(ref);
+        return snap.exists() ? snap.data() : null;
+    } catch (e) {
+        console.error("Error fetching active session:", e);
+        return null;
+    }
+};
+
+/**
+ * Delete active session from Firestore.
+ */
+export const deleteActiveSession = async (uid) => {
+    if (!uid) return;
+    try {
+        const ref = doc(db, 'users', uid, 'session', 'active');
+        await deleteDoc(ref);
+    } catch (e) {
+        console.error("Error deleting active session:", e);
+    }
+};
+
+// --- Announcement Read Status ---
+
+/**
+ * Save verify read status to Firestore.
+ */
+export const saveLastReadAnnouncement = async (uid, announcementId) => {
+    if (!uid || !announcementId) return;
+    try {
+        const ref = doc(db, 'users', uid);
+        await setDoc(ref, {
+            lastReadAnnouncementId: announcementId,
+            lastReadAnnouncementDate: new Date()
+        }, { merge: true });
+    } catch (e) {
+        console.error("Error saving last read announcement:", e);
+    }
+};
+
+/**
+ * Get verify read status from Firestore.
+ */
+export const getLastReadAnnouncement = async (uid) => {
+    if (!uid) return null;
+    try {
+        const ref = doc(db, 'users', uid);
+        const snap = await getDoc(ref);
+        if (snap.exists()) {
+            return snap.data().lastReadAnnouncementId || null;
+        }
+        return null;
+    } catch (e) {
+        console.error("Error fetching last read announcement:", e);
+        return null;
     }
 };

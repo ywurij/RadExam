@@ -7,7 +7,7 @@ import QuestionCard from '@/components/QuestionCard';
 import styles from './quiz.module.scss';
 import { auth } from '@/lib/firebase';
 import { useAuth } from '@/context/AuthContext';
-import { saveUserProgress, saveQuestionOverride, getUserExamProgress, getAllOverrides } from '@/lib/db';
+import { saveUserProgress, saveQuestionOverride, getUserExamProgress, getAllOverrides, saveActiveSession, getActiveSession, deleteActiveSession } from '@/lib/db';
 import QuizResult from '@/components/QuizResult';
 
 function QuizContent() {
@@ -56,11 +56,54 @@ function QuizContent() {
             // Use user-specific key if logged in, otherwise default global key
             const sessionKey = user ? `radexam_session_${user.uid}` : 'radexam_session';
             const isResume = searchParams.get('resume') === 'true';
-            const savedSession = typeof window !== 'undefined' ? localStorage.getItem(sessionKey) : null;
 
-            if (isResume && savedSession) {
+            // Load local session
+            let localSession = null;
+            if (typeof window !== 'undefined') {
+                const raw = localStorage.getItem(sessionKey);
+                if (raw) {
+                    try { localSession = JSON.parse(raw); } catch (e) { console.error("Invalid local session", e); }
+                }
+            }
+
+            // Load remote session (if logged in)
+            let remoteSession = null;
+            if (user && isResume) {
                 try {
-                    const session = JSON.parse(savedSession);
+                    remoteSession = await getActiveSession(user.uid);
+                    // console.log("Remote session loaded:", remoteSession);
+                } catch (e) {
+                    console.error("Failed to load remote session", e);
+                }
+            }
+
+            // Decide which session to use
+            let session = null;
+            if (localSession && remoteSession) {
+                // Compare timestamps if available, otherwise prefer remote? Or local?
+                // Remote is likely more "truthy" if switching devices, but local might be fresher if offline.
+                // Let's use timestamps.
+                const localTime = localSession.timestamp || 0;
+                // Remote timestamp might be Firestore Timestamp or date string/number depending on how it was saved.
+                // We saved it as Date object (which becomes Timestamp) or number.
+                // slice handling just in case.
+                let remoteTime = 0;
+                if (remoteSession.timestamp) remoteTime = remoteSession.timestamp;
+                if (remoteSession.updatedAt && remoteSession.updatedAt.toMillis) remoteTime = remoteSession.updatedAt.toMillis();
+
+                if (remoteTime > localTime) {
+                    session = remoteSession;
+                    console.log("Using newer REMOTE session");
+                } else {
+                    session = localSession;
+                    console.log("Using newer LOCAL session");
+                }
+            } else {
+                session = remoteSession || localSession;
+            }
+
+            if (isResume && session) {
+                try {
                     // Verify data integrity - fetch questions from the SPECIFIC exam to avoid ID collisions
                     const targetExamId = session.examId || examId;
                     const sourceQs = await getExamData(targetExamId);
@@ -195,6 +238,11 @@ function QuizContent() {
             // console.log("Saving session to localStorage:", sessionData);
             const sessionKey = user ? `radexam_session_${user.uid}` : 'radexam_session';
             localStorage.setItem(sessionKey, JSON.stringify(sessionData));
+
+            // Sync to Firestore (Throttle this? For now, save every time is safer for "resume exactly where left off")
+            if (user) {
+                saveActiveSession(user.uid, sessionData);
+            }
         }
     }, [questions, currentIndex, examId, isFinished, isReviewing, user]);
 
@@ -261,6 +309,9 @@ function QuizContent() {
         if (typeof window !== 'undefined') {
             const sessionKey = user ? `radexam_session_${user.uid}` : 'radexam_session';
             localStorage.removeItem(sessionKey);
+            if (user) {
+                deleteActiveSession(user.uid);
+            }
         }
         router.push('/');
     };
