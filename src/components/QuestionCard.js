@@ -225,7 +225,7 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveO
                                 alt={img.legend || `Image ${idx + 1}`}
                                 className={styles.thumbnail}
                             />
-                            {img.legend && <div className={styles.legend}>{img.legend}</div>}
+                            {img.legend && <div className={styles.legend} dangerouslySetInnerHTML={{ __html: img.legend }} />}
                         </div>
                     ))}
                 </div>
