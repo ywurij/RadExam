@@ -274,8 +274,8 @@ const MenuBar = ({ editor }) => {
             </div>
 
             <div className={styles.group}>
-                <button type="button" onClick={() => editor.chain().focus().toggleSubscript().run()} className={editor.isActive('subscript') ? styles.active : ''} title="下付き文字 (Sub)">sub</button>
-                <button type="button" onClick={() => editor.chain().focus().toggleSuperscript().run()} className={editor.isActive('superscript') ? styles.active : ''} title="上付き文字 (Sup)">sup</button>
+                <button type="button" onClick={() => editor.chain().focus().toggleSubscript().run()} className={editor.isActive('subscript') ? styles.active : ''} title="下付き文字 (Sub)"><span>X<sub>2</sub></span></button>
+                <button type="button" onClick={() => editor.chain().focus().toggleSuperscript().run()} className={editor.isActive('superscript') ? styles.active : ''} title="上付き文字 (Sup)"><span>X<sup>2</sup></span></button>
             </div>
 
             <div className={styles.group}>

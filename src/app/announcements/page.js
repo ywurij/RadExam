@@ -7,6 +7,27 @@ import { ANNOUNCEMENTS, getLatestAnnouncementId } from '@/lib/announcementsData'
 import { saveLastReadAnnouncement } from '@/lib/db';
 import { useAuth } from '@/context/AuthContext';
 
+// Simple Markdown helper for bold (**) and newlines (\n)
+const renderContent = (content) => {
+    if (!content) return null;
+    const lines = content.split('\n');
+    return lines.map((line, index) => {
+        const parts = line.split(/(\*\*[^*]+\*\*)/g);
+        const lineContent = parts.map((part, i) => {
+            if (part.startsWith('**') && part.endsWith('**')) {
+                return <strong key={i}>{part.slice(2, -2)}</strong>;
+            }
+            return part;
+        });
+        return (
+            <span key={index}>
+                {lineContent}
+                {index < lines.length - 1 && <br />}
+            </span>
+        );
+    });
+};
+
 export default function AnnouncementsPage() {
     const router = useRouter();
     const { user } = useAuth(); // If no auth context usage, we need to import or assume logged in state retrieval
@@ -38,7 +59,7 @@ export default function AnnouncementsPage() {
                     <article key={item.id} className={styles.card}>
                         <span className={styles.date}>{item.date}</span>
                         <h2 className={styles.cardTitle}>{item.title}</h2>
-                        <p className={styles.content}>{item.content}</p>
+                        <p className={styles.content}>{renderContent(item.content)}</p>
                     </article>
                 ))}
             </div>

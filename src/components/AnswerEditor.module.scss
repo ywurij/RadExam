@@ -67,6 +67,26 @@
         opacity: 0.5;
         cursor: not-allowed;
     }
+
+    span {
+        display: inline-block;
+        line-height: 1;
+    }
+
+    sup,
+    sub {
+        font-size: 0.65em;
+        line-height: 0;
+        position: relative;
+    }
+
+    sup {
+        top: -0.35em;
+    }
+
+    sub {
+        bottom: -0.15em;
+    }
 }
 
 .tableControls {
