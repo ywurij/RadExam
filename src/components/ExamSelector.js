@@ -69,6 +69,7 @@ export default function ExamSelector() {
                     const remote = await getActiveSession(user.uid);
                     if (remote) {
                         setHasSession(true);
+                        localStorage.setItem(sessionKey, JSON.stringify(remote));
                     }
                 } catch (e) {
                     console.error("Error checking remote session", e);
@@ -240,6 +241,16 @@ export default function ExamSelector() {
     const handleDownloadOffline = async (e, examId, isAuto = false) => {
         if (e) e.stopPropagation();
         if (downloadingExamId) return;
+
+        // Check if Cache API is supported (requires HTTPS or localhost)
+        if (typeof window === 'undefined' || !('caches' in window)) {
+            if (!isAuto) {
+                alert("お使いの環境（非HTTPS接続など）では、オフライン用の画像ダウンロード機能はご利用いただけません。");
+            } else {
+                console.warn("[AutoDL] Cache API is not supported in this context (requires HTTPS or localhost). Skipping auto-download.");
+            }
+            return;
+        }
 
         // Manual mode: Confirm
         if (!isAuto) {

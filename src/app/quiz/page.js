@@ -106,6 +106,15 @@ function QuizContent() {
                 try {
                     // Verify data integrity - fetch questions from the SPECIFIC exam to avoid ID collisions
                     const targetExamId = session.examId || examId;
+
+                    // If URL exam param doesn't match the resumed session's examId, redirect to correct URL
+                    if (searchParams.get('exam') !== targetExamId) {
+                        const params = new URLSearchParams(searchParams.toString());
+                        params.set('exam', targetExamId);
+                        router.replace(`/quiz?${params.toString()}`);
+                        return;
+                    }
+
                     const sourceQs = await getExamData(targetExamId);
 
                     if (sourceQs.length === 0) {
