@@ -37,48 +37,105 @@ export default function ExamSelector() {
         return Array.from(combined).sort();
     }, [selectedExam, userGenres]);
 
-    const [hasSession, setHasSession] = useState(false);
+    const [sessions, setSessions] = useState([]);
 
     useEffect(() => {
-        // Use user-specific key if logged in
-        const sessionKey = user ? `radexam_session_${user.uid}` : 'radexam_session';
-        const session = localStorage.getItem(sessionKey);
+        const sessionsKey = user ? `radexam_sessions_${user.uid}` : 'radexam_sessions';
+        const oldSessionKey = user ? `radexam_session_${user.uid}` : 'radexam_session';
+        
+        let localSessions = [];
 
-        if (session) {
-            try {
-                const parsed = JSON.parse(session);
-                // Simple validation - just check if it exists and is valid JSON
-                // ID mismatch checks are no longer needed because the key itself is user-scoped
-                setHasSession(true);
-            } catch (e) {
-                console.error("Invalid session data", e);
-                localStorage.removeItem(sessionKey);
-                setHasSession(false);
+        // 1. 旧セッションキーからの移行処理
+        if (typeof window !== 'undefined') {
+            const oldSession = localStorage.getItem(oldSessionKey);
+            if (oldSession) {
+                try {
+                    const parsed = JSON.parse(oldSession);
+                    if (parsed) {
+                        // セッションIDがない場合は生成
+                        if (!parsed.id) {
+                            parsed.id = parsed.timestamp ? `migrated-${parsed.timestamp}` : `migrated-${Date.now()}`;
+                        }
+                        // 旧セッション名も設定
+                        if (!parsed.name) {
+                            const allExams = getExamTypes();
+                            const examName = allExams.find(e => e.id === parsed.examId)?.name || parsed.examId;
+                            parsed.name = `移行されたセッション (${examName})`;
+                        }
+                        localSessions.push(parsed);
+                    }
+                } catch (e) {
+                    console.error("Invalid old session data", e);
+                }
+                localStorage.removeItem(oldSessionKey);
+                localStorage.setItem(sessionsKey, JSON.stringify(localSessions));
+            } else {
+                const raw = localStorage.getItem(sessionsKey);
+                if (raw) {
+                    try {
+                        localSessions = JSON.parse(raw);
+                        if (!Array.isArray(localSessions)) {
+                            localSessions = [];
+                        }
+                    } catch (e) {
+                        console.error("Invalid sessions data", e);
+                        localSessions = [];
+                    }
+                }
             }
-        } else {
-            setHasSession(false);
         }
 
-        // Check remote session if no local session (or even if local exists, to see if remote is newer? 
-        // For "Resume Availability" just existence is enough. 
-        // If local doesn't exist but remote does, we should show resume.
+        setSessions(localSessions);
+
+        // 2. リモートDB (Firestore) からのセッション読み込みと同期
         const checkRemote = async () => {
             if (user) {
                 try {
-                    const { getActiveSession } = await import('@/lib/db');
-                    const remote = await getActiveSession(user.uid);
-                    if (remote) {
-                        setHasSession(true);
-                        localStorage.setItem(sessionKey, JSON.stringify(remote));
+                    const { getActiveSessions } = await import('@/lib/db');
+                    const remoteSessions = await getActiveSessions(user.uid);
+                    
+                    if (remoteSessions && remoteSessions.length > 0) {
+                        const mergedMap = new Map();
+                        
+                        // ローカルをマップに追加
+                        localSessions.forEach(s => {
+                            if (s.id) mergedMap.set(s.id, s);
+                        });
+                        
+                        // リモートをマップに追加・マージ（タイムスタンプで新しい方を優先）
+                        remoteSessions.forEach(rs => {
+                            const local = mergedMap.get(rs.id);
+                            if (!local) {
+                                mergedMap.set(rs.id, rs);
+                            } else {
+                                const localTime = local.timestamp || 0;
+                                let remoteTime = 0;
+                                if (rs.timestamp) remoteTime = rs.timestamp;
+                                if (rs.updatedAt && rs.updatedAt.toMillis) remoteTime = rs.updatedAt.toMillis();
+                                else if (rs.updatedAt) remoteTime = new Date(rs.updatedAt).getTime();
+                                
+                                if (remoteTime > localTime) {
+                                    const serializedRemote = { ...rs };
+                                    if (rs.updatedAt && rs.updatedAt.toMillis) {
+                                        serializedRemote.timestamp = rs.updatedAt.toMillis();
+                                        delete serializedRemote.updatedAt;
+                                    }
+                                    mergedMap.set(rs.id, serializedRemote);
+                                }
+                            }
+                        });
+                        
+                        const mergedList = Array.from(mergedMap.values()).sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+                        setSessions(mergedList);
+                        localStorage.setItem(sessionsKey, JSON.stringify(mergedList));
                     }
                 } catch (e) {
                     console.error("Error checking remote session", e);
                 }
             }
         };
-        if (!session) {
-            checkRemote();
-        }
+        
+        checkRemote();
 
         // Check if there are unread announcements
         const checkAnnouncements = async () => {
@@ -105,19 +162,6 @@ export default function ExamSelector() {
             const lastRead = localStorage.getItem('radexam_last_read_announcement');
 
             // Logic: If latestId > lastRead, then unread.
-            // Assumption: IDs are comparable (e.g. YYYYMMDD or incremental). 
-            // If IDs are not comparable strings, we need strict inequality check or just simple equality if we only care about "not the latest".
-            // Usually "unread" means latest is DIFFERENT from last read? Or strictly newer?
-            // Let's assume strict inequality if formatted as date/number, or just logic: "if saved != latest".
-            // But if I read ID "2", and latest is "3", then unread.
-            // If I read ID "3", and latest is "3", then read.
-            // What if I read "3" and then "2" comes out (unlikely)?
-            // Simple: lastRead !== latestId means unread (assuming user always reads the latest eventually).
-            // Better: if (!lastRead || lastRead !== latestId)
-
-            // BUT, if we synced remoteReadId, we use that effectively via localStorage update above.
-            // So just check localStorage again.
-
             if (!lastRead || lastRead !== latestId) {
                 setHasUnreadAnnouncements(true);
             } else {
@@ -204,8 +248,6 @@ export default function ExamSelector() {
             params.set('genres', selectedGenres.join(','));
         }
 
-        localStorage.removeItem('radexam_session');
-
         const settingsToSave = {
             examId: selectedExam,
             year: selectedYear,
@@ -220,22 +262,34 @@ export default function ExamSelector() {
         router.push(`/quiz?${params.toString()}`);
     };
 
-    const handleResume = () => {
-        // Use user-specific key if logged in
-        const sessionKey = user ? `radexam_session_${user.uid}` : 'radexam_session';
-        const session = localStorage.getItem(sessionKey);
-        let query = 'resume=true';
-        if (session) {
+    const handleResumeSession = (session) => {
+        router.push(`/quiz?resume=true&sessionId=${session.id}&exam=${session.examId}`);
+    };
+
+    const handleDeleteSession = async (e, session) => {
+        e.stopPropagation();
+        
+        const allExams = getExamTypes();
+        const examName = allExams.find(ex => ex.id === session.examId)?.name || session.examId;
+        const dateStr = session.timestamp ? new Date(session.timestamp).toLocaleString() : '不明';
+        
+        if (!confirm(`中断した演習「${examName} (${dateStr})」を削除しますか？`)) {
+            return;
+        }
+        
+        const sessionsKey = user ? `radexam_sessions_${user.uid}` : 'radexam_sessions';
+        const updated = sessions.filter(s => s.id !== session.id);
+        setSessions(updated);
+        localStorage.setItem(sessionsKey, JSON.stringify(updated));
+        
+        if (user) {
             try {
-                const parsed = JSON.parse(session);
-                if (parsed.examId) {
-                    query += `&exam=${parsed.examId}`;
-                }
-            } catch (e) {
-                console.error("Error parsing session for resume URL", e);
+                const { deleteActiveSession } = await import('@/lib/db');
+                await deleteActiveSession(user.uid, session.id);
+            } catch(e) {
+                console.error("Failed to delete remote session", e);
             }
         }
-        router.push(`/quiz?${query}`);
     };
 
     const handleDownloadOffline = async (e, examId, isAuto = false) => {
@@ -329,6 +383,7 @@ export default function ExamSelector() {
             }, 1000);
             return () => clearTimeout(timer);
         }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [selectedExam]);
 
     const toggleGenre = (genre) => {
@@ -592,25 +647,67 @@ export default function ExamSelector() {
                 </div>
             </div>
 
-            {hasSession && (
-                <button
-                    onClick={handleResume}
-                    style={{
-                        display: 'block',
-                        width: '100%',
-                        padding: '1rem',
-                        marginBottom: '1rem',
-                        background: '#fff',
-                        border: '2px solid #3b82f6',
-                        color: '#3b82f6',
-                        fontSize: '1.25rem',
-                        fontWeight: '700',
-                        borderRadius: '0.75rem',
-                        cursor: 'pointer'
-                    }}
-                >
-                    前回の続きから再開
-                </button>
+            {sessions.length > 0 && (
+                <div className={styles.resumeSection}>
+                    <h2 className={styles.label}>中断した演習から再開</h2>
+                    <div className={styles.resumeGrid}>
+                        {sessions.map(session => {
+                            const examName = exams.find(e => e.id === session.examId)?.name || session.examId;
+                            const progressPercent = session.questionIds && session.questionIds.length > 0
+                                ? Math.round(((session.currentIndex || 0) / session.questionIds.length) * 100)
+                                : 0;
+                            const solvedCount = session.currentIndex || 0;
+                            const totalCount = session.questionIds ? session.questionIds.length : 0;
+                            const displayDate = session.timestamp ? new Date(session.timestamp).toLocaleString() : '不明';
+                            
+                            // フィルター情報のタグを作成
+                            const details = [];
+                            if (session.yearFilter && session.yearFilter !== 'all') {
+                                details.push(`${session.yearFilter === 'last3' ? '直近3年' : session.yearFilter === 'last5' ? '直近5年' : `${session.yearFilter}年`}`);
+                            }
+                            if (session.countFilter && session.countFilter !== 'all') {
+                                details.push(`${session.countFilter}問`);
+                            }
+                            if (session.statusFilter && session.statusFilter.length > 0) {
+                                details.push(session.statusFilter.map(s => s === 'incorrect' ? '不正解' : s === 'liked' ? 'お気に入り' : s).join('+'));
+                            }
+                            if (session.genreFilter && session.genreFilter.length > 0) {
+                                details.push(`ジャンル:${session.genreFilter.length}件`);
+                            }
+                            if (session.isShuffle) {
+                                details.push('ランダム');
+                            }
+
+                            return (
+                                <div key={session.id} className={styles.resumeCard}>
+                                    <div className={styles.resumeCardInfo}>
+                                        <div className={styles.resumeExamName}>{examName}</div>
+                                        {details.length > 0 && (
+                                            <div className={styles.resumeDetails}>
+                                                {details.map((d, i) => <span key={i}>{d}</span>)}
+                                            </div>
+                                        )}
+                                        <div className={styles.resumeDate}>中断日時: {displayDate}</div>
+                                        <div className={styles.resumeProgress}>
+                                            進捗: {solvedCount} / {totalCount} 問 ({progressPercent}%)
+                                        </div>
+                                        <div className={styles.resumeBar}>
+                                            <div className={styles.resumeBarFill} style={{ width: `${progressPercent}%` }} />
+                                        </div>
+                                    </div>
+                                    <div className={styles.resumeCardActions}>
+                                        <button className={styles.resumeBtn} onClick={() => handleResumeSession(session)}>
+                                            再開する
+                                        </button>
+                                        <button className={styles.deleteBtn} onClick={(e) => handleDeleteSession(e, session)}>
+                                            削除
+                                        </button>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
             )}
 
             <button className={styles.startButton} onClick={handleStart}>

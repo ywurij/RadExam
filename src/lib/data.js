@@ -40,9 +40,9 @@ export const getExamData = async (examId) => {
     if (!loader) return [];
 
     try {
-        const module = await loader();
+        const loadedModule = await loader();
         // default export for JSON is the data itself in some bundlers, or module.default
-        const rawData = module.default || module;
+        const rawData = loadedModule.default || loadedModule;
 
         // Inject examId
         const data = rawData.map(q => ({ ...q, examId }));

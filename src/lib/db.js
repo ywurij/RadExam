@@ -672,12 +672,12 @@ export const importUserData = async (uid, jsonData, strategy = 'overwrite') => {
 
 /**
  * Save active session to Firestore.
- * path: users/{uid}/session/active
+ * path: users/{uid}/sessions/{sessionId}
  */
-export const saveActiveSession = async (uid, sessionData) => {
-    if (!uid) return;
+export const saveActiveSession = async (uid, sessionId, sessionData) => {
+    if (!uid || !sessionId) return;
     try {
-        const ref = doc(db, 'users', uid, 'session', 'active');
+        const ref = doc(db, 'users', uid, 'sessions', sessionId);
         await setDoc(ref, {
             ...sessionData,
             updatedAt: new Date() // Server timestamp would be better but local is fine for simple comparison
@@ -688,27 +688,32 @@ export const saveActiveSession = async (uid, sessionData) => {
 };
 
 /**
- * Get active session from Firestore.
+ * Get all active sessions from Firestore.
  */
-export const getActiveSession = async (uid) => {
-    if (!uid) return null;
+export const getActiveSessions = async (uid) => {
+    if (!uid) return [];
     try {
-        const ref = doc(db, 'users', uid, 'session', 'active');
-        const snap = await getDoc(ref);
-        return snap.exists() ? snap.data() : null;
+        const colRef = collection(db, 'users', uid, 'sessions');
+        const q = query(colRef, orderBy('updatedAt', 'desc'));
+        const snap = await getDocs(q);
+        const sessions = [];
+        snap.forEach(doc => {
+            sessions.push({ id: doc.id, ...doc.data() });
+        });
+        return sessions;
     } catch (e) {
-        console.error("Error fetching active session:", e);
-        return null;
+        console.error("Error fetching active sessions:", e);
+        return [];
     }
 };
 
 /**
  * Delete active session from Firestore.
  */
-export const deleteActiveSession = async (uid) => {
-    if (!uid) return;
+export const deleteActiveSession = async (uid, sessionId) => {
+    if (!uid || !sessionId) return;
     try {
-        const ref = doc(db, 'users', uid, 'session', 'active');
+        const ref = doc(db, 'users', uid, 'sessions', sessionId);
         await deleteDoc(ref);
     } catch (e) {
         console.error("Error deleting active session:", e);

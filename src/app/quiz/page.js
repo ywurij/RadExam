@@ -1,14 +1,21 @@
 "use client";
 
-import { useState, useEffect, Suspense } from 'react';
+import { useState, useEffect, useMemo, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { getExamData, getAllQuestions, getQuestionsByYear, getGlobalQuestionId, getGenres } from '@/lib/data';
 import QuestionCard from '@/components/QuestionCard';
 import styles from './quiz.module.scss';
 import { auth } from '@/lib/firebase';
 import { useAuth } from '@/context/AuthContext';
-import { saveUserProgress, saveQuestionOverride, getUserExamProgress, getAllOverrides, saveActiveSession, getActiveSession, deleteActiveSession } from '@/lib/db';
+import { saveUserProgress, saveQuestionOverride, getUserExamProgress, getAllOverrides, saveActiveSession, getActiveSessions, deleteActiveSession } from '@/lib/db';
 import QuizResult from '@/components/QuizResult';
+
+const generateUUID = () => {
+    if (typeof window !== 'undefined' && window.crypto && window.crypto.randomUUID) {
+        return window.crypto.randomUUID();
+    }
+    return 'sec-' + Math.random().toString(36).substring(2, 15) + '-' + Date.now();
+};
 
 function QuizContent() {
     const searchParams = useSearchParams();
@@ -19,7 +26,9 @@ function QuizContent() {
     const yearFilter = searchParams.get('year') || 'all';
     const countFilter = searchParams.get('count') || '10';
     const isShuffle = searchParams.get('shuffle') === 'true';
-    const genreFilter = searchParams.get('genres') ? searchParams.get('genres').split(',') : [];
+    const genreFilter = useMemo(() => {
+        return searchParams.get('genres') ? searchParams.get('genres').split(',') : [];
+    }, [searchParams]);
     const statusFilter = searchParams.get('status') || 'all';
     const idFilter = searchParams.get('id');
 
@@ -35,6 +44,7 @@ function QuizContent() {
     // Auth
     const { user } = useAuth();
     const [allGenres, setAllGenres] = useState([]);
+    const [sessionId, setSessionId] = useState(null);
 
     useEffect(() => {
         const loadData = async () => {
@@ -53,43 +63,43 @@ function QuizContent() {
             let data = [];
 
             // CHECK FOR RESUME
-            // Use user-specific key if logged in, otherwise default global key
-            const sessionKey = user ? `radexam_session_${user.uid}` : 'radexam_session';
             const isResume = searchParams.get('resume') === 'true';
+            const resumeSessionId = searchParams.get('sessionId');
+            const sessionsKey = user ? `radexam_sessions_${user.uid}` : 'radexam_sessions';
 
             // Load local session
             let localSession = null;
-            if (typeof window !== 'undefined') {
-                const raw = localStorage.getItem(sessionKey);
+            if (isResume && resumeSessionId && typeof window !== 'undefined') {
+                const raw = localStorage.getItem(sessionsKey);
                 if (raw) {
-                    try { localSession = JSON.parse(raw); } catch (e) { console.error("Invalid local session", e); }
+                    try {
+                        const localSessions = JSON.parse(raw);
+                        if (Array.isArray(localSessions)) {
+                            localSession = localSessions.find(s => s.id === resumeSessionId) || null;
+                        }
+                    } catch (e) { console.error("Invalid local sessions data", e); }
                 }
             }
 
             // Load remote session (if logged in)
             let remoteSession = null;
-            if (user && isResume) {
+            if (user && isResume && resumeSessionId) {
                 try {
-                    remoteSession = await getActiveSession(user.uid);
-                    // console.log("Remote session loaded:", remoteSession);
+                    const remoteSessions = await getActiveSessions(user.uid);
+                    remoteSession = remoteSessions.find(s => s.id === resumeSessionId) || null;
                 } catch (e) {
-                    console.error("Failed to load remote session", e);
+                    console.error("Failed to load remote sessions", e);
                 }
             }
 
             // Decide which session to use
             let session = null;
             if (localSession && remoteSession) {
-                // Compare timestamps if available, otherwise prefer remote? Or local?
-                // Remote is likely more "truthy" if switching devices, but local might be fresher if offline.
-                // Let's use timestamps.
                 const localTime = localSession.timestamp || 0;
-                // Remote timestamp might be Firestore Timestamp or date string/number depending on how it was saved.
-                // We saved it as Date object (which becomes Timestamp) or number.
-                // slice handling just in case.
                 let remoteTime = 0;
                 if (remoteSession.timestamp) remoteTime = remoteSession.timestamp;
                 if (remoteSession.updatedAt && remoteSession.updatedAt.toMillis) remoteTime = remoteSession.updatedAt.toMillis();
+                else if (remoteSession.updatedAt) remoteTime = new Date(remoteSession.updatedAt).getTime();
 
                 if (remoteTime > localTime) {
                     session = remoteSession;
@@ -103,6 +113,7 @@ function QuizContent() {
             }
 
             if (isResume && session) {
+                setSessionId(session.id);
                 try {
                     // Verify data integrity - fetch questions from the SPECIFIC exam to avoid ID collisions
                     const targetExamId = session.examId || examId;
@@ -134,45 +145,51 @@ function QuizContent() {
                     console.error("Failed to resume session:", e);
                     data = await getQuestionsByYear(examId, yearFilter);
                 }
-            } else if (idFilter) {
-                const allQs = await getAllQuestions();
-                data = allQs.filter(q => q.id.toString() === idFilter);
             } else {
-                data = await getQuestionsByYear(examId, yearFilter);
+                // 新規セッション開始
+                const newId = generateUUID();
+                setSessionId(newId);
 
-                // Status Filter
-                const statuses = statusFilter !== 'all' ? statusFilter.split(',') : [];
-                const logic = searchParams.get('logic') || 'or';
+                if (idFilter) {
+                    const allQs = await getAllQuestions();
+                    data = allQs.filter(q => q.id.toString() === idFilter);
+                } else {
+                    data = await getQuestionsByYear(examId, yearFilter);
 
-                if (statuses.length > 0) {
-                    data = data.filter(q => {
-                        const globalQid = getGlobalQuestionId(examId, q.id);
-                        const isIncorrect = userProg[globalQid]?.status === 'incorrect';
-                        const isLiked = userProg[globalQid]?.isLiked === true;
+                    // Status Filter
+                    const statuses = statusFilter !== 'all' ? statusFilter.split(',') : [];
+                    const logic = searchParams.get('logic') || 'or';
 
-                        const matches = [];
-                        if (statuses.includes('incorrect')) matches.push(isIncorrect);
-                        if (statuses.includes('liked')) matches.push(isLiked);
+                    if (statuses.length > 0) {
+                        data = data.filter(q => {
+                            const globalQid = getGlobalQuestionId(examId, q.id);
+                            const isIncorrect = userProg[globalQid]?.status === 'incorrect';
+                            const isLiked = userProg[globalQid]?.isLiked === true;
 
-                        if (logic === 'and') {
-                            return matches.every(m => m);
-                        } else {
-                            return matches.some(m => m);
-                        }
-                    });
-                }
+                            const matches = [];
+                            if (statuses.includes('incorrect')) matches.push(isIncorrect);
+                            if (statuses.includes('liked')) matches.push(isLiked);
 
-                const genres = searchParams.get('genres') ? searchParams.get('genres').split(',') : [];
-                if (genres.length > 0) {
-                    data = data.filter(q => q.genre && genres.includes(q.genre));
-                }
+                            if (logic === 'and') {
+                                return matches.every(m => m);
+                            } else {
+                                return matches.some(m => m);
+                            }
+                        });
+                    }
 
-                if (isShuffle) {
-                    data = [...data].sort(() => Math.random() - 0.5);
-                }
+                    const genres = searchParams.get('genres') ? searchParams.get('genres').split(',') : [];
+                    if (genres.length > 0) {
+                        data = data.filter(q => q.genre && genres.includes(q.genre));
+                    }
 
-                if (countFilter !== 'all') {
-                    data = data.slice(0, parseInt(countFilter));
+                    if (isShuffle) {
+                        data = [...data].sort(() => Math.random() - 0.5);
+                    }
+
+                    if (countFilter !== 'all') {
+                        data = data.slice(0, parseInt(countFilter));
+                    }
                 }
             }
 
@@ -232,28 +249,53 @@ function QuizContent() {
         };
 
         loadData();
-    }, [examId, yearFilter, countFilter, isShuffle, searchParams, statusFilter, idFilter, user]);
+    }, [examId, yearFilter, countFilter, isShuffle, searchParams, statusFilter, idFilter, user, router]);
 
     // Save Session Effect
     useEffect(() => {
-        if (questions.length > 0 && !isFinished && !isReviewing) {
+        if (questions.length > 0 && !isFinished && !isReviewing && sessionId) {
             const sessionData = {
+                id: sessionId,
                 questionIds: questions.map(q => q.id),
                 currentIndex: currentIndex,
                 timestamp: Date.now(),
                 examId,
-                userId: user?.uid // Save User ID to prevent cross-user resume
+                yearFilter,
+                countFilter,
+                statusFilter: searchParams.get('status') ? searchParams.get('status').split(',') : [],
+                genreFilter,
+                isShuffle,
+                userId: user?.uid
             };
-            // console.log("Saving session to localStorage:", sessionData);
-            const sessionKey = user ? `radexam_session_${user.uid}` : 'radexam_session';
-            localStorage.setItem(sessionKey, JSON.stringify(sessionData));
 
-            // Sync to Firestore (Throttle this? For now, save every time is safer for "resume exactly where left off")
+            const sessionsKey = user ? `radexam_sessions_${user.uid}` : 'radexam_sessions';
+            let localSessions = [];
+            if (typeof window !== 'undefined') {
+                const raw = localStorage.getItem(sessionsKey);
+                if (raw) {
+                    try {
+                        localSessions = JSON.parse(raw);
+                        if (!Array.isArray(localSessions)) localSessions = [];
+                    } catch(e) {
+                        localSessions = [];
+                    }
+                }
+                
+                const idx = localSessions.findIndex(s => s.id === sessionId);
+                if (idx !== -1) {
+                    localSessions[idx] = sessionData;
+                } else {
+                    localSessions.unshift(sessionData);
+                }
+                
+                localStorage.setItem(sessionsKey, JSON.stringify(localSessions));
+            }
+
             if (user) {
-                saveActiveSession(user.uid, sessionData);
+                saveActiveSession(user.uid, sessionId, sessionData);
             }
         }
-    }, [questions, currentIndex, examId, isFinished, isReviewing, user]);
+    }, [questions, currentIndex, examId, isFinished, isReviewing, user, sessionId, yearFilter, countFilter, genreFilter, isShuffle, searchParams]);
 
     const handleUpdateStatus = async (qid, updates) => {
         const globalId = getGlobalQuestionId(examId, qid);
@@ -309,17 +351,55 @@ function QuizContent() {
         }
     };
 
-    const handleFinish = () => {
+    const handleFinish = async () => {
         setIsFinished(true);
         setIsReviewing(false);
+        
+        if (typeof window !== 'undefined' && sessionId) {
+            const sessionsKey = user ? `radexam_sessions_${user.uid}` : 'radexam_sessions';
+            const raw = localStorage.getItem(sessionsKey);
+            if (raw) {
+                try {
+                    const localSessions = JSON.parse(raw);
+                    if (Array.isArray(localSessions)) {
+                        const updated = localSessions.filter(s => s.id !== sessionId);
+                        localStorage.setItem(sessionsKey, JSON.stringify(updated));
+                    }
+                } catch (e) {
+                    console.error("Failed to remove local session on finish", e);
+                }
+            }
+            if (user) {
+                try {
+                    await deleteActiveSession(user.uid, sessionId);
+                } catch (e) {
+                    console.error("Failed to delete remote session on finish", e);
+                }
+            }
+        }
     };
 
-    const handleHome = () => {
-        if (typeof window !== 'undefined') {
-            const sessionKey = user ? `radexam_session_${user.uid}` : 'radexam_session';
-            localStorage.removeItem(sessionKey);
+    const handleHome = async () => {
+        if (typeof window !== 'undefined' && sessionId) {
+            const sessionsKey = user ? `radexam_sessions_${user.uid}` : 'radexam_sessions';
+            const raw = localStorage.getItem(sessionsKey);
+            if (raw) {
+                try {
+                    const localSessions = JSON.parse(raw);
+                    if (Array.isArray(localSessions)) {
+                        const updated = localSessions.filter(s => s.id !== sessionId);
+                        localStorage.setItem(sessionsKey, JSON.stringify(updated));
+                    }
+                } catch (e) {
+                    console.error("Failed to remove local session on home", e);
+                }
+            }
             if (user) {
-                deleteActiveSession(user.uid);
+                try {
+                    await deleteActiveSession(user.uid, sessionId);
+                } catch (e) {
+                    console.error("Failed to delete remote session on home", e);
+                }
             }
         }
         router.push('/');
