@@ -1,8 +1,6 @@
 "use client";
 
 import { useEditor, EditorContent } from '@tiptap/react';
-import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
-import { storage } from '@/lib/firebase';
 
 import StarterKit from '@tiptap/starter-kit';
 import { CustomTable, CustomTableCell, CustomTableHeader } from './TableExtensions';
@@ -53,7 +51,8 @@ const Icons = {
     DeleteRow: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 9h18" /><path d="M3 15h18" /><line x1="3" y1="3" x2="21" y2="21" /><line x1="21" y1="3" x2="3" y2="21" /></svg>,
     Trash: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>,
     Book: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" /><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" /></svg>,
-    DownChevron: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9" /></svg>
+    DownChevron: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9" /></svg>,
+    Help: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" /><line x1="12" y1="17" x2="12.01" y2="17" /></svg>
 };
 
 
@@ -95,6 +94,25 @@ const LATEX_CHEAT_SHEET = {
         { label: 'Ω', code: '\\Omega' },
     ]
 };
+
+const SHORTCUTS_DATA = [
+    { name: '太字 (Bold)', mac: 'Cmd + B', win: 'Ctrl + B', md: '**テキスト**' },
+    { name: '斜体 (Italic)', mac: 'Cmd + I', win: 'Ctrl + I', md: '*テキスト*' },
+    { name: '下線 (Underline)', mac: 'Cmd + U', win: 'Ctrl + U', md: '' },
+    { name: '打ち消し線 (Strike)', mac: 'Cmd + Shift + X', win: 'Ctrl + Shift + X', md: '~~テキスト~~' },
+    { name: 'ハイライト (蛍光ペン)', mac: 'Cmd + Shift + H', win: 'Ctrl + Shift + H', md: '==テキスト==' },
+    { name: '上付き文字 (Superscript)', mac: 'Cmd + .', win: 'Ctrl + .', md: '<sup>テキスト</sup>' },
+    { name: '下付き文字 (Subscript)', mac: 'Cmd + ,', win: 'Ctrl + ,', md: '<sub>テキスト</sub>' },
+    { name: '標準テキスト', mac: 'Cmd + Alt + 0', win: 'Ctrl + Alt + 0', md: '' },
+    { name: '見出し 1', mac: 'Cmd + Alt + 1', win: 'Ctrl + Alt + 1', md: '# ' },
+    { name: '見出し 2', mac: 'Cmd + Alt + 2', win: 'Ctrl + Alt + 2', md: '## ' },
+    { name: '見出し 3', mac: 'Cmd + Alt + 3', win: 'Ctrl + Alt + 3', md: '### ' },
+    { name: '箇条書きリスト', mac: 'Cmd + Shift + 8', win: 'Ctrl + Shift + 8', md: '* または -' },
+    { name: '番号付きリスト', mac: 'Cmd + Shift + 7', win: 'Ctrl + Shift + 7', md: '1. ' },
+    { name: '水平線 (境界線)', mac: '', win: '', md: '--- (改行)' },
+    { name: 'インデントを増やす', mac: 'Tab', win: 'Tab', md: '' },
+    { name: 'インデントを減らす', mac: 'Shift + Tab', win: 'Shift + Tab', md: '' },
+];
 
 const MenuBar = ({ editor }) => {
     // ... (state hooks) ...
@@ -210,34 +228,19 @@ const MenuBar = ({ editor }) => {
         setInputValue(prev => prev + code);
     };
 
-    const handleFileUpload = async (e) => {
+    const handleFileUpload = (e) => {
         const file = e.target.files?.[0];
         if (!file) return;
 
-        setIsUploading(true);
-
-        try {
-            // Create a unique filename
-            const timestamp = Date.now();
-            const safeName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '');
-            const filename = `uploads/${timestamp}_${safeName}`;
-
-            // Create storage ref
-            const storageRef = ref(storage, filename);
-
-            // Upload
-            await uploadBytes(storageRef, file);
-
-            // Get URL
-            const url = await getDownloadURL(storageRef);
-            setInputValue(url);
-
-        } catch (err) {
-            console.error(err);
-            alert('画像のアップロードに失敗しました。\nFirebase Storageの設定(CORS/Rules)を確認してください。');
-        } finally {
-            setIsUploading(false);
-        }
+        const reader = new FileReader();
+        reader.onload = (readerEvent) => {
+            const dataUrl = readerEvent.target?.result;
+            if (dataUrl && typeof dataUrl === 'string') {
+                editor.chain().focus().setImage({ src: dataUrl }).run();
+                closeModal();
+            }
+        };
+        reader.readAsDataURL(file);
     };
 
     // Helper functions (Indent/Outdent)
@@ -252,6 +255,8 @@ const MenuBar = ({ editor }) => {
                 <button type="button" onClick={() => editor.chain().focus().toggleItalic().run()} className={editor.isActive('italic') ? styles.active : ''} title="斜体 (Italic)"><Icons.Italic /></button>
                 <button type="button" onClick={() => editor.chain().focus().toggleUnderline().run()} className={editor.isActive('underline') ? styles.active : ''} title="下線 (Underline)"><Icons.Underline /></button>
                 <button type="button" onClick={() => editor.chain().focus().toggleHighlight().run()} className={editor.isActive('highlight') ? styles.active : ''} title="ハイライト (蛍光ペン)"><Icons.Highlight /></button>
+                <button type="button" onClick={() => editor.chain().focus().toggleSuperscript().run()} className={editor.isActive('superscript') ? styles.active : ''} title="上付き文字 (Sup)"><span>X<sup>2</sup></span></button>
+                <button type="button" onClick={() => editor.chain().focus().toggleSubscript().run()} className={editor.isActive('subscript') ? styles.active : ''} title="下付き文字 (Sub)"><span>X<sub>2</sub></span></button>
             </div>
 
             <div className={styles.group}>
@@ -274,15 +279,11 @@ const MenuBar = ({ editor }) => {
             </div>
 
             <div className={styles.group}>
-                <button type="button" onClick={() => editor.chain().focus().toggleSubscript().run()} className={editor.isActive('subscript') ? styles.active : ''} title="下付き文字 (Sub)"><span>X<sub>2</sub></span></button>
-                <button type="button" onClick={() => editor.chain().focus().toggleSuperscript().run()} className={editor.isActive('superscript') ? styles.active : ''} title="上付き文字 (Sup)"><span>X<sup>2</sup></span></button>
-            </div>
-
-            <div className={styles.group}>
                 <button type="button" onClick={() => openModal('math')} title="数式を挿入 (LaTeX)"><Icons.Math /></button>
                 <button type="button" onClick={() => openModal('import')} title="他の解説を引用 (Import)"><Icons.Book /></button>
                 <button type="button" onClick={() => openModal('image')} title="画像を追加 (アップロード/URL)"><Icons.Image /></button>
                 <button type="button" onClick={() => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()} title="表を挿入 (3x3)"><Icons.Table /></button>
+                <button type="button" onClick={() => openModal('shortcuts')} title="キーボードショートカット一覧"><Icons.Help /></button>
             </div>
 
             {editor.isActive('table') && (
@@ -308,48 +309,75 @@ const MenuBar = ({ editor }) => {
                         <h4>
                             {modalType === 'math' ? '数式を入力 (LaTeX)' :
                                 modalType === 'import' ? '解説を検索・引用' :
+                                modalType === 'shortcuts' ? 'キーボードショートカット一覧' :
                                     '画像のURLを入力'}
                         </h4>
 
                         {modalType === 'image' && (
                             <div style={{ marginBottom: '1rem' }}>
                                 <label style={{ display: 'block', fontSize: '0.8rem', color: '#666', marginBottom: '0.5rem' }}>
-                                    ローカル画像をアップロード:
+                                    ローカル画像を挿入:
                                 </label>
                                 <input
                                     type="file"
                                     accept="image/*"
                                     onChange={handleFileUpload}
-                                    disabled={isUploading}
                                     style={{ fontSize: '0.9rem' }}
                                 />
-                                {isUploading && <span style={{ marginLeft: '0.5rem', fontSize: '0.8rem' }}>アップロード中...</span>}
                             </div>
                         )}
 
-                        <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem' }}>
-                            <input
-                                type="text"
-                                value={inputValue}
-                                onChange={(e) => setInputValue(e.target.value)}
-                                onKeyDown={(e) => {
-                                    if (e.key === 'Enter') {
-                                        if (modalType === 'import') handleSearch();
-                                        else handleInsert();
+                        {modalType !== 'shortcuts' && (
+                            <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem' }}>
+                                <input
+                                    type="text"
+                                    value={inputValue}
+                                    onChange={(e) => setInputValue(e.target.value)}
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter') {
+                                            if (modalType === 'import') handleSearch();
+                                            else handleInsert();
+                                        }
+                                    }}
+                                    placeholder={
+                                        modalType === 'math' ? "例: E = mc^2" :
+                                            modalType === 'import' ? "キーワード (2文字以上)" :
+                                                "またはURLを直接入力"
                                     }
-                                }}
-                                placeholder={
-                                    modalType === 'math' ? "例: E = mc^2" :
-                                        modalType === 'import' ? "キーワード (2文字以上)" :
-                                            "またはURLを直接入力"
-                                }
-                                autoFocus
-                                style={{ flex: 1 }}
-                            />
-                            {modalType === 'import' && (
-                                <button onClick={handleSearch} className={styles.cheatBtn} style={{ alignSelf: 'center' }}>検索</button>
-                            )}
-                        </div>
+                                    autoFocus
+                                    style={{ flex: 1 }}
+                                />
+                                {modalType === 'import' && (
+                                    <button onClick={handleSearch} className={styles.cheatBtn} style={{ alignSelf: 'center' }}>検索</button>
+                                )}
+                            </div>
+                        )}
+
+                        {/* Keyboard Shortcuts list */}
+                        {modalType === 'shortcuts' && (
+                            <div className={styles.shortcutContainer}>
+                                <table className={styles.shortcutTable}>
+                                    <thead>
+                                        <tr>
+                                            <th>書式機能</th>
+                                            <th>macOS</th>
+                                            <th>Windows / Linux</th>
+                                            <th>マークダウン風入力</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {SHORTCUTS_DATA.map(shortcut => (
+                                            <tr key={shortcut.name}>
+                                                <td><strong>{shortcut.name}</strong></td>
+                                                <td>{shortcut.mac ? <code>{shortcut.mac}</code> : ''}</td>
+                                                <td>{shortcut.win ? <code>{shortcut.win}</code> : ''}</td>
+                                                <td>{shortcut.md ? <code>{shortcut.md}</code> : ''}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        )}
 
                         {/* Search Results */}
                         {modalType === 'import' && (
@@ -460,8 +488,8 @@ const MenuBar = ({ editor }) => {
                         )}
 
                         <div className={styles.modalActions}>
-                            <button onClick={closeModal} className={styles.cancelBtn}>キャンセル</button>
-                            {modalType !== 'import' && (
+                            <button onClick={closeModal} className={styles.cancelBtn}>{modalType === 'shortcuts' ? '閉じる' : 'キャンセル'}</button>
+                            {modalType !== 'import' && modalType !== 'shortcuts' && (
                                 <button onClick={handleInsert} className={styles.insertBtn}>挿入</button>
                             )}
                         </div>
@@ -537,6 +565,58 @@ export default function AnswerEditor({ content, onChange }) {
         onUpdate: ({ editor }) => {
             onChange(editor.getHTML());
         },
+        editorProps: {
+            handlePaste: (view, event) => {
+                const items = event.clipboardData?.items;
+                if (!items) return false;
+
+                let handled = false;
+                for (const item of items) {
+                    if (item.type.indexOf("image") === 0) {
+                        const file = item.getAsFile();
+                        if (file) {
+                            const reader = new FileReader();
+                            reader.onload = (readerEvent) => {
+                                const dataUrl = readerEvent.target?.result;
+                                if (dataUrl && typeof dataUrl === 'string') {
+                                    const { schema } = view.state;
+                                    const node = schema.nodes.image.create({ src: dataUrl });
+                                    const transaction = view.state.tr.replaceSelectionWith(node);
+                                    view.dispatch(transaction);
+                                }
+                            };
+                            reader.readAsDataURL(file);
+                            handled = true;
+                        }
+                    }
+                }
+                return handled;
+            },
+            handleDrop: (view, event) => {
+                const files = event.dataTransfer?.files;
+                if (!files) return false;
+
+                let handled = false;
+                for (const file of files) {
+                    if (file.type.indexOf("image") === 0) {
+                        event.preventDefault();
+                        const reader = new FileReader();
+                        reader.onload = (readerEvent) => {
+                            const dataUrl = readerEvent.target?.result;
+                            if (dataUrl && typeof dataUrl === 'string') {
+                                const { schema } = view.state;
+                                const node = schema.nodes.image.create({ src: dataUrl });
+                                const transaction = view.state.tr.replaceSelectionWith(node);
+                                view.dispatch(transaction);
+                            }
+                        };
+                        reader.readAsDataURL(file);
+                        handled = true;
+                    }
+                }
+                return handled;
+            }
+        }
     });
 
     // Sync content updates from parent (e.g. initial load)

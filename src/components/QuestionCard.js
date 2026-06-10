@@ -7,6 +7,8 @@ import "yet-another-react-lightbox/styles.css";
 import AnswerEditor from './AnswerEditor';
 import { getSelectionCount } from '@/lib/utils';
 import styles from './QuestionCard.module.scss';
+import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import { storage } from '@/lib/firebase';
 import 'katex/dist/katex.min.css'; // Import global Katex CSS here just in case
 
 export default function QuestionCard({ question, userProgress, onAnswer, onSaveOverride, onUpdateStatus, availableGenres }) {
@@ -22,6 +24,7 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveO
     const [editAnswerKey, setEditAnswerKey] = useState("");
     const [editGenre, setEditGenre] = useState("");
     const [draftExplanation, setDraftExplanation] = useState("");
+    const [isSavingExplanation, setIsSavingExplanation] = useState(false);
 
     // Lightbox state
     const [lightboxOpen, setLightboxOpen] = useState(false);
@@ -71,6 +74,7 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveO
         setIsEditingAnswer(false);
         setIsEditingGenre(false);
         setIsEditingExplanation(false);
+        setIsSavingExplanation(false);
         // Reset drafts to avoid stale content
         setEditAnswerKey("");
         setEditGenre("");
@@ -147,15 +151,72 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveO
         setIsEditingGenre(false);
     };
 
-    const handleSaveExplanation = () => {
-        if (onSaveOverride) {
-            onSaveOverride(question.id, {
-                answer: currentAnswer,
-                genre: currentGenre,
-                explanation: draftExplanation
+    const handleSaveExplanation = async () => {
+        if (isSavingExplanation) return;
+        setIsSavingExplanation(true);
+
+        try {
+            let finalExplanation = draftExplanation;
+
+            // DOMParser to parse HTML and extract Base64 images
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(draftExplanation, 'text/html');
+            const images = doc.querySelectorAll('img');
+            const uploadPromises = [];
+
+            images.forEach((img) => {
+                const src = img.getAttribute('src');
+                if (src && src.startsWith('data:image/')) {
+                    const parts = src.split(',');
+                    if (parts.length < 2) return;
+
+                    const mimeMatch = parts[0].match(/:(.*?);/);
+                    if (!mimeMatch) return;
+                    const mime = mimeMatch[1];
+                    const base64Data = parts[1];
+
+                    // Convert Base64 to Blob
+                    const binaryString = atob(base64Data);
+                    const len = binaryString.length;
+                    const bytes = new Uint8Array(len);
+                    for (let i = 0; i < len; i++) {
+                        bytes[i] = binaryString.charCodeAt(i);
+                    }
+                    const blob = new Blob([bytes], { type: mime });
+                    const extension = mime.split('/')[1] || 'png';
+
+                    const timestamp = Date.now();
+                    const filename = `uploads/${timestamp}_pasted_${Math.random().toString(36).substring(2, 9)}.${extension}`;
+
+                    const uploadPromise = (async () => {
+                        const storageRef = ref(storage, filename);
+                        await uploadBytes(storageRef, blob);
+                        const url = await getDownloadURL(storageRef);
+                        img.setAttribute('src', url);
+                    })();
+                    uploadPromises.push(uploadPromise);
+                }
             });
+
+            if (uploadPromises.length > 0) {
+                await Promise.all(uploadPromises);
+                finalExplanation = doc.body.innerHTML;
+            }
+
+            if (onSaveOverride) {
+                await onSaveOverride(question.id, {
+                    answer: currentAnswer,
+                    genre: currentGenre,
+                    explanation: finalExplanation
+                });
+            }
+            setIsEditingExplanation(false);
+        } catch (error) {
+            console.error("Failed to save explanation / upload images:", error);
+            alert("解説の保存または画像のアップロードに失敗しました。");
+        } finally {
+            setIsSavingExplanation(false);
         }
-        setIsEditingExplanation(false);
     };
 
     // Status / Favorite handlers
@@ -280,18 +341,38 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveO
                         <div className={`${styles.explicitAnswer} ${isCorrect ? styles.correct : ''}`}>
                             <div className={styles.answerBlock}>
                                 {isEditingAnswer ? (
-                                    <div className={styles.inlineEdit}>
-                                        <span className={styles.label}>正解:</span>
-                                        <input
-                                            type="text"
-                                            value={editAnswerKey}
-                                            onChange={(e) => setEditAnswerKey(e.target.value)}
-                                            className={styles.answerInput}
-                                            placeholder="a, b..."
-                                        />
-                                        <div className={styles.miniActions}>
-                                            <button onClick={handleSaveAnswer} className={styles.saveBtn}>保存</button>
-                                            <button onClick={() => setIsEditingAnswer(false)} className={styles.cancelBtn}>キャンセル</button>
+                                    <div className={styles.inlineEditAnswer}>
+                                        <span className={styles.label}>正解を選択（タップして切替）:</span>
+                                        <div className={styles.answerEditFlexWrapper}>
+                                            <div className={styles.answerSelectionGrid}>
+                                                {question.options && Object.keys(question.options).map(key => {
+                                                    const currentList = editAnswerKey.split(/[,、\s]+/).map(s => s.trim()).filter(Boolean);
+                                                    const isSelected = currentList.includes(key);
+                                                    return (
+                                                        <button
+                                                            key={key}
+                                                            type="button"
+                                                            className={`${styles.answerTileBtn} ${isSelected ? styles.active : ''}`}
+                                                            onClick={() => {
+                                                                let newList;
+                                                                if (isSelected) {
+                                                                    newList = currentList.filter(item => item !== key);
+                                                                } else {
+                                                                    newList = [...currentList, key];
+                                                                }
+                                                                const sortedList = newList.sort((a, b) => a.localeCompare(b));
+                                                                setEditAnswerKey(sortedList.join(', '));
+                                                            }}
+                                                        >
+                                                            {key}
+                                                        </button>
+                                                    );
+                                                })}
+                                            </div>
+                                            <div className={styles.editActions}>
+                                                <button onClick={() => setIsEditingAnswer(false)} className={styles.cancelBtn}>キャンセル</button>
+                                                <button onClick={handleSaveAnswer} className={styles.saveBtn}>保存</button>
+                                            </div>
                                         </div>
                                     </div>
                                 ) : (
@@ -326,8 +407,20 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveO
                                 <div className={styles.editorWrapper}>
                                     <AnswerEditor content={draftExplanation} onChange={setDraftExplanation} />
                                     <div className={styles.editActions}>
-                                        <button onClick={() => setIsEditingExplanation(false)} className={styles.cancelBtn}>キャンセル</button>
-                                        <button onClick={handleSaveExplanation} className={styles.saveBtn}>保存</button>
+                                        <button 
+                                            onClick={() => setIsEditingExplanation(false)} 
+                                            className={styles.cancelBtn}
+                                            disabled={isSavingExplanation}
+                                        >
+                                            キャンセル
+                                        </button>
+                                        <button 
+                                            onClick={handleSaveExplanation} 
+                                            className={styles.saveBtn}
+                                            disabled={isSavingExplanation}
+                                        >
+                                            {isSavingExplanation ? '保存中...' : '保存'}
+                                        </button>
                                     </div>
                                 </div>
                             )}
@@ -399,9 +492,9 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveO
                                         />
                                     </div>
 
-                                    <div className={styles.miniActions}>
-                                        <button onClick={handleSaveGenre} className={styles.saveBtn}>保存</button>
+                                    <div className={styles.editActions}>
                                         <button onClick={() => setIsEditingGenre(false)} className={styles.cancelBtn}>キャンセル</button>
+                                        <button onClick={handleSaveGenre} className={styles.saveBtn}>保存</button>
                                     </div>
                                 </div>
                             ) : (
