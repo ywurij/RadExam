@@ -43,7 +43,13 @@ const isValidLegendText = (text) => {
         return false;
     }
 
-    // 4. レジェンドらしいキーワード（図番、またはモダリティ・画像用語）が含まれているか
+    // 4. 英数字・スペース・カンマ・ピリオド・ハイフンのみで構成される英語レジェンド表現（例: time intensity curve）
+    // は、ある程度の長さ（35文字以下）であれば、キーワードの有無に関わらず無条件で許可する
+    if (/^[a-zA-Z0-9-+\s()\/.,]+$/.test(trimmed) && trimmed.length <= 35) {
+        return true;
+    }
+
+    // 5. レジェンドらしいキーワード（図番、またはモダリティ・画像用語）が含まれているか
     // ※ 15文字以下の短いテキストであれば、問題文や選択肢の除外チェックをパスした時点で有効とみなす
     if (trimmed.length <= 15) {
         return true;
@@ -51,7 +57,7 @@ const isValidLegendText = (text) => {
 
     const hasLegendIndicator = /(?:図|画像|写真|Fig|photo|label|panel|表)\s*\d+/i.test(trimmed) || 
                               /^[a-gA-G]\b/.test(trimmed) || // 先頭が a〜g, A〜G のラベル
-                              /(?:CT|MRI|T1|T2|FLAIR|DWI|ADC|PET|MRA|シンチ|エコー|超音波|X線|レントゲン|シネ|造影|強調|矢状|冠状|横断|水平|正面|側面|像|写真|図|グラフ|チャート|マップ|map|SPECT|ブルズアイ|心筋|負荷|安静|遅延|早期)/i.test(trimmed);
+                              /(?:CT|MRI|T1|T2|FLAIR|DWI|ADC|PET|MRA|シンチ|エコー|超音波|X線|レントゲン|シネ|造影|強調|矢状|冠状|横断|水平|正面|側面|像|写真|図|グラフ|チャート|マップ|map|SPECT|ブルズアイ|心筋|負荷|安静|遅延|早期|curve|スタディ|ダイナミック)/i.test(trimmed);
 
     return hasLegendIndicator;
 };
@@ -87,7 +93,8 @@ const cleanLegendPrefix = (text) => {
 };
 
 // 画像の境界とテキスト要素のリストからレジェンドを抽出する関数
-const extractLegendForImage = (rect, textItems) => {
+// limits: { leftLimit, rightLimit } を受け取り、探索X範囲を隣接画像の境界中央までに制限する
+const extractLegendForImage = (rect, textItems, limits = {}) => {
     const origMinX = rect.x;
     const origMinY = rect.y;
     const origMaxX = rect.x + rect.w;
@@ -97,8 +104,16 @@ const extractLegendForImage = (rect, textItems) => {
 
     // X軸の探索マージン (左右)
     const xMargin = Math.max(15, Math.min(50, imageWidth * 0.1));
-    const searchMinX = origMinX - xMargin;
-    const searchMaxX = origMaxX + xMargin;
+    let searchMinX = origMinX - xMargin;
+    let searchMaxX = origMaxX + xMargin;
+
+    // 隣接画像との干渉限界（limits）による探索範囲の制限
+    if (limits.leftLimit !== undefined) {
+        searchMinX = Math.max(searchMinX, limits.leftLimit);
+    }
+    if (limits.rightLimit !== undefined) {
+        searchMaxX = Math.min(searchMaxX, limits.rightLimit);
+    }
 
     // Y軸の探索マージン (上下)
     const searchMarginY = 150;
@@ -106,6 +121,7 @@ const extractLegendForImage = (rect, textItems) => {
 
     // --- 1. メインタイトルの探索 ---
     let mainTitle = '';
+    const usedItems = [];
     
     // (a) 画像直下の探索
     const textBelow = textItems.filter(item => {
@@ -131,6 +147,7 @@ const extractLegendForImage = (rect, textItems) => {
             const lineText = lineItems.map(t => t.text).join(' ').trim();
             if (lineText && isValidLegendText(lineText)) {
                 belowLines.push(lineText);
+                lineItems.forEach(item => usedItems.push(item));
             }
             
             // 次の行を探す (現在の行より下にあるもの)
@@ -174,6 +191,7 @@ const extractLegendForImage = (rect, textItems) => {
                 const lineText = lineItems.map(t => t.text).join(' ').trim();
                 if (lineText && isValidLegendText(lineText)) {
                     aboveLines.push(lineText);
+                    lineItems.forEach(item => usedItems.push(item));
                 }
 
                 // 次の行を探す (現在の行より上にあるもの)
@@ -207,20 +225,24 @@ const extractLegendForImage = (rect, textItems) => {
 
     const usedWords = mainTitle ? mainTitle.split(/\s+/) : [];
     
-    // (a) 画像の内側
-    const insideText = textItems.filter(item => {
-        const txCenter = item.x + item.width / 2;
-        const tyCenter = item.y + item.height / 2;
-        return txCenter >= origMinX && txCenter <= origMaxX && tyCenter >= origMinY && tyCenter <= origMaxY;
-    });
-
-    // (b) 画像の外側近傍 (上下20px, 左右25pxに制限し、隣接画像のレジェンド等の混入を防止)
+    // (a) 画像の外側近傍 (上下20px, 左右40pxに制限し、隣接画像との干渉限界 limits でX座標を制限)
     const marginY = 20;
-    const marginX = 25;
+    const marginX = 40; // 左右マージンを40pxに拡大
+    
+    let descMinX = origMinX - marginX;
+    let descMaxX = origMaxX + marginX;
+
+    if (limits.leftLimit !== undefined) {
+        descMinX = Math.max(descMinX, limits.leftLimit);
+    }
+    if (limits.rightLimit !== undefined) {
+        descMaxX = Math.min(descMaxX, limits.rightLimit);
+    }
+
     const outsideText = textItems.filter(item => {
         const txCenter = item.x + item.width / 2;
         const tyCenter = item.y + item.height / 2;
-        const inExtendedX = txCenter >= (origMinX - marginX) && txCenter <= (origMaxX + marginX);
+        const inExtendedX = txCenter >= descMinX && txCenter <= descMaxX;
         const inExtendedY = tyCenter >= (origMinY - marginY) && tyCenter <= (origMaxY + marginY);
         const isInside = txCenter >= origMinX && txCenter <= origMaxX && tyCenter >= origMinY && tyCenter <= origMaxY;
         return inExtendedX && inExtendedY && !isInside;
@@ -234,11 +256,12 @@ const extractLegendForImage = (rect, textItems) => {
         const text = item.text.trim();
         if (text.length > 0 && text.length <= shortLabelLimit) {
             const isLabelLike = /^[a-zA-Z0-9-+\s()\/]+$/.test(text) || 
-                                /^(?:右|左|前|後|上|下|側面|正面|造影|シネ|遅延|早期|矢状|横断|冠状|エコー|シンチ|図|表|画像)\d*$/i.test(text) ||
+                                /^(?:右|左|前|後|上|下|側面|正面|造影|シネ|遅延|早期|矢状|横断|冠状|エコー|シンチ|図|表|画像|負荷|安静|運動|ストレス|レスト)(?:時|像)?\d*$/i.test(text) ||
                                 /^(?:anterior|posterior|lateral|coronal|sagittal|transverse|axial|min|hour|hr|sec|iv|pre|post|delay|early|Right|Left|L|R|A|P|H|F|sup|inf)\d*$/i.test(text);
 
             if (isLabelLike && !usedWords.includes(text) && !mainTitle.includes(text)) {
                 descriptorsSet.add(text);
+                usedItems.push(item);
             }
         }
     });
@@ -255,7 +278,10 @@ const extractLegendForImage = (rect, textItems) => {
         }
     }
 
-    return finalLegend;
+    return {
+        legendStr: finalLegend,
+        usedItems: usedItems
+    };
 };
 
 export default function AdminPage() {
@@ -966,9 +992,18 @@ ${JSON.stringify({ question: questionObj.question, options: questionObj.options 
 
                  const pageImages = [];
 
-                 if (rawImageRects.length > 0) {
-                     const combinedCrops = [];
-                     rawImageRects.forEach(rect => {
+                  if (rawImageRects.length > 0) {
+                      const combinedCrops = [];
+                      
+                      // Sort images: Y desc, X asc
+                      const sortedRects = [...rawImageRects].sort((a, b) => {
+                          if (Math.abs(b.y - a.y) > 20) return b.y - a.y;
+                          return a.x - b.x;
+                      });
+
+                      const usedLegendTextKeys = new Set();
+
+                      sortedRects.forEach(rect => {
                          const origMinX = rect.x;
                          const origMinY = rect.y;
                          const origMaxX = rect.x + rect.w;
@@ -988,7 +1023,43 @@ ${JSON.stringify({ question: questionObj.question, options: questionObj.options 
                              matchedQNum = parseInt(labelMatch[1]);
                          }
 
-                         const legendStr = extractLegendForImage(rect, filteredTextItems);
+                          // Find adjacent limits
+                          let leftLimit = undefined;
+                          let rightLimit = undefined;
+
+                          sortedRects.forEach(other => {
+                              if (other === rect) return;
+                              const otherMinX = other.x;
+                              const otherMaxX = other.x + other.w;
+                              const otherMinY = other.y;
+                              const otherMaxY = other.y + other.h;
+
+                              const yOverlaps = Math.max(origMinY, otherMinY) <= Math.min(origMaxY, otherMaxY);
+                              if (yOverlaps) {
+                                  if (otherMaxX <= origMinX) {
+                                      const mid = (otherMaxX + origMinX) / 2;
+                                      leftLimit = leftLimit === undefined ? mid : Math.max(leftLimit, mid);
+                                  } else if (otherMinX >= origMaxX) {
+                                      const mid = (origMaxX + otherMinX) / 2;
+                                      rightLimit = rightLimit === undefined ? mid : Math.min(rightLimit, mid);
+                                  }
+                              }
+                          });
+
+                          const limits = { leftLimit, rightLimit };
+
+                          const availableTextItems = filteredTextItems.filter(item => {
+                              const key = `${pageNum}_${item.x}_${item.y}_${item.text.trim()}`;
+                              return !usedLegendTextKeys.has(key);
+                          });
+
+                          const result = extractLegendForImage(rect, availableTextItems, limits);
+                          const legendStr = result.legendStr;
+
+                          result.usedItems.forEach(item => {
+                              const key = `${pageNum}_${item.x}_${item.y}_${item.text.trim()}`;
+                              usedLegendTextKeys.add(key);
+                          });
 
                          combinedCrops.push({
                              minX: origMinX,
