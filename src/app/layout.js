@@ -12,8 +12,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata = {
-  title: "RadTest",
-  description: "RadTest - Radiology Exam Practice",
+  title: "RadExam",
+  description: "RadExam - Radiology Exam Practice",
   manifest: "/manifest.json",
 };
 

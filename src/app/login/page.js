@@ -40,7 +40,7 @@ export default function LoginPage() {
     return (
         <div className={styles.container}>
             <div className={styles.card}>
-                <h1>RadTest ログイン</h1>
+                <h1>RadExam ログイン</h1>
                 <form onSubmit={handleSubmit} className={styles.form}>
                     <div className={styles.group}>
                         <label>メールアドレス</label>

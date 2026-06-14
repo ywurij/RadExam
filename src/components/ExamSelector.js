@@ -1,198 +1,134 @@
 "use client";
 
 import { useState, useMemo, useEffect } from 'react';
-import { getExamTypes, getYears, getGenres } from '@/lib/data';
-import { getLatestAnnouncementId } from '@/lib/announcementsData';
+import { getExamTypes, getYears, getGenres, initializeLocalExams } from '@/lib/data';
 import styles from './ExamSelector.module.scss';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
+import { 
+    getLocalProgress, 
+    getAllLocalOverrides
+} from '@/lib/localDb';
 
 export default function ExamSelector() {
     const router = useRouter();
-    const { isAdmin, user, userData, logout, migrationDebugMsg } = useAuth();
-    const exams = getExamTypes();
-    const [selectedExam, setSelectedExam] = useState(exams[0]?.id || 'diagnostic');
+    const { logout } = useAuth(); // Auth is bypassed, but we keep logout hook for legacy clean UI
+    
+    // Auth bypass: 誰でも管理画面にアクセスできるように管理者フラグを真にする
+    const isAdmin = true;
+    const user = null; // ローカル完結型なのでログイン不要
+    const userData = null;
+
+    const [exams, setExams] = useState([]);
+    const [selectedExam, setSelectedExam] = useState('');
     const [userGenres, setUserGenres] = useState({});
-
-    // Filters
-    const [selectedYear, setSelectedYear] = useState('all');
-    const [selectedGenres, setSelectedGenres] = useState([]);
-    const [count, setCount] = useState('all');
-    const [statusFilter, setStatusFilter] = useState([]);
-    const [logicFilter, setLogicFilter] = useState('or');
-    const [isShuffle, setIsShuffle] = useState(false);
-
-    // Offline Download State
-    const [downloadingExamId, setDownloadingExamId] = useState(null);
-    const [downloadProgress, setDownloadProgress] = useState({ current: 0, total: 0 });
-    const [hasUnreadAnnouncements, setHasUnreadAnnouncements] = useState(false);
-
-    // Derived options based on selected exam
-    const years = useMemo(() => getYears(selectedExam), [selectedExam]);
-    const genres = useMemo(() => {
-        const staticGenres = getGenres(selectedExam);
-        const uGenres = userGenres[selectedExam] || new Set();
-        const combined = new Set(staticGenres);
-        uGenres.forEach(g => combined.add(g));
-        return Array.from(combined).sort();
-    }, [selectedExam, userGenres]);
-
-    const [sessions, setSessions] = useState([]);
+ 
+     // Filters
+     const [selectedYear, setSelectedYear] = useState('all');
+     const [selectedGenres, setSelectedGenres] = useState([]);
+     const [count, setCount] = useState('all');
+     const [statusFilter, setStatusFilter] = useState([]);
+     const [logicFilter, setLogicFilter] = useState('or');
+     const [isShuffle, setIsShuffle] = useState(false);
+ 
+     // Offline Download State
+     const [downloadingExamId, setDownloadingExamId] = useState(null);
+     const [downloadProgress, setDownloadProgress] = useState({ current: 0, total: 0 });
+ 
+     // Derived options based on selected exam
+     const years = useMemo(() => getYears(selectedExam), [selectedExam]);
+     const genres = useMemo(() => {
+         const staticGenres = getGenres(selectedExam);
+         const uGenres = userGenres[selectedExam] || new Set();
+         const combined = new Set(staticGenres);
+         uGenres.forEach(g => combined.add(g));
+         return Array.from(combined).sort();
+     }, [selectedExam, userGenres]);
+ 
+     const [sessions, setSessions] = useState([]);
 
     useEffect(() => {
-        const sessionsKey = user ? `radexam_sessions_${user.uid}` : 'radexam_sessions';
-        const oldSessionKey = user ? `radexam_session_${user.uid}` : 'radexam_session';
-        
-        let localSessions = [];
+        const init = async () => {
+            // ローカルのカスタム試験キャッシュを初期化
+            await initializeLocalExams();
+            const types = getExamTypes();
+            setExams(types);
 
-        // 1. 旧セッションキーからの移行処理
-        if (typeof window !== 'undefined') {
-            const oldSession = localStorage.getItem(oldSessionKey);
-            if (oldSession) {
-                try {
-                    const parsed = JSON.parse(oldSession);
-                    if (parsed) {
-                        // セッションIDがない場合は生成
-                        if (!parsed.id) {
-                            parsed.id = parsed.timestamp ? `migrated-${parsed.timestamp}` : `migrated-${Date.now()}`;
-                        }
-                        // 旧セッション名も設定
-                        if (!parsed.name) {
-                            const allExams = getExamTypes();
-                            const examName = allExams.find(e => e.id === parsed.examId)?.name || parsed.examId;
-                            parsed.name = `移行されたセッション (${examName})`;
-                        }
-                        localSessions.push(parsed);
-                    }
-                } catch (e) {
-                    console.error("Invalid old session data", e);
-                }
-                localStorage.removeItem(oldSessionKey);
-                localStorage.setItem(sessionsKey, JSON.stringify(localSessions));
-            } else {
-                const raw = localStorage.getItem(sessionsKey);
-                if (raw) {
+            const sessionsKey = 'radexam_sessions';
+            const oldSessionKey = 'radexam_session';
+            
+            let localSessions = [];
+
+            // 1. 旧セッションキーからの移行処理
+            if (typeof window !== 'undefined') {
+                const oldSession = localStorage.getItem(oldSessionKey);
+                if (oldSession) {
                     try {
-                        localSessions = JSON.parse(raw);
-                        if (!Array.isArray(localSessions)) {
-                            localSessions = [];
+                        const parsed = JSON.parse(oldSession);
+                        if (parsed) {
+                            if (!parsed.id) {
+                                parsed.id = parsed.timestamp ? `migrated-${parsed.timestamp}` : `migrated-${Date.now()}`;
+                            }
+                            if (!parsed.name) {
+                                parsed.name = `移行されたセッション`;
+                            }
+                            localSessions.push(parsed);
                         }
                     } catch (e) {
-                        console.error("Invalid sessions data", e);
-                        localSessions = [];
+                        console.error("Invalid old session data", e);
                     }
-                }
-            }
-        }
-
-        setSessions(localSessions);
-
-        // 2. リモートDB (Firestore) からのセッション読み込みと同期
-        const checkRemote = async () => {
-            if (user) {
-                try {
-                    const { getActiveSessions } = await import('@/lib/db');
-                    const remoteSessions = await getActiveSessions(user.uid);
-                    
-                    if (remoteSessions && remoteSessions.length > 0) {
-                        const mergedMap = new Map();
-                        
-                        // ローカルをマップに追加
-                        localSessions.forEach(s => {
-                            if (s.id) mergedMap.set(s.id, s);
-                        });
-                        
-                        // リモートをマップに追加・マージ（タイムスタンプで新しい方を優先）
-                        remoteSessions.forEach(rs => {
-                            const local = mergedMap.get(rs.id);
-                            if (!local) {
-                                mergedMap.set(rs.id, rs);
-                            } else {
-                                const localTime = local.timestamp || 0;
-                                let remoteTime = 0;
-                                if (rs.timestamp) remoteTime = rs.timestamp;
-                                if (rs.updatedAt && rs.updatedAt.toMillis) remoteTime = rs.updatedAt.toMillis();
-                                else if (rs.updatedAt) remoteTime = new Date(rs.updatedAt).getTime();
-                                
-                                if (remoteTime > localTime) {
-                                    const serializedRemote = { ...rs };
-                                    if (rs.updatedAt && rs.updatedAt.toMillis) {
-                                        serializedRemote.timestamp = rs.updatedAt.toMillis();
-                                        delete serializedRemote.updatedAt;
-                                    }
-                                    mergedMap.set(rs.id, serializedRemote);
-                                }
+                    localStorage.removeItem(oldSessionKey);
+                    localStorage.setItem(sessionsKey, JSON.stringify(localSessions));
+                } else {
+                    const raw = localStorage.getItem(sessionsKey);
+                    if (raw) {
+                        try {
+                            localSessions = JSON.parse(raw);
+                            if (!Array.isArray(localSessions)) {
+                                localSessions = [];
                             }
-                        });
-                        
-                        const mergedList = Array.from(mergedMap.values()).sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
-                        setSessions(mergedList);
-                        localStorage.setItem(sessionsKey, JSON.stringify(mergedList));
-                    }
-                } catch (e) {
-                    console.error("Error checking remote session", e);
-                }
-            }
-        };
-        
-        checkRemote();
-
-        // Check if there are unread announcements
-        const checkAnnouncements = async () => {
-            const latestId = getLatestAnnouncementId();
-            if (!latestId) return;
-
-            let remoteReadId = null;
-            if (user) {
-                try {
-                    const { getLastReadAnnouncement } = await import('@/lib/db');
-                    remoteReadId = await getLastReadAnnouncement(user.uid);
-                    // If remote has a newer read ID than local, update local
-                    if (remoteReadId) {
-                        const localRead = localStorage.getItem('radexam_last_read_announcement');
-                        if (!localRead || localRead < remoteReadId) {
-                            localStorage.setItem('radexam_last_read_announcement', remoteReadId);
+                        } catch (e) {
+                            console.error("Invalid sessions data", e);
+                            localSessions = [];
                         }
                     }
-                } catch (e) {
-                    console.error("Failed to check remote announcements", e);
                 }
             }
 
-            const lastRead = localStorage.getItem('radexam_last_read_announcement');
+            setSessions(localSessions);
 
-            // Logic: If latestId > lastRead, then unread.
-            if (!lastRead || lastRead !== latestId) {
-                setHasUnreadAnnouncements(true);
-            } else {
-                setHasUnreadAnnouncements(false);
+            // 前回設定のロード
+            const lastSettings = localStorage.getItem('radexam_last_settings');
+            if (lastSettings) {
+                try {
+                    const settings = JSON.parse(lastSettings);
+                    if (settings.examId) {
+                        setSelectedExam(settings.examId);
+                    } else if (types[0]?.id) {
+                        setSelectedExam(types[0].id);
+                    }
+                    if (settings.year) setSelectedYear(settings.year);
+                    if (settings.count) setCount(settings.count);
+                    if (settings.shuffle !== undefined) setIsShuffle(settings.shuffle);
+                    if (settings.status) setStatusFilter(settings.status);
+                    if (settings.logic) setLogicFilter(settings.logic);
+                    if (settings.genres) setSelectedGenres(settings.genres);
+                } catch (e) {
+                    console.error("Failed to load last settings", e);
+                    if (types[0]?.id) setSelectedExam(types[0].id);
+                }
+            } else if (types[0]?.id) {
+                setSelectedExam(types[0].id);
             }
         };
-        checkAnnouncements();
 
-        const lastSettings = localStorage.getItem('radexam_last_settings');
-        if (lastSettings) {
-            try {
-                const settings = JSON.parse(lastSettings);
-                if (settings.examId) setSelectedExam(settings.examId);
-                if (settings.year) setSelectedYear(settings.year);
-                if (settings.count) setCount(settings.count);
-                if (settings.shuffle !== undefined) setIsShuffle(settings.shuffle);
-                if (settings.status) setStatusFilter(settings.status);
-                if (settings.logic) setLogicFilter(settings.logic);
-                if (settings.genres) setSelectedGenres(settings.genres);
-            } catch (e) {
-                console.error("Failed to load last settings", e);
-            }
-        }
-    }, [user]);
+        init();
+    }, []);
 
-    // Fetch user genres effect
+    // Fetch user genres effect (Local IndexedDB)
     useEffect(() => {
-        if (!user) return;
         const fetchUserGenres = async () => {
             try {
-                const { getAllOverrides, getUserExamProgress } = await import('@/lib/db');
                 const genreMap = {};
                 const processGenre = (globalKey, genreVal) => {
                     const parts = globalKey.split('_');
@@ -210,12 +146,12 @@ export default function ExamSelector() {
                     }
                 };
 
-                const overrides = await getAllOverrides();
+                const overrides = await getAllLocalOverrides();
                 Object.entries(overrides).forEach(([key, ov]) => {
                     if (ov.genre) processGenre(key, ov.genre);
                 });
 
-                const progress = await getUserExamProgress(user.uid);
+                const progress = await getLocalProgress();
                 Object.entries(progress).forEach(([key, p]) => {
                     if (p.overrideGenre) processGenre(key, p.overrideGenre);
                 });
@@ -225,8 +161,10 @@ export default function ExamSelector() {
                 console.error("Failed to fetch user genres", e);
             }
         };
-        fetchUserGenres();
-    }, [user]);
+        if (exams.length > 0) {
+            fetchUserGenres();
+        }
+    }, [exams]);
 
     const handleStart = () => {
         const params = new URLSearchParams();
@@ -269,27 +207,17 @@ export default function ExamSelector() {
     const handleDeleteSession = async (e, session) => {
         e.stopPropagation();
         
-        const allExams = getExamTypes();
-        const examName = allExams.find(ex => ex.id === session.examId)?.name || session.examId;
+        const examName = exams.find(ex => ex.id === session.examId)?.name || session.examId;
         const dateStr = session.timestamp ? new Date(session.timestamp).toLocaleString() : '不明';
         
         if (!confirm(`中断した演習「${examName} (${dateStr})」を削除しますか？`)) {
             return;
         }
         
-        const sessionsKey = user ? `radexam_sessions_${user.uid}` : 'radexam_sessions';
+        const sessionsKey = 'radexam_sessions';
         const updated = sessions.filter(s => s.id !== session.id);
         setSessions(updated);
         localStorage.setItem(sessionsKey, JSON.stringify(updated));
-        
-        if (user) {
-            try {
-                const { deleteActiveSession } = await import('@/lib/db');
-                await deleteActiveSession(user.uid, session.id);
-            } catch(e) {
-                console.error("Failed to delete remote session", e);
-            }
-        }
     };
 
     const handleDownloadOffline = async (e, examId, isAuto = false) => {
@@ -386,6 +314,26 @@ export default function ExamSelector() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [selectedExam]);
 
+    // 試験変更時のフィルター整合性チェックと自動リセット
+    useEffect(() => {
+        if (!selectedExam) return;
+
+        // 1. 年度フィルターの整合性チェック
+        const availableYears = getYears(selectedExam);
+        if (selectedYear !== 'all' && selectedYear !== 'last3' && selectedYear !== 'last5') {
+            const numYear = parseInt(selectedYear);
+            const strYear = selectedYear.toString();
+            // 数値・文字列両方で存在チェック
+            if (!availableYears.includes(numYear) && !availableYears.includes(strYear)) {
+                setSelectedYear('all');
+            }
+        }
+
+        // 2. ジャンルフィルターの整合性チェック
+        const availableGenres = getGenres(selectedExam);
+        setSelectedGenres(prev => prev.filter(g => availableGenres.includes(g)));
+    }, [selectedExam, exams]);
+
     const toggleGenre = (genre) => {
         if (selectedGenres.includes(genre)) {
             setSelectedGenres(prev => prev.filter(g => g !== genre));
@@ -405,124 +353,40 @@ export default function ExamSelector() {
         });
     };
 
-    // --- Data Management ---
-    const [showDataModal, setShowDataModal] = useState(false);
-    const [isProcessingData, setIsProcessingData] = useState(false);
-    const [exportOptions, setExportOptions] = useState({
-        history: true, answers: true, notes: true, genres: true
-    });
-    const [importStrategy, setImportStrategy] = useState('overwrite');
 
-    const handleExport = async () => {
-        if (!user || isProcessingData) return;
-        setIsProcessingData(true);
-        try {
-            const { exportUserData } = await import('@/lib/db');
-            const data = await exportUserData(user.uid, exportOptions);
-            if (Object.keys(data.data).length === 0) {
-                alert('出力対象のデータがありませんでした。');
-                setIsProcessingData(false);
-                return;
-            }
-            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `radtest_backup_${new Date().toISOString().slice(0, 10)}.json`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
-            alert('エクスポートが完了しました。');
-            setShowDataModal(false);
-        } catch (e) {
-            console.error(e);
-            alert('エクスポートに失敗しました: ' + e.message);
-        } finally {
-            setIsProcessingData(false);
-        }
-    };
-
-    const handleImport = async (e) => {
-        const file = e.target.files[0];
-        if (!file || !user || isProcessingData) return;
-        const strategyLabel = importStrategy === 'overwrite' ? '【上書き】' : '【既存優先】';
-        if (!confirm(`現在の設定: ${strategyLabel}\nデータをインポートしてよろしいですか？`)) {
-            e.target.value = '';
-            return;
-        }
-        setIsProcessingData(true);
-        try {
-            const text = await file.text();
-            const json = JSON.parse(text);
-            const { importUserData } = await import('@/lib/db');
-            const result = await importUserData(user.uid, json, importStrategy);
-            alert(`インポート完了: ${result.count} 件のデータを処理しました。画面をリロードします。`);
-            window.location.reload();
-        } catch (e) {
-            console.error(e);
-            alert('インポートに失敗しました: ' + e.message);
-        } finally {
-            setIsProcessingData(false);
-            e.target.value = '';
-        }
-    };
 
     return (
         <div className={styles.container}>
-            <h1 className={styles.title}>RadTest</h1>
+            <h1 className={styles.title}>RadExam</h1>
 
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem', marginBottom: '2rem' }}>
-                {user && (
-                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.2rem' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.9rem', color: '#718096' }}>
-                            <span>ログイン中: <b>{user.email}</b></span>
-                            <LogoutButton user={user} logout={logout} />
-                        </div>
-                        {userData && (
-                            <div style={{ fontSize: '0.75rem', color: userData.migrationToNextJsAppDone ? '#38a169' : '#e53e3e', marginBottom: '4px' }}>
-                                {userData.migrationToNextJsAppDone
-                                    ? `✓ データ移行完了 (${new Date(userData.migrationDate?.seconds * 1000).toLocaleDateString()})`
-                                    : '⚠ データ移行保留中 (自動実行待ち)'}
-                            </div>
-                        )}
-                    </div>
-                )}
-
                 <div style={{ display: 'flex', justifyContent: 'center', gap: '1rem', flexWrap: 'wrap' }}>
                     <button onClick={() => router.push('/search')} style={{ background: 'transparent', border: '1px solid #cbd5e0', padding: '0.5rem 1rem', borderRadius: '0.5rem', cursor: 'pointer', color: '#4a5568', fontSize: '1rem' }}>
                         🔍 問題を検索
                     </button>
+
                     <button
-                        onClick={() => setShowDataModal(true)}
-                        style={{ background: 'transparent', border: '1px solid #cbd5e0', padding: '0.5rem 1rem', borderRadius: '0.5rem', cursor: 'pointer', color: '#4a5568', fontSize: '1rem' }}
+                        onClick={() => router.push('/usage')}
+                        style={{
+                            background: '#4a5568',
+                            border: 'none',
+                            padding: '0.5rem 1rem',
+                            borderRadius: '0.5rem',
+                            cursor: 'pointer',
+                            color: 'white',
+                            fontSize: '1rem',
+                            fontWeight: 'bold',
+                            marginRight: '0.5rem'
+                        }}
                     >
-                        💾 データ管理
-                    </button>
-                    <button
-                        onClick={() => router.push('/announcements')}
-                        style={{ position: 'relative', background: 'transparent', border: '1px solid #cbd5e0', padding: '0.5rem 1rem', borderRadius: '0.5rem', cursor: 'pointer', color: '#4a5568', fontSize: '1rem' }}
-                    >
-                        🔔 お知らせ
-                        {hasUnreadAnnouncements && (
-                            <span style={{
-                                position: 'absolute',
-                                top: '-5px',
-                                right: '-5px',
-                                width: '12px',
-                                height: '12px',
-                                background: '#e53e3e',
-                                borderRadius: '50%',
-                                border: '2px solid white'
-                            }} />
-                        )}
+                        ❓ 使い方
                     </button>
                     {isAdmin && (
                         <button
                             onClick={() => router.push('/admin')}
                             style={{ background: '#2d3748', border: 'none', padding: '0.5rem 1rem', borderRadius: '0.5rem', cursor: 'pointer', color: 'white', fontSize: '1rem', fontWeight: 'bold' }}
                         >
-                            ⚙️ 管理者メニュー
+                            ⚙️ 試験管理
                         </button>
                     )}
                 </div>
@@ -542,28 +406,30 @@ export default function ExamSelector() {
                                 <span className={styles.examCount}>{exam.count} 問</span>
                             </button>
                             {/* Download Button */}
-                            <button
-                                onClick={(e) => handleDownloadOffline(e, exam.id)}
-                                disabled={!!downloadingExamId}
-                                title="オフライン用に画像をダウンロード"
-                                style={{
-                                    position: 'absolute',
-                                    right: '10px',
-                                    top: '50%',
-                                    transform: 'translateY(-50%)',
-                                    background: 'none',
-                                    border: 'none',
-                                    cursor: 'pointer',
-                                    fontSize: '1.2rem',
-                                    opacity: 0.6,
-                                    transition: 'opacity 0.2s',
-                                    zIndex: 10
-                                }}
-                                onMouseEnter={e => e.target.style.opacity = 1}
-                                onMouseLeave={e => e.target.style.opacity = 0.6}
-                            >
-                                {downloadingExamId === exam.id ? '⏳' : '📥'}
-                            </button>
+                            {!exam.isLocal && (
+                                <button
+                                    onClick={(e) => handleDownloadOffline(e, exam.id)}
+                                    disabled={!!downloadingExamId}
+                                    title="オフライン用に画像をダウンロード"
+                                    style={{
+                                        position: 'absolute',
+                                        right: '10px',
+                                        top: '50%',
+                                        transform: 'translateY(-50%)',
+                                        background: 'none',
+                                        border: 'none',
+                                        cursor: 'pointer',
+                                        fontSize: '1.2rem',
+                                        opacity: 0.6,
+                                        transition: 'opacity 0.2s',
+                                        zIndex: 10
+                                    }}
+                                    onMouseEnter={e => e.target.style.opacity = 1}
+                                    onMouseLeave={e => e.target.style.opacity = 0.6}
+                                >
+                                    {downloadingExamId === exam.id ? '⏳' : '📥'}
+                                </button>
+                            )}
                         </div>
                     ))}
                 </div>
@@ -714,50 +580,7 @@ export default function ExamSelector() {
                 演習開始
             </button>
 
-            {/* Data Management Modal */}
-            {showDataModal && (
-                <div className={styles.modalOverlay}>
-                    <div className={styles.modalContent}>
-                        <h3 className={styles.modalTitle}>データ管理</h3>
-                        <p className={styles.modalDesc}>
-                            学習履歴やメモをJSON形式でバックアップ・共有できます。
-                        </p>
 
-                        <div style={{ marginTop: '1.5rem' }}>
-                            <h4 className={styles.modalSectionTitle} style={{ borderBottomColor: '#3182ce' }}>📤 エクスポート (保存)</h4>
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', marginBottom: '1rem' }}>
-                                <label style={{ fontSize: '0.9rem', display: 'flex', alignItems: 'center', cursor: 'pointer', color: 'inherit' }}><input type="checkbox" checked={exportOptions.history} onChange={e => setExportOptions({ ...exportOptions, history: e.target.checked })} style={{ marginRight: '0.3rem' }} />学習履歴 (正誤/★)</label>
-                                <label style={{ fontSize: '0.9rem', display: 'flex', alignItems: 'center', cursor: 'pointer', color: 'inherit' }}><input type="checkbox" checked={exportOptions.answers} onChange={e => setExportOptions({ ...exportOptions, answers: e.target.checked })} style={{ marginRight: '0.3rem' }} />自分の解答</label>
-                                <label style={{ fontSize: '0.9rem', display: 'flex', alignItems: 'center', cursor: 'pointer', color: 'inherit' }}><input type="checkbox" checked={exportOptions.notes} onChange={e => setExportOptions({ ...exportOptions, notes: e.target.checked })} style={{ marginRight: '0.3rem' }} />解説メモ</label>
-                                <label style={{ fontSize: '0.9rem', display: 'flex', alignItems: 'center', cursor: 'pointer', color: 'inherit' }}><input type="checkbox" checked={exportOptions.genres} onChange={e => setExportOptions({ ...exportOptions, genres: e.target.checked })} style={{ marginRight: '0.3rem' }} />ジャンル設定</label>
-                            </div>
-                            <button onClick={handleExport} disabled={isProcessingData} style={{ width: '100%', padding: '0.75rem', background: '#3182ce', color: 'white', border: 'none', borderRadius: '0.5rem', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', opacity: isProcessingData ? 0.7 : 1 }}>
-                                ⬇️ JSONファイルをダウンロード
-                            </button>
-                        </div>
-
-                        <div style={{ marginTop: '2rem' }}>
-                            <h4 className={styles.modalSectionTitle} style={{ borderBottomColor: '#38a169' }}>📥 インポート (復元・結合)</h4>
-                            <div style={{ marginBottom: '1rem', background: 'rgba(0,0,0,0.05)', padding: '0.8rem', borderRadius: '0.5rem' }}>
-                                <div style={{ marginBottom: '0.5rem', fontSize: '0.9rem', fontWeight: 'bold' }}>競合時の動作:</div>
-                                <label style={{ display: 'flex', alignItems: 'center', marginBottom: '0.4rem', fontSize: '0.9rem', cursor: 'pointer' }}>
-                                    <input type="radio" name="strategy" value="overwrite" checked={importStrategy === 'overwrite'} onChange={() => setImportStrategy('overwrite')} style={{ marginRight: '0.5rem' }} />
-                                    <span><b>完全同期 (Mirror)</b><br /><span style={{ fontSize: '0.8rem', opacity: 0.8 }}>ファイルの状態と完全に一致させます (ファイルにないデータは消えます)</span></span>
-                                </label>
-                                <label style={{ display: 'flex', alignItems: 'center', fontSize: '0.9rem', cursor: 'pointer' }}>
-                                    <input type="radio" name="strategy" value="keep" checked={importStrategy === 'keep'} onChange={() => setImportStrategy('keep')} style={{ marginRight: '0.5rem' }} />
-                                    <span><b>既存を優先 (Keep Local)</b><br /><span style={{ fontSize: '0.8rem', opacity: 0.8 }}>自分のデータを残し、空白のみ埋めます</span></span>
-                                </label>
-                            </div>
-                            <input type="file" accept=".json" onChange={handleImport} disabled={isProcessingData} style={{ fontSize: '0.9rem', width: '100%' }} />
-                        </div>
-
-                        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1.5rem' }}>
-                            <button onClick={() => setShowDataModal(false)} className={styles.modalCloseBtn}>閉じる</button>
-                        </div>
-                    </div>
-                </div>
-            )}
         </div>
     );
 }

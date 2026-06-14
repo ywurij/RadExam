@@ -1,9 +1,11 @@
 import Fuse from 'fuse.js';
 import metadata from '@/data/metadata.json';
-import { getAllOverrides, getUserExamProgress } from '@/lib/db'; // Import DB
-import { auth } from '@/lib/firebase';
-
-// ... (EXAM_LOADERS, EXAM_NAMES, CACHE remain same)
+import { 
+    getLocalProgress, 
+    getAllLocalOverrides, 
+    getAllLocalExams, 
+    getLocalExam 
+} from '@/lib/localDb';
 
 const EXAM_LOADERS = {
     radiology: () => import('@/data/test_radiology.json'),
@@ -19,95 +21,136 @@ const EXAM_NAMES = {
     ivr: 'IVR専門医試験',
 };
 
-// Cached data in memory after loading
+// メモリ上のキャッシュ
 const CACHE = {};
+let LOCAL_METADATA = {};
+let IS_INITIALIZED = false;
 
-export const getExamTypes = () => {
-    // Return in specific order: Radiology, Diagnostic, Nuclear, IVR
-    const order = ['radiology', 'diagnostic', 'nuclear', 'ivr'];
-    return order.map(key => ({
-        id: key,
-        name: EXAM_NAMES[key] || key,
-        count: metadata[key]?.count || 0
-    }));
-};
-
-// Now ASYNC
-export const getExamData = async (examId) => {
-    if (CACHE[examId]) return CACHE[examId];
-
-    const loader = EXAM_LOADERS[examId];
-    if (!loader) return [];
-
+/**
+ * IndexedDBからローカルのカスタム試験メタデータをロードし、キャッシュを初期化する
+ */
+export const initializeLocalExams = async (force = false) => {
+    if (IS_INITIALIZED && !force) return;
     try {
-        const loadedModule = await loader();
-        // default export for JSON is the data itself in some bundlers, or module.default
-        const rawData = loadedModule.default || loadedModule;
-
-        // Inject examId
-        const data = rawData.map(q => ({ ...q, examId }));
-
-        CACHE[examId] = data;
-        return data;
+        const localExams = await getAllLocalExams();
+        const newMetadata = {};
+        localExams.forEach(exam => {
+            newMetadata[exam.id] = {
+                name: exam.name,
+                count: exam.count,
+                years: exam.years || [],
+                genres: exam.genres || []
+            };
+            if (force) {
+                // キャッシュされている問題データをクリアして再読込を強制する
+                delete CACHE[exam.id];
+            }
+        });
+        LOCAL_METADATA = newMetadata;
+        IS_INITIALIZED = true;
     } catch (e) {
-        console.error(`Failed to load data for ${examId}`, e);
-        return [];
+        console.error("Failed to initialize local exams:", e);
     }
 };
 
-// Needed for search across ALL exams
-// This operation is inherently heavy and will trigger loading of all chunks
+export const getExamTypes = () => {
+    // キャッシュされたローカルカスタム試験を返す
+    const localTypes = Object.entries(LOCAL_METADATA).map(([id, meta]) => ({
+        id: id,
+        name: meta.name,
+        count: meta.count,
+        isLocal: true
+    }));
+
+    return localTypes;
+};
+
+// 非同期でデータを取得 (静的またはローカルIndexedDB)
+export const getExamData = async (examId) => {
+    if (CACHE[examId]) return CACHE[examId];
+
+    // まずローカル IndexedDB からの取得を試みる
+    try {
+        const localQuestions = await getLocalExam(examId);
+        if (localQuestions && localQuestions.length > 0) {
+            const data = localQuestions.map(q => ({ ...q, examId }));
+            CACHE[examId] = data;
+            return data;
+        }
+    } catch (e) {
+        console.error(`Failed to load local exam data for ${examId}`, e);
+    }
+
+    // ローカルに存在しない（または空）の場合のみ、静的ファイルのローダーを使う
+    const loader = EXAM_LOADERS[examId];
+    if (loader) {
+        try {
+            const loadedModule = await loader();
+            const rawData = loadedModule.default || loadedModule;
+
+            // examId を各問題オブジェクトに注入
+            const data = rawData.map(q => ({ ...q, examId }));
+
+            CACHE[examId] = data;
+            return data;
+        } catch (e) {
+            console.error(`Failed to load static data for ${examId}`, e);
+        }
+    }
+
+    return [];
+};
+
+// 検索などのためにすべての問題をロードする (ローカル試験のみ)
 export const getAllQuestions = async () => {
-    const promises = Object.keys(EXAM_LOADERS).map(id => getExamData(id));
+    // メタデータのキャッシュが初期化されているか確認
+    if (!IS_INITIALIZED) {
+        await initializeLocalExams();
+    }
+    const localIds = Object.keys(LOCAL_METADATA);
+    
+    const promises = localIds.map(id => getExamData(id));
     const results = await Promise.all(promises);
     return results.flatMap(r => r);
 };
 
-// Client-side search using Fuse.js
-// Make Async
+// ローカルに保存された進捗やメモを基に検索を行う
 export const searchQuestions = async (query, examId = null, customKeys = null) => {
     const rawData = examId ? await getExamData(examId) : await getAllQuestions();
 
-    // 1. Fetch Overrides (Global)
+    // 1. ローカル上書きデータの取得 (ノートや上書き解答など)
     let globalOverrides = {};
     try {
-        globalOverrides = await getAllOverrides();
+        globalOverrides = await getAllLocalOverrides();
     } catch (e) {
-        console.error("Search global override fetch failed:", e);
+        console.error("Search local override fetch failed:", e);
     }
 
-    // 2. Fetch User Progress (Personal Notes/Edits)
+    // 2. ローカル進捗データの取得
     let userProgress = {};
-    const currentUser = auth.currentUser;
-    if (currentUser) {
-        try {
-            userProgress = await getUserExamProgress(currentUser.uid);
-        } catch (e) {
-            console.error("Search user progress fetch failed:", e);
-        }
+    try {
+        userProgress = await getLocalProgress();
+    } catch (e) {
+        console.error("Search local progress fetch failed:", e);
     }
 
-    // 3. Merge Data (Priority: User Note > Global Override > Original)
+    // 3. データのマージ (進捗/ノート優先)
     const data = rawData.map(q => {
-        // Start with the original question
         let merged = q;
 
-        // Apply Global Override (if any)
+        // グローバルな上書きの適用
         const gov = globalOverrides[q.id];
         if (gov) {
             merged = { ...merged, ...gov };
         }
 
-        // Apply User Progress (if any)
-        // We need the global ID to match user progress.
-        // `q.examId` is now injected by `getExamData` or `getAllQuestions`.
+        // 個人の進捗/ノートの適用
         const globalId = getGlobalQuestionId(q.examId, q.id);
         const prog = userProgress[globalId];
         if (prog) {
-            // Merge user progress fields, prioritizing user's note as explanation
             merged = { ...merged, ...prog };
             if (prog.note) {
-                merged.explanation = prog.note; // User's note takes precedence for explanation
+                merged.explanation = prog.note; // ユーザーのメモを解説に上書き
             }
         }
 
@@ -118,47 +161,39 @@ export const searchQuestions = async (query, examId = null, customKeys = null) =
 
     const options = {
         keys: keys,
-        threshold: 0.3, // Fuzzy matching threshold (applies if not using extended syntax)
+        threshold: 0.3,
         ignoreLocation: true,
         useExtendedSearch: true
     };
 
     const fuse = new Fuse(data, options);
-
-    // Transform query for "AND" search with exact substrings
-    // e.g. "MRI 脳" -> "'MRI '脳"
-    // Split by half/full width space
     const formattedQuery = query.trim().split(/[\s　]+/).map(term => `'${term}`).join(' ');
 
     return fuse.search(formattedQuery).map(result => result.item);
 };
 
-// Use Metadata (Sync)
 export const getYears = (examId) => {
-    return metadata[examId]?.years || [];
+    return LOCAL_METADATA[examId]?.years || [];
 };
 
 export const getGenres = (examId) => {
-    return metadata[examId]?.genres || [];
+    return LOCAL_METADATA[examId]?.genres || [];
 };
 
-// This needs actual data for "filtering" by default logic, but 
-// we can keep it sync if we accept it might return empty if not loaded?
-// Better to make it async OR rely on the fact that if we use this, we likely entered the exam and loaded data.
-// However, ExamSelector used getYears/getGenres (now via metadata), but did NOT use getQuestionsByYear.
-// getQuestionsByYear is likely used in the Quiz component.
 export const getQuestionsByYear = async (examId, yearFilter) => {
     const data = await getExamData(examId);
     if (!yearFilter || yearFilter === 'all') return data;
 
-    // Explicit year
     if (!isNaN(yearFilter)) {
         return data.filter(q => q.year.toString() === yearFilter.toString());
     }
 
-    // Recent years logic
-    // We can use metadata for "allYears" to avoid processing full data just for finding top 3
-    const allYears = metadata[examId]?.years || [];
+    // メタデータのキャッシュが初期化されているか確認
+    if (!IS_INITIALIZED) {
+        await initializeLocalExams();
+    }
+
+    const allYears = LOCAL_METADATA[examId]?.years || [];
 
     if (yearFilter === 'last3') {
         const targetYears = allYears.slice(0, 3);
@@ -173,7 +208,6 @@ export const getQuestionsByYear = async (examId, yearFilter) => {
 };
 
 export const getGlobalQuestionId = (examId, questionId) => {
-    // Legacy app used 'test_' prefix.
-    // e.g. examId='radiology' -> 'test_radiology_2015001'
     return `test_${examId}_${questionId}`;
 };
+

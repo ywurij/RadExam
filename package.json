@@ -2,12 +2,16 @@
   "name": "exam-app",
   "version": "0.1.0",
   "private": true,
+  "main": "electron/main.js",
   "scripts": {
     "dev": "next dev --webpack",
     "prebuild": "node scripts/generate-metadata.mjs",
     "build": "next build --webpack",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "app:build": "npm run build",
+    "app:dev": "electron .",
+    "app:pack": "electron-builder"
   },
   "dependencies": {
     "@ducanh2912/next-pwa": "^10.2.9",
@@ -29,7 +33,10 @@
     "@tiptap/starter-kit": "^3.14.0",
     "firebase": "^12.7.0",
     "katex": "^0.16.27",
+    "localforage": "^1.10.0",
     "next": "^16.1.3",
+    "pdfjs-dist": "^6.0.227",
+    "pngjs": "^7.0.0",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
     "react-hook-form": "^7.69.0",
@@ -37,8 +44,42 @@
     "yet-another-react-lightbox": "^3.27.0"
   },
   "devDependencies": {
+    "electron": "^42.4.0",
+    "electron-builder": "^26.15.2",
     "eslint": "^9",
     "eslint-config-next": "^16.1.3",
     "fuse.js": "^7.1.0"
+  },
+  "build": {
+    "appId": "com.yuri.radexam",
+    "productName": "RadExam",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "package.json",
+      "next.config.mjs",
+      "electron/main.js",
+      ".next/**/*",
+      "public/**/*",
+      "src/**/*",
+      "node_modules/**/*"
+    ],
+    "asar": false,
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.education",
+      "identity": null
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "icon": "public/icon.png"
+    }
   }
 }

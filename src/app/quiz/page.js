@@ -5,9 +5,7 @@ import { useSearchParams, useRouter } from 'next/navigation';
 import { getExamData, getAllQuestions, getQuestionsByYear, getGlobalQuestionId, getGenres } from '@/lib/data';
 import QuestionCard from '@/components/QuestionCard';
 import styles from './quiz.module.scss';
-import { auth } from '@/lib/firebase';
-import { useAuth } from '@/context/AuthContext';
-import { saveUserProgress, saveQuestionOverride, getUserExamProgress, getAllOverrides, saveActiveSession, getActiveSessions, deleteActiveSession } from '@/lib/db';
+import { saveLocalProgress, getLocalProgress, getAllLocalOverrides } from '@/lib/localDb';
 import QuizResult from '@/components/QuizResult';
 
 const generateUUID = () => {
@@ -42,7 +40,7 @@ function QuizContent() {
     const [progress, setProgress] = useState({});
 
     // Auth
-    const { user } = useAuth();
+    const user = null; // ローカル完結型のためログイン不要
     const [allGenres, setAllGenres] = useState([]);
     const [sessionId, setSessionId] = useState(null);
 
@@ -50,66 +48,37 @@ function QuizContent() {
         const loadData = async () => {
             setLoading(true);
 
-            // 1. Load Overrides
-            const overrides = await getAllOverrides();
+            // 1. Load Overrides (Local)
+            const overrides = await getAllLocalOverrides();
 
-            // 2. Load User Progress
+            // 2. Load User Progress (Local)
             let userProg = {};
-            if (user) {
-                userProg = await getUserExamProgress(user.uid);
+            try {
+                userProg = await getLocalProgress();
+            } catch (e) {
+                console.error("Failed to load local progress:", e);
             }
 
             // 3. Prepare Questions
             let data = [];
 
-            // CHECK FOR RESUME
+            // CHECK FOR RESUME (Local only)
             const isResume = searchParams.get('resume') === 'true';
             const resumeSessionId = searchParams.get('sessionId');
-            const sessionsKey = user ? `radexam_sessions_${user.uid}` : 'radexam_sessions';
+            const sessionsKey = 'radexam_sessions';
 
             // Load local session
-            let localSession = null;
+            let session = null;
             if (isResume && resumeSessionId && typeof window !== 'undefined') {
                 const raw = localStorage.getItem(sessionsKey);
                 if (raw) {
                     try {
                         const localSessions = JSON.parse(raw);
                         if (Array.isArray(localSessions)) {
-                            localSession = localSessions.find(s => s.id === resumeSessionId) || null;
+                            session = localSessions.find(s => s.id === resumeSessionId) || null;
                         }
                     } catch (e) { console.error("Invalid local sessions data", e); }
                 }
-            }
-
-            // Load remote session (if logged in)
-            let remoteSession = null;
-            if (user && isResume && resumeSessionId) {
-                try {
-                    const remoteSessions = await getActiveSessions(user.uid);
-                    remoteSession = remoteSessions.find(s => s.id === resumeSessionId) || null;
-                } catch (e) {
-                    console.error("Failed to load remote sessions", e);
-                }
-            }
-
-            // Decide which session to use
-            let session = null;
-            if (localSession && remoteSession) {
-                const localTime = localSession.timestamp || 0;
-                let remoteTime = 0;
-                if (remoteSession.timestamp) remoteTime = remoteSession.timestamp;
-                if (remoteSession.updatedAt && remoteSession.updatedAt.toMillis) remoteTime = remoteSession.updatedAt.toMillis();
-                else if (remoteSession.updatedAt) remoteTime = new Date(remoteSession.updatedAt).getTime();
-
-                if (remoteTime > localTime) {
-                    session = remoteSession;
-                    console.log("Using newer REMOTE session");
-                } else {
-                    session = localSession;
-                    console.log("Using newer LOCAL session");
-                }
-            } else {
-                session = remoteSession || localSession;
             }
 
             if (isResume && session) {
@@ -190,6 +159,18 @@ function QuizContent() {
                     if (countFilter !== 'all') {
                         data = data.slice(0, parseInt(countFilter));
                     }
+
+                    // フィルターの結果問題数が0件になった場合のフォールバック（全問題を表示）
+                    if (data.length === 0) {
+                        console.warn("Filtered questions count is 0. Falling back to all questions.");
+                        const fallbackData = await getQuestionsByYear(examId, 'all');
+                        data = isShuffle 
+                            ? [...fallbackData].sort(() => Math.random() - 0.5) 
+                            : fallbackData;
+                        if (countFilter !== 'all') {
+                            data = data.slice(0, parseInt(countFilter));
+                        }
+                    }
                 }
             }
 
@@ -268,7 +249,7 @@ function QuizContent() {
                 userId: user?.uid
             };
 
-            const sessionsKey = user ? `radexam_sessions_${user.uid}` : 'radexam_sessions';
+            const sessionsKey = 'radexam_sessions';
             let localSessions = [];
             if (typeof window !== 'undefined') {
                 const raw = localStorage.getItem(sessionsKey);
@@ -290,10 +271,6 @@ function QuizContent() {
                 
                 localStorage.setItem(sessionsKey, JSON.stringify(localSessions));
             }
-
-            if (user) {
-                saveActiveSession(user.uid, sessionId, sessionData);
-            }
         }
     }, [questions, currentIndex, examId, isFinished, isReviewing, user, sessionId, yearFilter, countFilter, genreFilter, isShuffle, searchParams]);
 
@@ -304,25 +281,29 @@ function QuizContent() {
             ...prev,
             [globalId]: { ...prev[globalId], ...updates }
         }));
-        if (user) {
-            await saveUserProgress(user.uid, globalId, updates);
-        }
+        await saveLocalProgress(globalId, updates);
     };
 
     const handleSaveOverride = async (qid, overrideData) => {
         const globalId = getGlobalQuestionId(examId, qid);
 
         // Update local state
-        setProgress(prev => ({
-            ...prev,
-            [globalId]: {
-                ...prev[globalId],
-                overrideAnswer: overrideData.answer,
-                overrideGenre: overrideData.genre,
-                overrideExplanation: overrideData.explanation, // UI uses this
-                note: overrideData.explanation // DB uses this (for Export compatibility)
-            }
-        }));
+        setProgress(prev => {
+            const current = prev[globalId] || {};
+            return {
+                ...prev,
+                [globalId]: {
+                    ...current,
+                    overrideAnswer: overrideData.answer !== undefined ? overrideData.answer : current.overrideAnswer,
+                    overrideGenre: overrideData.genre !== undefined ? overrideData.genre : current.overrideGenre,
+                    overrideExplanation: overrideData.explanation !== undefined ? overrideData.explanation : current.overrideExplanation,
+                    note: overrideData.explanation !== undefined ? overrideData.explanation : current.note,
+                    overrideQuestion: overrideData.question !== undefined ? overrideData.question : current.overrideQuestion,
+                    overrideOptions: overrideData.options !== undefined ? overrideData.options : current.overrideOptions,
+                    overrideImages: overrideData.images !== undefined ? overrideData.images : current.overrideImages,
+                }
+            };
+        });
 
         // Dynamically update available genres if new one is added
         if (overrideData.genre) {
@@ -341,14 +322,19 @@ function QuizContent() {
             }
         }
 
-        if (user) {
-            // Save as Personal Private Data
-            await saveUserProgress(user.uid, globalId, {
-                overrideAnswer: overrideData.answer,
-                overrideGenre: overrideData.genre,
-                note: overrideData.explanation // Mapped to 'note' for consistency/export
-            });
+        // Save as Personal Private Data (Local)
+        const saveObj = {};
+        if (overrideData.answer !== undefined) saveObj.overrideAnswer = overrideData.answer;
+        if (overrideData.genre !== undefined) saveObj.overrideGenre = overrideData.genre;
+        if (overrideData.explanation !== undefined) {
+            saveObj.overrideExplanation = overrideData.explanation;
+            saveObj.note = overrideData.explanation;
         }
+        if (overrideData.question !== undefined) saveObj.overrideQuestion = overrideData.question;
+        if (overrideData.options !== undefined) saveObj.overrideOptions = overrideData.options;
+        if (overrideData.images !== undefined) saveObj.overrideImages = overrideData.images;
+
+        await saveLocalProgress(globalId, saveObj);
     };
 
     const handleFinish = async () => {
@@ -356,7 +342,7 @@ function QuizContent() {
         setIsReviewing(false);
         
         if (typeof window !== 'undefined' && sessionId) {
-            const sessionsKey = user ? `radexam_sessions_${user.uid}` : 'radexam_sessions';
+            const sessionsKey = 'radexam_sessions';
             const raw = localStorage.getItem(sessionsKey);
             if (raw) {
                 try {
@@ -369,19 +355,12 @@ function QuizContent() {
                     console.error("Failed to remove local session on finish", e);
                 }
             }
-            if (user) {
-                try {
-                    await deleteActiveSession(user.uid, sessionId);
-                } catch (e) {
-                    console.error("Failed to delete remote session on finish", e);
-                }
-            }
         }
     };
 
     const handleHome = async () => {
         if (typeof window !== 'undefined' && sessionId) {
-            const sessionsKey = user ? `radexam_sessions_${user.uid}` : 'radexam_sessions';
+            const sessionsKey = 'radexam_sessions';
             const raw = localStorage.getItem(sessionsKey);
             if (raw) {
                 try {
@@ -392,13 +371,6 @@ function QuizContent() {
                     }
                 } catch (e) {
                     console.error("Failed to remove local session on home", e);
-                }
-            }
-            if (user) {
-                try {
-                    await deleteActiveSession(user.uid, sessionId);
-                } catch (e) {
-                    console.error("Failed to delete remote session on home", e);
                 }
             }
         }
