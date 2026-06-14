@@ -12,7 +12,7 @@ import { initializeLocalExams, getExamTypes } from '@/lib/data';
 import { saveLocalExam, deleteLocalExam, exportAllLocalData, importLocalData } from '@/lib/localDb';
 
 // レジェンドとして適切かどうかを判定する関数
-const isValidLegendText = (text) => {
+const isValidLegendText = (text, item = null, allPageTextItems = []) => {
     if (!text) return false;
     const trimmed = text.trim();
     if (trimmed.length === 0) return false;
@@ -41,6 +41,18 @@ const isValidLegendText = (text) => {
     // 選択肢の記号から始まって、かつ後ろに文章が続いているものを除外する
     if (/^[a-eａ-ｅ][\.．\s\)\)）].{2,}/i.test(trimmed)) {
         return false;
+    }
+
+    // Left-side option prefix check
+    if (item && allPageTextItems.length > 0) {
+        const optionPattern = /^[a-e\uff41-\uff45][\.\uff0e\s\)\)\uff09]?$/i;
+        const sameLineLeftItems = allPageTextItems.filter(other => 
+            Math.abs(other.y - item.y) <= 3 && other.x < item.x
+        );
+        const hasOptionPrefix = sameLineLeftItems.some(other => optionPattern.test(other.text.trim()));
+        if (hasOptionPrefix) {
+            return false;
+        }
     }
 
     // 4. 英数字・スペース・カンマ・ピリオド・ハイフンのみで構成される英語レジェンド表現（例: time intensity curve）
@@ -93,8 +105,8 @@ const cleanLegendPrefix = (text) => {
 };
 
 // 画像の境界とテキスト要素のリストからレジェンドを抽出する関数
-// limits: { leftLimit, rightLimit } を受け取り、探索X範囲を隣接画像の境界中央までに制限する
-const extractLegendForImage = (rect, textItems, limits = {}) => {
+// limits: { leftLimit, rightLimit, topLimit, bottomLimit } を受け取り、探索範囲を制限する
+const extractLegendForImage = (rect, textItems, limits = {}, allPageTextItems = []) => {
     const origMinX = rect.x;
     const origMinY = rect.y;
     const origMaxX = rect.x + rect.w;
@@ -119,6 +131,17 @@ const extractLegendForImage = (rect, textItems, limits = {}) => {
     const searchMarginY = 150;
     const yTolerance = 5;
 
+    // Y軸方向の探索限界のクランプ
+    let searchMaxYLimit = origMinY - searchMarginY;
+    if (limits.bottomLimit !== undefined) {
+        searchMaxYLimit = Math.max(searchMaxYLimit, limits.bottomLimit);
+    }
+    
+    let searchMinYLimit = origMaxY + searchMarginY;
+    if (limits.topLimit !== undefined) {
+        searchMinYLimit = Math.min(searchMinYLimit, limits.topLimit);
+    }
+
     // --- 1. メインタイトルの探索 ---
     let mainTitle = '';
     const usedItems = [];
@@ -127,7 +150,7 @@ const extractLegendForImage = (rect, textItems, limits = {}) => {
     const textBelow = textItems.filter(item => {
         const tyCenter = item.y + item.height / 2;
         const txCenter = item.x + item.width / 2;
-        const yMatch = tyCenter < (origMinY + 10) && tyCenter >= (origMinY - searchMarginY);
+        const yMatch = tyCenter < (origMinY + 10) && tyCenter >= searchMaxYLimit;
         const xMatch = txCenter >= searchMinX && txCenter <= searchMaxX;
         return yMatch && xMatch;
     });
@@ -145,7 +168,7 @@ const extractLegendForImage = (rect, textItems, limits = {}) => {
             
             lineItems.sort((a, b) => a.x - b.x);
             const lineText = lineItems.map(t => t.text).join(' ').trim();
-            if (lineText && isValidLegendText(lineText)) {
+            if (lineText && isValidLegendText(lineText, lineItems[0], allPageTextItems)) {
                 belowLines.push(lineText);
                 lineItems.forEach(item => usedItems.push(item));
             }
@@ -173,7 +196,7 @@ const extractLegendForImage = (rect, textItems, limits = {}) => {
         const textAbove = textItems.filter(item => {
             const tyCenter = item.y + item.height / 2;
             const txCenter = item.x + item.width / 2;
-            const yMatch = tyCenter > (origMaxY - 10) && tyCenter <= (origMaxY + searchMarginY);
+            const yMatch = tyCenter > (origMaxY - 10) && tyCenter <= searchMinYLimit;
             const xMatch = txCenter >= searchMinX && txCenter <= searchMaxX;
             return yMatch && xMatch;
         });
@@ -189,7 +212,7 @@ const extractLegendForImage = (rect, textItems, limits = {}) => {
 
                 lineItems.sort((a, b) => a.x - b.x);
                 const lineText = lineItems.map(t => t.text).join(' ').trim();
-                if (lineText && isValidLegendText(lineText)) {
+                if (lineText && isValidLegendText(lineText, lineItems[0], allPageTextItems)) {
                     aboveLines.push(lineText);
                     lineItems.forEach(item => usedItems.push(item));
                 }
@@ -231,6 +254,8 @@ const extractLegendForImage = (rect, textItems, limits = {}) => {
     
     let descMinX = origMinX - marginX;
     let descMaxX = origMaxX + marginX;
+    let descMinY = origMinY - marginY;
+    let descMaxY = origMaxY + marginY;
 
     if (limits.leftLimit !== undefined) {
         descMinX = Math.max(descMinX, limits.leftLimit);
@@ -238,12 +263,18 @@ const extractLegendForImage = (rect, textItems, limits = {}) => {
     if (limits.rightLimit !== undefined) {
         descMaxX = Math.min(descMaxX, limits.rightLimit);
     }
+    if (limits.bottomLimit !== undefined) {
+        descMinY = Math.max(descMinY, limits.bottomLimit);
+    }
+    if (limits.topLimit !== undefined) {
+        descMaxY = Math.min(descMaxY, limits.topLimit);
+    }
 
     const outsideText = textItems.filter(item => {
         const txCenter = item.x + item.width / 2;
         const tyCenter = item.y + item.height / 2;
         const inExtendedX = txCenter >= descMinX && txCenter <= descMaxX;
-        const inExtendedY = tyCenter >= (origMinY - marginY) && tyCenter <= (origMaxY + marginY);
+        const inExtendedY = tyCenter >= descMinY && tyCenter <= descMaxY;
         const isInside = txCenter >= origMinX && txCenter <= origMaxX && tyCenter >= origMinY && tyCenter <= origMaxY;
         return inExtendedX && inExtendedY && !isInside;
     });
@@ -256,7 +287,7 @@ const extractLegendForImage = (rect, textItems, limits = {}) => {
         const text = item.text.trim();
         if (text.length > 0 && text.length <= shortLabelLimit) {
             const isLabelLike = /^[a-zA-Z0-9-+\s()\/]+$/.test(text) || 
-                                /^(?:右|左|前|後|上|下|側面|正面|造影|シネ|遅延|早期|矢状|横断|冠状|エコー|シンチ|図|表|画像|負荷|安静|運動|ストレス|レスト)(?:時|像)?\d*$/i.test(text) ||
+                                /^(?:右|左|前|後|上|下|側面|正面|前面|後面|造影|シネ|遅延|早期|矢状|横断|冠状|エコー|シンチ|図|表|画像|負荷|安静|運動|ストレス|レスト)(?:時|像)?\d*$/i.test(text) ||
                                 /^(?:anterior|posterior|lateral|coronal|sagittal|transverse|axial|min|hour|hr|sec|iv|pre|post|delay|early|Right|Left|L|R|A|P|H|F|sup|inf)\d*$/i.test(text);
 
             if (isLabelLike && !usedWords.includes(text) && !mainTitle.includes(text)) {
@@ -1073,6 +1104,71 @@ ${JSON.stringify({ question: questionObj.question, options: questionObj.options 
                              matchedQNum
                          });
                      });
+
+                      // Share column legends for grid-arranged images
+                      if (combinedCrops.length >= 2) {
+                          const colGroups = [];
+                          combinedCrops.forEach(crop => {
+                              let added = false;
+                              for (const group of colGroups) {
+                                  const representative = group[0];
+                                  const overlapX = Math.min(crop.maxX, representative.maxX) - Math.max(crop.minX, representative.minX);
+                                  const minW = Math.min(crop.w, representative.w);
+                                  if (overlapX >= minW * 0.8) {
+                                      group.push(crop);
+                                      added = true;
+                                      break;
+                                  }
+                              }
+                              if (!added) {
+                                  colGroups.push([crop]);
+                              }
+                          });
+
+                          colGroups.forEach(group => {
+                              if (group.length < 2) return;
+                              group.sort((a, b) => b.minY - a.minY);
+
+                              const bottomCrop = group[group.length - 1];
+                              const bottomLegend = bottomCrop.legendStr || '';
+                              if (!bottomLegend) return;
+
+                              let mainPart = bottomLegend;
+                              let descPart = '';
+                              const match = bottomLegend.match(/^([^(]+)\(([^)]+)\)$/);
+                              if (match) {
+                                  mainPart = match[1].trim();
+                                  descPart = match[2].trim();
+                              }
+
+                              const hasModalityOrColumnIndicator = /(?:[A-Za-z0-9]+|[\u8840\u6d41\u63db\u6c17\u8ca0\u8377\u5b89\u9759\u904b\u52d5\u30b9\u30c8\u30ec\u30b9\u30ec\u30b9\u30c8\u30b7\u30f3\u30c1\u30a8\u30b3\u30fc\u8d85\u97f3\u6ce2])/i.test(mainPart);
+                              if (!hasModalityOrColumnIndicator) return;
+
+                              group.forEach(crop => {
+                                  const origLegend = crop.legendStr || '';
+                                  let currentMain = origLegend;
+                                  let currentDesc = '';
+                                  const currentMatch = origLegend.match(/^([^(]+)\(([^)]+)\)$/);
+                                  if (currentMatch) {
+                                      currentMain = currentMatch[1].trim();
+                                      currentDesc = currentMatch[2].trim();
+                                  } else if (origLegend) {
+                                      const isLabelLike = /^(?:\u524d\u9762\u50cf|\u5f8c\u9762\u50cf|\u53f3|\u5de6|\u524d|\u5f8c|\u4e0a|\u4e0b|\u5074\u9762|\u6b63\u9762)/.test(origLegend);
+                                      if (isLabelLike) {
+                                          currentDesc = origLegend;
+                                          currentMain = '';
+                                      }
+                                  }
+
+                                  const finalDesc = currentDesc || (crop === bottomCrop ? descPart : '');
+                                  if (finalDesc) {
+                                      crop.legendStr = `${mainPart} (${finalDesc})`;
+                                  } else {
+                                      crop.legendStr = mainPart;
+                                  }
+                              });
+                          });
+                      }
 
                      // ページ全体のレンダリングを実行（Canvas切り出し用）
                      const scale = 1.5;
