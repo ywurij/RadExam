@@ -207,9 +207,9 @@ const extractLegendForImage = (rect, textItems) => {
         return txCenter >= origMinX && txCenter <= origMaxX && tyCenter >= origMinY && tyCenter <= origMaxY;
     });
 
-    // (b) 画像の外側近傍 (上下50px, 左右80px)
-    const marginY = 50;
-    const marginX = 80;
+    // (b) 画像の外側近傍 (上下20px, 左右25pxに制限し、隣接画像のレジェンド等の混入を防止)
+    const marginY = 20;
+    const marginX = 25;
     const outsideText = textItems.filter(item => {
         const txCenter = item.x + item.width / 2;
         const tyCenter = item.y + item.height / 2;
