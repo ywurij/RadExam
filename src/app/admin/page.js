@@ -691,7 +691,7 @@ ${JSON.stringify({ question: questionObj.question, options: questionObj.options 
                 }).join('');
             };
 
-            extractedPages.forEach((page) => {
+            rawPagesTextData.forEach((page) => {
                 // 1. 各テキストアイテムから、標準サイズに近い文字（ベースライン候補）のY座標を集める
                 const heights = page.textItems.map(item => item.height || 0).filter(h => h > 0);
                 const maxPercentileHeight = heights.length > 0 ? Math.max(...heights) : 10;
