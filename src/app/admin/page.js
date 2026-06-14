@@ -37,14 +37,14 @@ const isValidLegendText = (text) => {
     }
 
     // 4. レジェンドらしいキーワード（図番、またはモダリティ・画像用語）が含まれているか
-    // ※ 1文字や2文字のアルファベット（画像ラベルの a, b, A, B など）は例外的に許可する
-    if (trimmed.length <= 2) {
+    // ※ 15文字以下の短いテキストであれば、問題文や選択肢の除外チェックをパスした時点で有効とみなす
+    if (trimmed.length <= 15) {
         return true;
     }
 
     const hasLegendIndicator = /(?:図|画像|写真|Fig|photo|label|panel|表)\s*\d+/i.test(trimmed) || 
                               /^[a-gA-G]\b/.test(trimmed) || // 先頭が a〜g, A〜G のラベル
-                              /(?:CT|MRI|T1|T2|FLAIR|DWI|ADC|PET|MRA|シンチ|エコー|超音波|X線|レントゲン|シネ|造影|強調|矢状|冠状|横断|水平|正面|側面|像|写真|図|グラフ|チャート)/i.test(trimmed);
+                              /(?:CT|MRI|T1|T2|FLAIR|DWI|ADC|PET|MRA|シンチ|エコー|超音波|X線|レントゲン|シネ|造影|強調|矢状|冠状|横断|水平|正面|側面|像|写真|図|グラフ|チャート|マップ|map|SPECT|ブルズアイ|心筋|負荷|安静|遅延|早期)/i.test(trimmed);
 
     return hasLegendIndicator;
 };
@@ -89,7 +89,7 @@ const extractLegendForImage = (rect, textItems) => {
     const imageWidth = origMaxX - origMinX;
 
     // X軸の探索マージン (左右)
-    const xMargin = Math.max(50, Math.min(150, imageWidth * 0.3));
+    const xMargin = Math.max(15, Math.min(50, imageWidth * 0.1));
     const searchMinX = origMinX - xMargin;
     const searchMaxX = origMaxX + xMargin;
 
