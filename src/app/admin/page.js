@@ -1,10 +1,6 @@
 "use client";
 
 import { useState, useEffect } from 'react';
-import { useAuth } from '@/context/AuthContext';
-import { createInviteToken, getInvites, migrateLegacyData } from '@/lib/db';
-import { db } from '@/lib/firebase';
-import { doc, getDoc, collection, getDocs, updateDoc } from 'firebase/firestore';
 import styles from '../login/login.module.scss';
 import { useRouter } from 'next/navigation';
 
@@ -102,6 +98,15 @@ const cleanLegendPrefix = (text) => {
     }
     
     return cleaned;
+};
+
+const buildQuestionId = (year, questionNumber) => {
+    const numericYear = Number(year);
+    const numericQuestionNumber = Number(questionNumber);
+    if (!Number.isInteger(numericYear) || !Number.isInteger(numericQuestionNumber)) {
+        return String(questionNumber ?? '');
+    }
+    return `${numericYear}${String(numericQuestionNumber).padStart(3, '0')}`;
 };
 
 // 画像の境界とテキスト要素のリストからレジェンドを抽出する関数
@@ -316,49 +321,10 @@ const extractLegendForImage = (rect, textItems, limits = {}, allPageTextItems = 
 };
 
 export default function AdminPage() {
-    const { user, isAdmin, logout } = useAuth();
     const router = useRouter();
-    const [inviteLink, setInviteLink] = useState('');
-    const [invites, setInvites] = useState([]);
-    const [loading, setLoading] = useState(false);
-
-    useEffect(() => {
-        if (user) {
-            loadInvites();
-        }
-    }, [user]);
-
-    const loadInvites = async () => {
-        const data = await getInvites();
-        setInvites(data);
-    };
-
-    const generateLink = async () => {
-        setLoading(true);
-        try {
-            const token = await createInviteToken(user.uid);
-            const link = `${window.location.origin}/signup?token=${token}`;
-            setInviteLink(link);
-            loadInvites(); // Refresh list
-        } catch (e) {
-            console.error(e);
-            alert('作成に失敗しました');
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    const copyToClipboard = (text) => {
-        navigator.clipboard.writeText(text);
-        alert('コピーしました');
-    };
-
 
     // --- PDF Parser State Vars ---
     const [localExams, setLocalExams] = useState([]);
-    const [pdfApiBase, setPdfApiBase] = useState('http://localhost:11434/v1');
-    const [pdfModel, setPdfModel] = useState('gemma4:e2b-it-qat');
-    const [parallelLimit, setParallelLimit] = useState(2);
     const [jsonInput, setJsonInput] = useState('');
     const [importType, setImportType] = useState('pdf'); // 'json' or 'pdf'
     const [isParsingPdf, setIsParsingPdf] = useState(false);
@@ -371,7 +337,6 @@ export default function AdminPage() {
     const [examName, setExamName] = useState('');
     const [importMode, setImportMode] = useState('new'); // 'new' or 'existing'
     const [isMerge, setIsMerge] = useState(true);
-    const [useAiParser, setUseAiParser] = useState(true);
     const [examCategory, setExamCategory] = useState('1'); // '1': 放射線科, '2': 放射線診断, '3': 核医学, '4': IVR
     const [activeTab, setActiveTab] = useState('import'); // 'import', 'manage', 'prompt'
     const [importStrategy, setImportStrategy] = useState('merge');
@@ -383,141 +348,8 @@ export default function AdminPage() {
     };
 
     useEffect(() => {
-        if (user) {
-            loadLocalExams();
-        }
-    }, [user]);
-
-    // ローカルVLM APIへのリクエスト関数
-    const requestLocalVlmApi = async (questionObj, apiBase, model) => {
-        const messages = [];
-        const content = [];
-        const hasImages = questionObj.pageImages && questionObj.pageImages.length > 0;
-
-        let prompt = '';
-        if (hasImages) {
-            const imagesInfo = questionObj.pageImages.map((img, idx) => ({
-                index: idx + 1,
-                detected_legend_from_pdf: img.detectedLegend || null
-            }));
-
-            prompt = `あなたは優秀な医学系専門医試験の過去問パーサーです。
-提供された問題文と画像を解析し、指示に従ってデータをクリーンアップ・整形し、JSON形式で出力してください。
-
-【指示】
-1. 問題文（question）: ページ番号（例: ― 1 ―）や不要な問題記号などを除去し、純粋な問題文テキストのみにクリーンアップしてください。
-   * 重要: 「頭部 MRI の T2 強調横断像を示す。」や「可能性が最も高いのはどれか。1 つ選べ。」といった、問題の文脈（画像への言及や問いかけ）は絶対に削除したり省略したりせず、すべて問題文に残してください。
-2. 選択肢（options）: a〜e の選択肢を抽出・クリーンアップしてください。
-3. 画像レジェンド（images）: 提供された各画像に対する説明文（レジェンド）を決定してください。
-   * 下記の「生問題データ」に含まれる \`extracted_images_from_pdf\` に、PDFの画像周辺のレイアウト解析から取得した暫定レジェンド（\`detected_legend_from_pdf\`）が記述されています。
-   * この暫定レジェンド（\`detected_legend_from_pdf\`）を最優先の参考情報とし、問題文の文脈や画像の内容も考慮した上で、各画像が示す具体的な検査法・撮像法・部位など（例:「T2強調横断像」「FLAIR矢状断像」など）を最も適切に表す短い説明文（タイトル）を決定し、\`legend\` に設定してください。
-   * 「図1」や「画像1」といった図番や、記号（a, b 等）のプレフィックスは自動的に除去し、純粋な説明文テキストのみにしてください。
-   * 【重要】もし \`detected_legend_from_pdf\` が \`null\` であり、問題文中にもその画像そのものを説明する具体的な記述（例:「〜のT2強調像を示す」など）が見当たらない場合は、絶対に問題文の他の部分や選択肢からそれらしい名詞を抜き出してレジェンドを創作せず、\`legend\` を必ず \`null\` に設定してください。
-
-【出力JSONスキーマ】
-{
-  "question": "クリーンアップされた問題文（画像への言及を省略せず残したもの）",
-  "options": {
-    "a": "選択肢a",
-    "b": "選択肢b",
-    "c": "選択肢c",
-    "d": "選択肢d",
-    "e": "選択肢e"
-  },
-  "images": [
-    { "legend": "画像1の短い説明（例: T2強調横断像）" },
-    { "legend": "画像2の短い説明（例: FLAIR矢状断像）" }
-  ]
-}
-
-生問題データ:
-${JSON.stringify({ 
-    question: questionObj.question, 
-    options: questionObj.options,
-    extracted_images_from_pdf: imagesInfo
-}, null, 2)}`;
-        } else {
-            prompt = `あなたは優秀な医学系専門医試験の過去問パーサーです。
-提供された問題文を解析し、指示に従ってデータをクリーンアップ・整形し、JSON形式で出力してください。
-
-【指示】
-1. 問題文（question）: ページ番号（例: ― 1 ―）や不要な問題記号などを除去し、純粋な問題文テキストのみにクリーンアップしてください。
-   * 重要: 問題のすべての文脈（問いかけ等）は絶対に削除したり省略したりせず、すべて問題文に残してください。
-2. 選択肢（options）: a〜e の選択肢を抽出・クリーンアップしてください。
-
-【出力JSONスキーマ】
-{
-  "question": "クリーンアップされた問題文",
-  "options": {
-    "a": "選択肢a",
-    "b": "選択肢b",
-    "c": "選択肢c",
-    "d": "選択肢d",
-    "e": "選択肢e"
-  }
-}
-
-生問題データ:
-${JSON.stringify({ question: questionObj.question, options: questionObj.options }, null, 2)}`;
-        }
-
-        content.push({
-            type: "text",
-            text: prompt
-        });
-
-        if (hasImages) {
-            questionObj.pageImages.forEach(img => {
-                content.push({
-                    type: "image_url",
-                    image_url: {
-                        url: img.path // すでに Base64
-                    }
-                });
-            });
-        }
-
-        messages.push({
-            role: "user",
-            content: content
-        });
-
-        try {
-            const response = await fetch(`${apiBase}/chat/completions`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    model: model,
-                    messages: messages,
-                    response_format: { type: "json_object" },
-                    temperature: 0.1
-                })
-            });
-
-            if (!response.ok) return null;
-            const resJson = await response.json();
-            const responseContent = resJson.choices[0].message.content;
-            
-            let cleanContent = responseContent;
-            // Extract JSON from markdown code block if present
-            const match = cleanContent.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
-            if (match) {
-                cleanContent = match[1];
-            }
-            
-            try {
-                return JSON.parse(cleanContent.trim());
-            } catch (parseError) {
-                console.warn('JSON Parse Error:', parseError, '\\nRaw Content:', responseContent);
-                return null;
-            }
-        } catch (e) {
-            console.error('VLM API Call Error:', e);
-            return null;
-        }
-    };
+        loadLocalExams();
+    }, []);
 
     const handleJsonFileUpload = (e) => {
         const file = e.target.files[0];
@@ -643,37 +475,6 @@ ${JSON.stringify({ question: questionObj.question, options: questionObj.options 
             let parsedQuestionsList = [];
 
             let currentQuestion = null;
-             const cleanLegend = (vlmImg, fallback) => {
-                  const isInvalid = (val) => {
-                      if (!val) return true;
-                      const trimmed = val.trim();
-                      return /^(null|none|図\d+|画像\d+|Fig\.?\d+|[a-g]\)?)$/i.test(trimmed);
-                  };
-
-                  if (!vlmImg) return fallback;
-                  if (typeof vlmImg === 'string') {
-                      return isInvalid(vlmImg) ? fallback : vlmImg.trim();
-                  }
-                  if (typeof vlmImg === 'object') {
-                      const val = vlmImg.legend;
-                      if (!val) return fallback;
-                      if (typeof val === 'string') {
-                          return isInvalid(val) ? fallback : val.trim();
-                      }
-                      if (typeof val === 'object' && val !== null) {
-                          if (typeof val.legend === 'string') {
-                              return isInvalid(val.legend) ? fallback : val.legend.trim();
-                          }
-                          const subVal = Object.values(val)[0];
-                          if (typeof subVal === 'string') {
-                              return isInvalid(subVal) ? fallback : subVal.trim();
-                          }
-                          return JSON.stringify(val);
-                      }
-                  }
-                  return fallback;
-             };
-
             const extractLegendsRuleBased = (questionText, imgCount) => {
                 const legends = [];
                 // 医学画像モダリティや撮像法に関するキーワードパターン
@@ -846,7 +647,7 @@ ${JSON.stringify({ question: questionObj.question, options: questionObj.options 
                          // 1. 問題番号が1〜150の範囲内
                          // 2. 行の長さが5文字以上
                          // 3. 問題番号が昇順であること (前のアクティブな問題番号より大きい)
-                         const isSequential = !currentQuestion || qNum > currentQuestion.id;
+                         const isSequential = !currentQuestion || qNum > currentQuestion.questionNumber;
                          if (qNum >= 1 && qNum <= 150 && lineText.length >= 5 && isSequential) {
                              if (currentQuestion) {
                                  parsedQuestionsList.push(currentQuestion);
@@ -855,6 +656,7 @@ ${JSON.stringify({ question: questionObj.question, options: questionObj.options 
                              const questionText = lineText.substring(match[0].length).trim();
                              currentQuestion = {
                                  id: qNum,
+                                 questionNumber: qNum,
                                  question: questionText,
                                  options: {},
                                  images: [],
@@ -1246,7 +1048,7 @@ ${JSON.stringify({ question: questionObj.question, options: questionObj.options 
              // 優先順位1：No.Xラベルが一致する画像をダイレクトにマッピングする
              allExtractedImagesPool.forEach(img => {
                  if (img.matchedQNum !== null && !assignedImages.has(img)) {
-                     const targetQ = parsedQuestionsList.find(q => q.id === img.matchedQNum);
+                     const targetQ = parsedQuestionsList.find(q => q.questionNumber === img.matchedQNum);
                      if (targetQ) {
                          targetQ.pageImages.push(img);
                          assignedImages.add(img);
@@ -1299,154 +1101,42 @@ ${JSON.stringify({ question: questionObj.question, options: questionObj.options 
                 throw new Error('PDFから問題を検出できませんでした。フォーマットを確認してください。');
             }
 
-            // 3. 各問題をローカルVLMに送信 (またはスキップ)
+            // 3. 各問題をルールベースで整形
             const finalQuestions = new Array(totalQs);
             const finalImageMap = {};
+            parsedQuestionsList.forEach((q, idx) => {
+                const fallbackLegends = q.pageImages.map((img, imgIdx) => ({
+                    legend: img.legend || `図${imgIdx + 1}`
+                }));
+                const inferredLegends = q.pageImages.length > 0
+                    ? extractLegendsRuleBased(q.question, q.pageImages.length)
+                    : [];
+                const resolvedLegends = fallbackLegends.map((img, imgIdx) => (
+                    inferredLegends[imgIdx]?.legend ? inferredLegends[imgIdx] : img
+                ));
 
-            if (!useAiParser) {
-                // AIパーサーを使用しない場合、ルールベースで即座にインポート
-                parsedQuestionsList.forEach((q, idx) => {
-                    const finalQ = {
-                        id: q.id,
-                        year: detectedYear,
-                        genre: '',
-                        question: q.question,
-                        options: q.options,
-                        answer: '',
-                        explanation: '',
-                        images: q.pageImages.map((img, imgIdx) => ({ 
-                            path: `image_placeholder`, 
-                            legend: img.legend || `図${imgIdx + 1}` 
-                        }))
-                    };
-                    finalQuestions[idx] = finalQ;
-                    if (q.pageImages.length > 0) {
-                        finalImageMap[idx] = q.pageImages.map((img, imgIdx) => ({
-                            path: img.path,
-                            legend: img.legend || `図${imgIdx + 1}`
-                        }));
-                    }
-                });
-            } else {
-
-                // AIパーサーを使用する場合、並列数を制御してリクエスト
-                let completedCount = 0;
-                const processQuestion = async (q, idx) => {
-                     // 画像がない問題は AI 解析をスキップして即時処理 (処理時間の劇的短縮)
-                     if (q.pageImages.length === 0) {
-                         finalQuestions[idx] = {
-                             id: q.id,
-                             year: detectedYear,
-                             genre: '',
-                             question: q.question,
-                             options: q.options,
-                             answer: '',
-                             explanation: '',
-                             images: []
-                         };
-                         completedCount++;
-                         setPdfProgress({
-                             current: completedCount,
-                             total: totalQs,
-                             status: `問題 ${completedCount}/${totalQs} を処理中 (画像なしのためAIをスキップ)...`
-                         });
-                         return;
-                     }
-                    const vlmResult = await requestLocalVlmApi(q, pdfApiBase, pdfModel);
-                    
-                    completedCount++;
-                    setPdfProgress({
-                        current: completedCount,
-                        total: totalQs,
-                        status: `問題 ${completedCount}/${totalQs} をAI整形・解析中...`
-                    });
-
-                    let finalQ;
-                    if (vlmResult && typeof vlmResult === 'object' && !Array.isArray(vlmResult)) {
-                        finalQ = {
-                            id: q.id,
-                            year: detectedYear,
-                            genre: '',
-                            question: vlmResult.question || q.question, // AIがクリーンアップしたテキストを使用する
-                            options: vlmResult.options || q.options,
-                            answer: '',
-                            explanation: '',
-                            images: q.pageImages.map((img, imgIdx) => {
-                                const vlmLegendObj = vlmResult.images && vlmResult.images[imgIdx];
-                                const vlmLegendText = vlmLegendObj ? vlmLegendObj.legend : null;
-                                const fallbackLegend = img.legend || `図${imgIdx + 1}`;
-                                return {
-                                    path: `image_placeholder`,
-                                    legend: cleanLegend(vlmLegendText, fallbackLegend)
-                                };
-                            })
-                        };
-                    } else {
-                        finalQ = {
-                            id: q.id,
-                            year: detectedYear,
-                            genre: '',
-                            question: q.question,
-                            options: q.options,
-                            answer: '',
-                            explanation: '',
-                            images: q.pageImages.map((img, imgIdx) => ({ 
-                                path: `image_placeholder`, 
-                                legend: img.legend || `図${imgIdx + 1}` 
-                            }))
-                        };
-                    }
-
-                    finalQuestions[idx] = finalQ;
-
-                    if (q.pageImages.length > 0) {
-                        finalImageMap[idx] = q.pageImages.map((img, imgIdx) => {
-                            const vlmLegendObj = vlmResult && typeof vlmResult === 'object' && vlmResult.images ? vlmResult.images[imgIdx] : null;
-                            const vlmLegendText = vlmLegendObj ? vlmLegendObj.legend : null;
-                            const fallbackLegend = img.legend || `図${imgIdx + 1}`;
-                            return {
-                                path: img.path,
-                                legend: cleanLegend(vlmLegendText, fallbackLegend)
-                            };
-                        });
-                    }
+                finalQuestions[idx] = {
+                    id: buildQuestionId(detectedYear, q.questionNumber),
+                    year: detectedYear,
+                    questionNumber: q.questionNumber,
+                    genre: '',
+                    question: q.question,
+                    options: q.options,
+                    answer: '',
+                    explanation: '',
+                    images: resolvedLegends.map((img) => ({
+                        path: 'image_placeholder',
+                        legend: img.legend
+                    }))
                 };
 
-                const limit = parallelLimit;
-                const queue = parsedQuestionsList.map((q, idx) => ({ q, idx }));
-                const workers = Array(Math.min(limit, totalQs)).fill(null).map(async () => {
-                    while (queue.length > 0) {
-                        const item = queue.shift();
-                        if (!item) break;
-                        try {
-                            await processQuestion(item.q, item.idx);
-                        } catch (err) {
-                            console.error(`Failed to process question ${item.idx + 1}:`, err);
-                            // 失敗時のフォールバック
-                            finalQuestions[item.idx] = {
-                                id: item.q.id,
-                                year: detectedYear,
-                                genre: '',
-                                question: item.q.question,
-                                options: item.q.options,
-                                answer: '',
-                                explanation: '',
-                                images: item.q.pageImages.map((img, imgIdx) => ({ 
-                                    path: `image_placeholder`, 
-                                    legend: img.legend || `図${imgIdx + 1}` 
-                                }))
-                            };
-                            if (item.q.pageImages.length > 0) {
-                                finalImageMap[item.idx] = item.q.pageImages.map((img, imgIdx) => ({
-                                    path: img.path,
-                                    legend: img.legend || `図${imgIdx + 1}`
-                                }));
-                            }
-                        }
-                    }
-                });
-                await Promise.all(workers);
-            }
+                if (q.pageImages.length > 0) {
+                    finalImageMap[idx] = q.pageImages.map((img, imgIdx) => ({
+                        path: img.path,
+                        legend: resolvedLegends[imgIdx]?.legend || img.legend || `図${imgIdx + 1}`
+                    }));
+                }
+            });
 
             setParsedQuestions(finalQuestions);
             setImageMap(finalImageMap);
@@ -1699,7 +1389,7 @@ ${JSON.stringify({ question: questionObj.question, options: questionObj.options 
                                         fontSize: '0.95rem'
                                     }}
                                 >
-                                    🧠 過去問PDFから自動インポート (ローカルVLM連携)
+                                    🧠 過去問PDFから自動インポート
                                 </button>
                             </div>
 
@@ -1802,9 +1492,9 @@ ${JSON.stringify({ question: questionObj.question, options: questionObj.options 
                             ) : (
                                 /* 新規：PDF 自動インポート表示 */
                                 <>
-                                    <h3 style={{ margin: 0, marginBottom: '1rem' }}>過去問PDFの自動パース & ローカルVLMによる自動登録</h3>
+                                    <h3 style={{ margin: 0, marginBottom: '1rem' }}>過去問PDFの自動パースと問題登録</h3>
                                     <p style={{ color: '#718096', fontSize: '0.85rem', marginBottom: '1.5rem' }}>
-                                        試験過去問PDFファイルを選択すると、ブラウザ上でテキストと埋め込み画像を自動抽出し、起動中のローカルVLM（Ollama等のAPI）に送信して自動的に整形と画像付き問題のインポートを実行します。
+                                        試験過去問PDFファイルを選択すると、ブラウザ上でテキストと埋め込み画像を自動抽出し、ルールベースのアルゴリズムで問題分割と画像付き問題の登録データ生成を行います。
                                     </p>
 
                                     {/* Exam Category Selection */}
@@ -1840,102 +1530,6 @@ ${JSON.stringify({ question: questionObj.question, options: questionObj.options 
                                     </div>
 
                                     <div style={{
-                                        display: 'grid',
-                                        gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
-                                        gap: '1.5rem',
-                                        background: '#f7fafc',
-                                        padding: '1.25rem',
-                                        borderRadius: '0.375rem',
-                                        border: '1px solid #e2e8f0',
-                                        marginBottom: '1.5rem'
-                                    }}>
-                                        <div>
-                                            <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', color: '#4a5568', marginBottom: '0.4rem' }}>
-                                                ローカルVLM API ベースURL
-                                            </label>
-                                            <input
-                                                type="text"
-                                                value={pdfApiBase}
-                                                onChange={(e) => setPdfApiBase(e.target.value)}
-                                                placeholder="例: http://localhost:11434/v1"
-                                                style={{
-                                                    width: '100%',
-                                                    padding: '0.5rem',
-                                                    borderRadius: '0.25rem',
-                                                    border: '1px solid #cbd5e0',
-                                                    fontSize: '0.9rem',
-                                                    fontFamily: 'monospace'
-                                                }}
-                                            />
-                                            <span style={{ fontSize: '0.75rem', color: '#718096', marginTop: '0.2rem', display: 'block' }}>
-                                                ※Ollamaは 11434、llama-server は 8080 が標準です
-                                            </span>
-                                        </div>
-                                        <div>
-                                            <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', color: '#4a5568', marginBottom: '0.4rem' }}>
-                                                使用するモデル名
-                                            </label>
-                                            <input
-                                                type="text"
-                                                value={pdfModel}
-                                                onChange={(e) => setPdfModel(e.target.value)}
-                                                placeholder="例: gemma4:e4b"
-                                                style={{
-                                                    width: '100%',
-                                                    padding: '0.5rem',
-                                                    borderRadius: '0.25rem',
-                                                    border: '1px solid #cbd5e0',
-                                                    fontSize: '0.9rem',
-                                                    fontFamily: 'monospace'
-                                                }}
-                                            />
-                                            <span style={{ fontSize: '0.75rem', color: '#718096', marginTop: '0.2rem', display: 'block' }}>
-                                                ※Ollamaなどで事前にダウンロード済みのモデル名を指定してください
-                                            </span>
-                                        </div>
-                                        <div>
-                                            <label style={{ display: 'flex', alignItems: 'center', fontWeight: 'bold', fontSize: '0.85rem', color: '#4a5568', marginBottom: '0.4rem', cursor: 'pointer', marginTop: '0.2rem' }}>
-                                                <input
-                                                    type="checkbox"
-                                                    checked={useAiParser}
-                                                    onChange={(e) => setUseAiParser(e.target.checked)}
-                                                    style={{ marginRight: '0.5rem', cursor: 'pointer', width: '16px', height: '16px' }}
-                                                />
-                                                AI (ローカルVLM) で自動整形する
-                                            </label>
-                                            <span style={{ fontSize: '0.75rem', color: '#718096', display: 'block' }}>
-                                                ※チェックを外すと、AIを使用せず数秒でルールベースで分割・インポートします（手動編集がメインの場合に推奨）。
-                                            </span>
-                                        </div>
-                                        <div>
-                                            <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', color: '#4a5568', marginBottom: '0.4rem' }}>
-                                                同時AIリクエスト数 (並列度)
-                                            </label>
-                                            <select
-                                                value={parallelLimit}
-                                                onChange={(e) => setParallelLimit(parseInt(e.target.value))}
-                                                disabled={!useAiParser}
-                                                style={{
-                                                    width: '100%',
-                                                    padding: '0.5rem',
-                                                    borderRadius: '0.25rem',
-                                                    border: '1px solid #cbd5e0',
-                                                    fontSize: '0.9rem',
-                                                    background: !useAiParser ? '#e2e8f0' : '#fff'
-                                                }}
-                                            >
-                                                <option value={1}>1 (直列・低負荷)</option>
-                                                <option value={2}>2 (推奨：適度に並列)</option>
-                                                <option value={3}>3 (高速・マシンパワー要)</option>
-                                                <option value={4}>4 (最大・Ollama負荷高)</option>
-                                            </select>
-                                            <span style={{ fontSize: '0.75rem', color: '#718096', marginTop: '0.2rem', display: 'block' }}>
-                                                ※並列処理により、AI解析の総待ち時間を大幅に削減できます。
-                                            </span>
-                                        </div>
-                                    </div>
-
-                                    <div style={{
                                         border: '2px dashed #cbd5e0',
                                         borderRadius: '0.5rem',
                                         padding: '3rem 1.5rem',
@@ -1951,7 +1545,7 @@ ${JSON.stringify({ question: questionObj.question, options: questionObj.options 
                                             ここに過去問PDFファイルをドロップ、またはクリックして選択
                                         </div>
                                         <div style={{ fontSize: '0.8rem', color: '#718096' }}>
-                                            ※処理を開始する前に、ローカルVLMサーバーが起動していることを確認してください。
+                                            ※画像レジェンドや問題分割はルールベースで推定されるため、保存前に内容を確認してください。
                                         </div>
                                         <input
                                             id="pdf-file-selector"
@@ -2524,166 +2118,6 @@ ${JSON.stringify({ question: questionObj.question, options: questionObj.options 
                     >
                         📋 プロンプトをコピーする
                     </button>
-                </div>
-            )}
-        </div>
-    );
-}
-
-// Sub-component for Data Inspection & Migration
-function DataTools({ uid }) {
-    const [userData, setUserData] = useState(null);
-    const [subData, setSubData] = useState({});
-    const [loading, setLoading] = useState(false);
-    const [migrating, setMigrating] = useState(false);
-    const [migrationResult, setMigrationResult] = useState(null);
-    const [confirmingMigration, setConfirmingMigration] = useState(false);
-    const [confirmingReset, setConfirmingReset] = useState(false);
-    const [inspectError, setInspectError] = useState(null);
-
-    const inspectData = async () => {
-        setLoading(true);
-        setSubData({});
-        setInspectError(null);
-        try {
-            // 1. Fetch User Doc
-            const userDoc = await getDoc(doc(db, 'users', uid));
-            if (userDoc.exists()) {
-                setUserData(userDoc.data());
-            } else {
-                setUserData({ error: 'Document not found' });
-            }
-
-            // 2. Check Potential Subcollections
-            const potentialCollections = ['questions', 'progress', 'records', 'history', 'favorites', 'bookmarks', 'answers'];
-            const foundSubData = {};
-
-            for (const subName of potentialCollections) {
-                try {
-                    const snap = await getDocs(collection(db, 'users', uid, subName));
-                    if (!snap.empty) {
-                        foundSubData[subName] = { count: snap.size, sample: snap.docs[0].data() };
-                    }
-                } catch (e) {
-                    // Do not ignore errors now, log them
-                    console.error(`Error checking subcollection ${subName}:`, e);
-                    foundSubData[subName] = { error: e.message };
-                }
-            }
-            setSubData(foundSubData);
-
-        } catch (e) {
-            console.error(e);
-            setInspectError(e.message);
-            alert("Error inspecting data: " + e.message);
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    const runMigration = async () => {
-        if (!confirmingMigration) {
-            setConfirmingMigration(true);
-            setTimeout(() => setConfirmingMigration(false), 3000);
-            return;
-        }
-
-        setMigrating(true);
-        setMigrationResult(null);
-        setConfirmingMigration(false);
-
-        try {
-            const result = await migrateLegacyData(uid);
-            setMigrationResult(result);
-            if (result.success) {
-                inspectData(); // Refresh view
-            }
-        } catch (e) {
-            console.error(e);
-            setMigrationResult({ success: false, message: 'エラーが発生しました: ' + e.message });
-        } finally {
-            setMigrating(false);
-        }
-    };
-
-    const resetFlag = async () => {
-        if (!confirmingReset) {
-            setConfirmingReset(true);
-            setTimeout(() => setConfirmingReset(false), 3000); // 3-second timeout
-            return;
-        }
-
-        try {
-            await updateDoc(doc(db, 'users', uid), {
-                migrationToNextJsAppDone: false
-            });
-            setConfirmingReset(false); // Reset state immediately on success
-            alert("フラグをリセットしました。\nブラウザをリロードして、一度ログアウトしてください。");
-            inspectData();
-        } catch (e) {
-            console.error(e);
-            alert("エラー: " + e.message);
-        }
-    };
-
-    return (
-        <div className={styles.group} style={{ padding: '1.5rem', border: '1px solid #cbd5e0', borderRadius: '0.5rem', background: '#fff' }}>
-            <h3 style={{ marginBottom: '1rem', fontWeight: 'bold' }}>🛠 データ管理ツール</h3>
-            <p style={{ fontSize: '0.9rem', color: '#666', marginBottom: '1rem' }}>
-                ユーザーデータの構造確認および旧アプリからのデータ移行を行います。
-            </p>
-
-            <div style={{ display: 'flex', gap: '1rem', marginBottom: '1rem' }}>
-                <button onClick={inspectData} disabled={loading} className={styles.btn} style={{ width: 'auto', background: '#4a5568' }}>
-                    {loading ? '調査中...' : 'データを調査'}
-                </button>
-                <button
-                    onClick={runMigration}
-                    disabled={migrating}
-                    className={styles.btn}
-                    style={{
-                        width: 'auto',
-                        background: confirmingMigration ? '#e53e3e' : '#d69e2e',
-                        transition: 'all 0.2s'
-                    }}
-                >
-                    {migrating ? '移行中...' : confirmingMigration ? '本当に実行しますか？' : 'データ移行を実行'}
-                </button>
-                <button
-                    onClick={resetFlag}
-                    className={styles.btn}
-                    style={{
-                        width: 'auto',
-                        background: confirmingReset ? '#e53e3e' : '#718096'
-                    }}
-                >
-                    {confirmingReset ? '本当にリセットする？' : 'フラグをリセット'}
-                </button>
-            </div>
-
-            {inspectError && (
-                <div style={{ padding: '0.5rem', background: '#fed7d7', color: '#c53030', marginBottom: '1rem', borderRadius: '4px' }}>
-                    Inspection Error: {inspectError}
-                </div>
-            )}
-
-            {migrationResult && (
-                <div style={{ marginBottom: '1rem', padding: '0.5rem', background: migrationResult.success ? '#f0fff4' : '#fff5f5', color: migrationResult.success ? '#2f855a' : '#c53030', borderRadius: '0.25rem' }}>
-                    {migrationResult.message}
-                </div>
-            )}
-
-            {userData && (
-                <div style={{ marginTop: '1rem', background: '#2d3748', color: '#fff', padding: '1rem', borderRadius: '0.5rem', fontSize: '0.8rem', overflowX: 'auto' }}>
-                    <p style={{ fontWeight: 'bold', color: '#63b3ed' }}>User Document:</p>
-                    <pre>{JSON.stringify(userData, null, 2)}</pre>
-
-                    <p style={{ fontWeight: 'bold', color: '#63b3ed', marginTop: '1rem' }}>Subcollections Found:</p>
-                    {Object.keys(subData).length > 0 ? (
-                        <pre>{JSON.stringify(subData, null, 2)}</pre>
-                    ) : (
-                        <p>No common subcollections found (checked: questions, progress, records...)</p>
-                    )}
                 </div>
             )}
         </div>

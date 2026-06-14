@@ -7,8 +7,6 @@ import "yet-another-react-lightbox/styles.css";
 import AnswerEditor from './AnswerEditor';
 import { getSelectionCount } from '@/lib/utils';
 import styles from './QuestionCard.module.scss';
-import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
-import { storage } from '@/lib/firebase';
 import 'katex/dist/katex.min.css'; // Import global Katex CSS here just in case
 
 export default function QuestionCard({ question, userProgress, onAnswer, onSaveOverride, onUpdateStatus, availableGenres }) {
@@ -222,64 +220,17 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveO
         setIsSavingExplanation(true);
 
         try {
-            let finalExplanation = draftExplanation;
-
-            // DOMParser to parse HTML and extract Base64 images
-            const parser = new DOMParser();
-            const doc = parser.parseFromString(draftExplanation, 'text/html');
-            const images = doc.querySelectorAll('img');
-            const uploadPromises = [];
-
-            images.forEach((img) => {
-                const src = img.getAttribute('src');
-                if (src && src.startsWith('data:image/')) {
-                    const parts = src.split(',');
-                    if (parts.length < 2) return;
-
-                    const mimeMatch = parts[0].match(/:(.*?);/);
-                    if (!mimeMatch) return;
-                    const mime = mimeMatch[1];
-                    const base64Data = parts[1];
-
-                    // Convert Base64 to Blob
-                    const binaryString = atob(base64Data);
-                    const len = binaryString.length;
-                    const bytes = new Uint8Array(len);
-                    for (let i = 0; i < len; i++) {
-                        bytes[i] = binaryString.charCodeAt(i);
-                    }
-                    const blob = new Blob([bytes], { type: mime });
-                    const extension = mime.split('/')[1] || 'png';
-
-                    const timestamp = Date.now();
-                    const filename = `uploads/${timestamp}_pasted_${Math.random().toString(36).substring(2, 9)}.${extension}`;
-
-                    const uploadPromise = (async () => {
-                        const storageRef = ref(storage, filename);
-                        await uploadBytes(storageRef, blob);
-                        const url = await getDownloadURL(storageRef);
-                        img.setAttribute('src', url);
-                    })();
-                    uploadPromises.push(uploadPromise);
-                }
-            });
-
-            if (uploadPromises.length > 0) {
-                await Promise.all(uploadPromises);
-                finalExplanation = doc.body.innerHTML;
-            }
-
             if (onSaveOverride) {
                 await onSaveOverride(question.id, {
                     answer: currentAnswer,
                     genre: currentGenre,
-                    explanation: finalExplanation
+                    explanation: draftExplanation
                 });
             }
             setIsEditingExplanation(false);
         } catch (error) {
-            console.error("Failed to save explanation / upload images:", error);
-            alert("解説の保存または画像のアップロードに失敗しました。");
+            console.error("Failed to save explanation:", error);
+            alert("解説の保存に失敗しました。");
         } finally {
             setIsSavingExplanation(false);
         }

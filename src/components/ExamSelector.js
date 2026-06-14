@@ -4,7 +4,6 @@ import { useState, useMemo, useEffect } from 'react';
 import { getExamTypes, getYears, getGenres, initializeLocalExams } from '@/lib/data';
 import styles from './ExamSelector.module.scss';
 import { useRouter } from 'next/navigation';
-import { useAuth } from '@/context/AuthContext';
 import { 
     getLocalProgress, 
     getAllLocalOverrides
@@ -12,12 +11,6 @@ import {
 
 export default function ExamSelector() {
     const router = useRouter();
-    const { logout } = useAuth(); // Auth is bypassed, but we keep logout hook for legacy clean UI
-    
-    // Auth bypass: 誰でも管理画面にアクセスできるように管理者フラグを真にする
-    const isAdmin = true;
-    const user = null; // ローカル完結型なのでログイン不要
-    const userData = null;
 
     const [exams, setExams] = useState([]);
     const [selectedExam, setSelectedExam] = useState('');
@@ -381,14 +374,12 @@ export default function ExamSelector() {
                     >
                         ❓ 使い方
                     </button>
-                    {isAdmin && (
-                        <button
-                            onClick={() => router.push('/admin')}
-                            style={{ background: '#2d3748', border: 'none', padding: '0.5rem 1rem', borderRadius: '0.5rem', cursor: 'pointer', color: 'white', fontSize: '1rem', fontWeight: 'bold' }}
-                        >
-                            ⚙️ 試験管理
-                        </button>
-                    )}
+                    <button
+                        onClick={() => router.push('/admin')}
+                        style={{ background: '#2d3748', border: 'none', padding: '0.5rem 1rem', borderRadius: '0.5rem', cursor: 'pointer', color: 'white', fontSize: '1rem', fontWeight: 'bold' }}
+                    >
+                        ⚙️ 試験管理
+                    </button>
                 </div>
             </div>
 
@@ -579,46 +570,6 @@ export default function ExamSelector() {
             <button className={styles.startButton} onClick={handleStart}>
                 演習開始
             </button>
-
-
         </div>
-    );
-}
-
-function LogoutButton({ logout }) {
-    const [confirming, setConfirming] = useState(false);
-    const router = useRouter();
-
-    const handleLogout = async () => {
-        if (!confirming) {
-            setConfirming(true);
-            setTimeout(() => setConfirming(false), 3000);
-            return;
-        }
-        try {
-            await logout();
-        } catch (e) {
-            console.error("Logout failed", e);
-            router.replace('/login');
-        }
-    };
-
-    return (
-        <button
-            onClick={handleLogout}
-            style={{
-                background: confirming ? '#fed7d7' : 'none',
-                border: confirming ? '1px solid #e53e3e' : 'none',
-                borderRadius: confirming ? '4px' : '0',
-                padding: confirming ? '2px 6px' : '0',
-                color: '#e53e3e',
-                cursor: 'pointer',
-                textDecoration: confirming ? 'none' : 'underline',
-                fontSize: '0.9rem',
-                transition: 'all 0.2s'
-            }}
-        >
-            {confirming ? '本当にログアウト？' : 'ログアウト'}
-        </button>
     );
 }

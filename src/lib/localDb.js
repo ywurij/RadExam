@@ -16,6 +16,29 @@ const progressStore = localforage.createInstance({
     description: 'ユーザーの演習進捗、お気に入り、ノートを保存するストア'
 });
 
+const normalizeQuestionId = (question) => {
+    if (!question || typeof question !== 'object') return question;
+
+    const year = Number(question.year);
+    const rawId = String(question.id ?? '').trim();
+    if (!rawId) return question;
+
+    if (/^\d{7}$/.test(rawId)) {
+        return question;
+    }
+
+    const questionNumber = Number(question.questionNumber ?? rawId);
+    if (!Number.isInteger(year) || !Number.isInteger(questionNumber)) {
+        return question;
+    }
+
+    return {
+        ...question,
+        id: `${year}${String(questionNumber).padStart(3, '0')}`,
+        questionNumber,
+    };
+};
+
 // --- カスタム試験 (Custom Exams) 関連のAPI ---
 
 /**
@@ -28,7 +51,7 @@ export const saveLocalExam = async (examId, name, questions, isMerge = false) =>
     if (!examId || !questions) return;
     
     let finalName = name;
-    let finalQuestions = questions;
+    let finalQuestions = questions.map(normalizeQuestionId);
     
     // マージ（追加）モードの場合、既存の試験データを取得してマージする
     if (isMerge) {
@@ -40,10 +63,11 @@ export const saveLocalExam = async (examId, name, questions, isMerge = false) =>
                     finalName = existingExam.name;
                 }
                 if (Array.isArray(existingExam.questions)) {
+                    const normalizedExistingQuestions = existingExam.questions.map(normalizeQuestionId);
                     // 重複問題の排除（同じ問題IDがある場合は新データを優先または無視）
-                    const existingIds = new Set(existingExam.questions.map(q => q.id));
-                    const newQuestions = questions.filter(q => !existingIds.has(q.id));
-                    finalQuestions = [...existingExam.questions, ...newQuestions];
+                    const existingIds = new Set(normalizedExistingQuestions.map(q => q.id));
+                    const newQuestions = finalQuestions.filter(q => !existingIds.has(q.id));
+                    finalQuestions = [...normalizedExistingQuestions, ...newQuestions];
                 }
             }
         } catch (e) {
