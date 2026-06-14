@@ -79,6 +79,176 @@ const cleanLegendPrefix = (text) => {
     return cleaned;
 };
 
+// 画像の境界とテキスト要素のリストからレジェンドを抽出する関数
+const extractLegendForImage = (rect, textItems) => {
+    const origMinX = rect.x;
+    const origMinY = rect.y;
+    const origMaxX = rect.x + rect.w;
+    const origMaxY = rect.y + rect.h;
+
+    const imageWidth = origMaxX - origMinX;
+
+    // X軸の探索マージン (左右)
+    const xMargin = Math.max(50, Math.min(150, imageWidth * 0.3));
+    const searchMinX = origMinX - xMargin;
+    const searchMaxX = origMaxX + xMargin;
+
+    // Y軸の探索マージン (上下)
+    const searchMarginY = 150;
+    const yTolerance = 5;
+
+    // --- 1. メインタイトルの探索 ---
+    let mainTitle = '';
+    
+    // (a) 画像直下の探索
+    const textBelow = textItems.filter(item => {
+        const tyCenter = item.y + item.height / 2;
+        const txCenter = item.x + item.width / 2;
+        const yMatch = tyCenter < (origMinY + 10) && tyCenter >= (origMinY - searchMarginY);
+        const xMatch = txCenter >= searchMinX && txCenter <= searchMaxX;
+        return yMatch && xMatch;
+    });
+
+    let belowLines = [];
+    if (textBelow.length > 0) {
+        // 画像に最も近いY座標を見つける
+        textBelow.sort((a, b) => b.y - a.y);
+        let currentY = textBelow[0].y;
+        let cumulativeHeight = 0;
+        
+        while (currentY && cumulativeHeight < 80) {
+            const lineItems = textBelow.filter(item => Math.abs(item.y - currentY) <= yTolerance);
+            if (lineItems.length === 0) break;
+            
+            lineItems.sort((a, b) => a.x - b.x);
+            const lineText = lineItems.map(t => t.text).join(' ').trim();
+            if (lineText && isValidLegendText(lineText)) {
+                belowLines.push(lineText);
+            }
+            
+            // 次の行を探す (現在の行より下にあるもの)
+            const nextCandidates = textBelow.filter(item => item.y < (currentY - yTolerance));
+            if (nextCandidates.length > 0) {
+                nextCandidates.sort((a, b) => b.y - a.y); // 次に最も高い（近い）Y座標
+                const nextY = nextCandidates[0].y;
+                if (currentY - nextY <= 25) { // 通常の行間範囲内
+                    cumulativeHeight += (currentY - nextY);
+                    currentY = nextY;
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+    }
+
+    // (b) 画像直上の探索 (直下で見つからない場合のみ)
+    let aboveLines = [];
+    if (belowLines.length === 0) {
+        const textAbove = textItems.filter(item => {
+            const tyCenter = item.y + item.height / 2;
+            const txCenter = item.x + item.width / 2;
+            const yMatch = tyCenter > (origMaxY - 10) && tyCenter <= (origMaxY + searchMarginY);
+            const xMatch = txCenter >= searchMinX && txCenter <= searchMaxX;
+            return yMatch && xMatch;
+        });
+
+        if (textAbove.length > 0) {
+            textAbove.sort((a, b) => a.y - b.y);
+            let currentY = textAbove[0].y;
+            let cumulativeHeight = 0;
+
+            while (currentY && cumulativeHeight < 80) {
+                const lineItems = textAbove.filter(item => Math.abs(item.y - currentY) <= yTolerance);
+                if (lineItems.length === 0) break;
+
+                lineItems.sort((a, b) => a.x - b.x);
+                const lineText = lineItems.map(t => t.text).join(' ').trim();
+                if (lineText && isValidLegendText(lineText)) {
+                    aboveLines.push(lineText);
+                }
+
+                // 次の行を探す (現在の行より上にあるもの)
+                const nextCandidates = textAbove.filter(item => item.y > (currentY + yTolerance));
+                if (nextCandidates.length > 0) {
+                    nextCandidates.sort((a, b) => a.y - b.y);
+                    const nextY = nextCandidates[0].y;
+                    if (nextY - currentY <= 25) {
+                        cumulativeHeight += (nextY - currentY);
+                        currentY = nextY;
+                    } else {
+                        break;
+                    }
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+
+    // 複数行を結合してメインタイトルを作成
+    if (belowLines.length > 0) {
+        mainTitle = belowLines.join(' ');
+    } else if (aboveLines.length > 0) {
+        mainTitle = aboveLines.join(' ');
+    }
+
+    // --- 2. 四辺および内部の記述子（ラベル）の回収 ---
+    const descriptorsSet = new Set();
+    const shortLabelLimit = 15; // 記述子とする最大文字数
+
+    const usedWords = mainTitle ? mainTitle.split(/\s+/) : [];
+    
+    // (a) 画像の内側
+    const insideText = textItems.filter(item => {
+        const txCenter = item.x + item.width / 2;
+        const tyCenter = item.y + item.height / 2;
+        return txCenter >= origMinX && txCenter <= origMaxX && tyCenter >= origMinY && tyCenter <= origMaxY;
+    });
+
+    // (b) 画像の外側近傍 (上下50px, 左右80px)
+    const marginY = 50;
+    const marginX = 80;
+    const outsideText = textItems.filter(item => {
+        const txCenter = item.x + item.width / 2;
+        const tyCenter = item.y + item.height / 2;
+        const inExtendedX = txCenter >= (origMinX - marginX) && txCenter <= (origMaxX + marginX);
+        const inExtendedY = tyCenter >= (origMinY - marginY) && tyCenter <= (origMaxY + marginY);
+        const isInside = txCenter >= origMinX && txCenter <= origMaxX && tyCenter >= origMinY && tyCenter <= origMaxY;
+        return inExtendedX && inExtendedY && !isInside;
+    });
+
+    const labelCandidates = [...insideText, ...outsideText];
+
+    labelCandidates.forEach(item => {
+        const text = item.text.trim();
+        if (text.length > 0 && text.length <= shortLabelLimit) {
+            const isLabelLike = /^[a-zA-Z0-9-+\s()\/]+$/.test(text) || 
+                                /^(?:右|左|前|後|上|下|側面|正面|造影|シネ|遅延|早期|矢状|横断|冠状|エコー|シンチ|図|表|画像)\d*$/i.test(text) ||
+                                /^(?:anterior|posterior|lateral|coronal|sagittal|transverse|axial|min|hour|hr|sec|iv|pre|post|delay|early|Right|Left|L|R|A|P|H|F|sup|inf)\d*$/i.test(text);
+
+            if (isLabelLike && !usedWords.includes(text) && !mainTitle.includes(text)) {
+                descriptorsSet.add(text);
+            }
+        }
+    });
+
+    const descriptors = Array.from(descriptorsSet);
+
+    let finalLegend = mainTitle.trim();
+    if (descriptors.length > 0) {
+        const descString = descriptors.join(', ');
+        if (finalLegend) {
+            finalLegend = `${finalLegend} (${descString})`;
+        } else {
+            finalLegend = descString;
+        }
+    }
+
+    return finalLegend;
+};
+
 export default function AdminPage() {
     const { user, isAdmin, logout } = useAuth();
     const router = useRouter();
@@ -381,264 +551,27 @@ ${JSON.stringify({ question: questionObj.question, options: questionObj.options 
                 }
             }
 
-            const extractedPages = [];
-            let imageCounter = 0;
-            const allExtractedImagesPool = [];
+            const rawPagesTextData = [];
 
-            // 1. 各ページからテキストと画像を抽出（問題開始ページから）
+            // 1. 【第1パス】各ページからテキストコンテンツのみを抽出
             for (let pageNum = firstQuestionPage; pageNum <= totalPages; pageNum++) {
-                setPdfProgress(prev => ({ ...prev, status: `ページ ${pageNum}/${totalPages} のテキストと画像を抽出中...` }));
+                setPdfProgress(prev => ({ ...prev, status: `ページ ${pageNum}/${totalPages} のテキストを読み込み中...` }));
                 const page = await pdf.getPage(pageNum);
+                const textContent = await page.getTextContent();
+                const textItems = textContent.items.map(item => ({
+                    text: item.str,
+                    x: item.transform[4],
+                    y: item.transform[5],
+                    width: item.width || (item.str.length * (item.height || item.transform[3] || 10) * 0.8),
+                    height: item.height || item.transform[3] || 0,
+                    pageNum: pageNum
+                }));
 
-
-                 // テキスト抽出
-                 const textContent = await page.getTextContent();
-                 const textItems = textContent.items.map(item => ({
-                     text: item.str,
-                     x: item.transform[4],
-                     y: item.transform[5],
-                     width: item.width || (item.str.length * (item.height || item.transform[3] || 10) * 0.8),
-                     height: item.height || item.transform[3] || 0
-                 }));
-
-                 // 画像オブジェクトの位置情報を収集
-                 const opList = await page.getOperatorList();
-                 const { fnArray, argsArray } = opList;
-                 const rawImageRects = [];
-                 const seenImgKeys = new Set();
-                 
-                 let transformStack = [];
-                 let currentTransform = [1, 0, 0, 1, 0, 0];
-
-                 for (let j = 0; j < fnArray.length; j++) {
-                     const fn = fnArray[j];
-                     const args = argsArray[j];
-                     
-                     if (fn === pdfjsLib.OPS.save) {
-                         transformStack.push([...currentTransform]);
-                     } else if (fn === pdfjsLib.OPS.restore) {
-                         if (transformStack.length > 0) {
-                             currentTransform = transformStack.pop();
-                         }
-                     } else if (fn === pdfjsLib.OPS.transform) {
-                         const [a1, b1, c1, d1, e1, f1] = currentTransform;
-                         const [a2, b2, c2, d2, e2, f2] = args;
-                         currentTransform = [
-                             a1 * a2 + c1 * b2,
-                             b1 * a2 + d1 * b2,
-                             a1 * c2 + c1 * d2,
-                             b1 * c2 + d1 * d2,
-                             a1 * e2 + c1 * f2 + e1,
-                             b1 * e2 + d1 * f2 + f1
-                         ];
-                     } else if (fn === pdfjsLib.OPS.paintImageXObject || fn === pdfjsLib.OPS.paintInlineImageXObject) {
-                         const imgKey = args ? args[0] : null;
-                         if (imgKey) {
-                             if (seenImgKeys.has(imgKey)) continue;
-                             seenImgKeys.add(imgKey);
-                         }
-                         
-                         // CTMからPDF座標を算出
-                         const imgX = currentTransform[4];
-                         const imgY = currentTransform[5];
-                         const imgW = Math.abs(currentTransform[0]);
-                         const imgH = Math.abs(currentTransform[3]);
-                         
-                         // 画像が小さすぎるものは無視（ゴミやドットマーク等の除外）
-                         if (imgW > 5 && imgH > 5) {
-                             rawImageRects.push({
-                                 x: imgX,
-                                 y: imgY,
-                                 w: imgW,
-                                 h: imgH
-                             });
-                         }
-                     }
-                 }
-
-                  const pageImages = [];
-
-                  if (rawImageRects.length > 0) {
-                      // 画像オブジェクトごとに独立したバウンディングボックスを決定する（グループ化は行わない）
-                      const combinedCrops = [];
-                      rawImageRects.forEach(rect => {
-                          const origMinX = rect.x;
-                          const origMinY = rect.y;
-                          const origMaxX = rect.x + rect.w;
-                          const origMaxY = rect.y + rect.h;
-
-                          const margin = 0; // 画像オブジェクトと同じ領域に限定する
-                          const minX = Math.max(0, origMinX - margin);
-                          const minY = Math.max(0, origMinY - margin);
-                          const maxX = origMaxX + margin;
-                          const maxY = origMaxY + margin;
-
-                          // 領域内に含まれるテキストを抽出（問題番号などの検索用）
-                          const containedTexts = textItems.filter(item => {
-                              const txCenter = item.x + item.width / 2;
-                              const tyCenter = item.y + item.height / 2;
-                              return txCenter >= minX && txCenter <= maxX && tyCenter >= minY && tyCenter <= maxY;
-                          });
-
-                          const containedText = containedTexts.map(t => t.text).join(' ');
-                          
-                          let matchedQNum = null;
-                          const labelMatch = containedText.match(/(?:問|問題)\s*(?:番号)?\s*(\d+)/i);
-                          if (labelMatch) {
-                              matchedQNum = parseInt(labelMatch[1]);
-                          }
-
-                          // レジェンドの抽出
-                          // pdf.js の textItem.y は下から上に増加する座標系。
-                          // 横方向の制限は緩くし、純粋に画像にY座標が最も近い「1行」を抽出するロジックに変更。
-                          
-                          let legendStr = '';
-                          const searchMarginY = 150; // 上下に最大150pxまで探す
-                          const yTolerance = 5;      // 同じ行とみなすY座標のブレ幅
-
-                          // X座標（横方向）の探索範囲を設定（同じ高さの別画像のテキストを拾わないため）
-                          const imageWidth = origMaxX - origMinX;
-                          const xMargin = Math.max(50, Math.min(150, imageWidth * 0.3));
-                          const searchMinX = origMinX - xMargin;
-                          const searchMaxX = origMaxX + xMargin;
-
-                          // 1. 画像直下を探す (Y座標が origMinY より小さく、かつ origMinY - 150 より大きい)
-                          const textBelow = textItems.filter(item => {
-                              const tyCenter = item.y + item.height / 2;
-                              const txCenter = item.x + item.width / 2;
-                              // 余白に被ることも考慮して origMinY + 10 くらいまで許容
-                              const yMatch = tyCenter < (origMinY + 10) && tyCenter >= (origMinY - searchMarginY);
-                              const xMatch = txCenter >= searchMinX && txCenter <= searchMaxX;
-                              return yMatch && xMatch;
-                          });
-
-                          if (textBelow.length > 0) {
-                              // Y座標が origMinY に一番近いものを探す (tyCenter が最も大きいもの)
-                              textBelow.sort((a, b) => b.y - a.y);
-                              const closestY = textBelow[0].y;
-                              
-                              // closestY と同じ行 (±5px) にあるテキストを取得し、X座標順に結合
-                              const legendLine = textBelow.filter(item => Math.abs(item.y - closestY) <= yTolerance);
-                              legendLine.sort((a, b) => a.x - b.x);
-                              const candidate = legendLine.map(t => t.text).join(' ').trim();
-                              if (isValidLegendText(candidate)) {
-                                  legendStr = candidate;
-                              }
-                          }
-
-                          // 2. 直下で見つからなければ、画像直上を探す
-                          if (!legendStr) {
-                              // 画像直上 (Y座標が origMaxY より大きく、かつ origMaxY + 150 より小さい)
-                              const textAbove = textItems.filter(item => {
-                                  const tyCenter = item.y + item.height / 2;
-                                  const txCenter = item.x + item.width / 2;
-                                  // 余白に被ることも考慮して origMaxY - 10 くらいまで許容
-                                  const yMatch = tyCenter > (origMaxY - 10) && tyCenter <= (origMaxY + searchMarginY);
-                                  const xMatch = txCenter >= searchMinX && txCenter <= searchMaxX;
-                                  return yMatch && xMatch;
-                              });
-
-                              if (textAbove.length > 0) {
-                                  // Y座標が origMaxY に一番近いもの (tyCenter が最も小さいもの)
-                                  textAbove.sort((a, b) => a.y - b.y);
-                                  const closestY = textAbove[0].y;
-                                  
-                                  const legendLine = textAbove.filter(item => Math.abs(item.y - closestY) <= yTolerance);
-                                  legendLine.sort((a, b) => a.x - b.x);
-                                  const candidate = legendLine.map(t => t.text).join(' ').trim();
-                                  if (isValidLegendText(candidate)) {
-                                      legendStr = candidate;
-                                  }
-                              }
-                          }
-
-                          combinedCrops.push({
-                              minX,
-                              minY,
-                              maxX,
-                              maxY,
-                              w: maxX - minX,
-                              h: maxY - minY,
-                              text: containedText,
-                              legendStr: legendStr,
-                              matchedQNum
-                          });
-                      });
-
-                      // ページ全体のレンダリングを実行（Canvas切り出し用）
-                      const scale = 1.5;
-                      const viewport = page.getViewport({ scale });
-                      const pageCanvas = document.createElement('canvas');
-                      pageCanvas.width = viewport.width;
-                      pageCanvas.height = viewport.height;
-                      const canvasCtx = pageCanvas.getContext('2d');
-                      
-                      await page.render({
-                          canvasContext: canvasCtx,
-                          viewport
-                      }).promise;
-
-                      // 統合バウンディングボックスに基づいて Canvas からクロップ実行
-                      combinedCrops.forEach((crop, idx) => {
-                          const pt1 = viewport.convertToViewportPoint(crop.minX, crop.minY);
-                          const pt2 = viewport.convertToViewportPoint(crop.maxX, crop.maxY);
-
-                          const cropX = Math.min(pt1[0], pt2[0]);
-                          const cropY = Math.min(pt1[1], pt2[1]);
-                          const cropW = Math.abs(pt1[0] - pt2[0]);
-                          const cropH = Math.abs(pt1[1] - pt2[1]);
-
-                          const safeX = Math.max(0, Math.min(cropX, pageCanvas.width));
-                          const safeY = Math.max(0, Math.min(cropY, pageCanvas.height));
-                          const safeW = Math.max(1, Math.min(cropW, pageCanvas.width - safeX));
-                          const safeH = Math.max(1, Math.min(cropH, pageCanvas.height - safeY));
-
-                          const cropCanvas = document.createElement('canvas');
-                          cropCanvas.width = safeW;
-                          cropCanvas.height = safeH;
-                          const cropCtx = cropCanvas.getContext('2d');
-                          cropCtx.drawImage(pageCanvas, safeX, safeY, safeW, safeH, 0, 0, safeW, safeH);
-
-                          const base64Data = cropCanvas.toDataURL('image/png');
-                          
-                          imageCounter++;
-                          
-                          const imgObj = {
-                              path: base64Data,
-                              x: crop.minX,
-                              y: crop.minY,
-                              legend: crop.legendStr || `図${idx + 1}`,
-                              detectedLegend: crop.legendStr || null,
-                              page: pageNum,
-                              matchedQNum: crop.matchedQNum
-                          };
-
-                          pageImages.push(imgObj);
-                          allExtractedImagesPool.push(imgObj);
-                      });
-                  }
-
-
-                 // ページ内の画像を位置順にソート（上から下、左から右）
-                 pageImages.sort((a, b) => {
-                     if (Math.abs(a.y - b.y) > 20) {
-                         return b.y - a.y;
-                     }
-                     return a.x - b.x;
-                 });
-
-                  pageImages.forEach((img, idx) => {
-                      const cleaned = cleanLegendPrefix(img.detectedLegend);
-                      img.legend = cleaned || `図${idx + 1}`;
-                  });
-
-                  extractedPages.push({
-
-                     pageNum,
-                     textItems,
-                     images: pageImages
-                 });
-             }
+                rawPagesTextData.push({
+                    pageNum,
+                    textItems
+                });
+            }
             // 2. 問題分割ロジック
             setPdfProgress(prev => ({ ...prev, status: '問題の分割処理を行っています...' }));
             let parsedQuestionsList = [];
@@ -861,15 +794,18 @@ ${JSON.stringify({ question: questionObj.question, options: questionObj.options 
                                  images: [],
                                  rawTextLines: [questionText],
                                  pageImages: [],
-                                 startPage: page.pageNum // ページ番号を記録する！
+                                 startPage: page.pageNum,
+                                 usedLines: [line]
                              };
                          } else if (currentQuestion) {
                              currentQuestion.rawTextLines.push(lineText);
                              currentQuestion.question += '\n' + lineText;
+                             currentQuestion.usedLines.push(line);
                          }
                      } else if (currentQuestion) {
                          currentQuestion.rawTextLines.push(lineText);
                          currentQuestion.question += '\n' + lineText;
+                         currentQuestion.usedLines.push(line);
                      }
                  });
              });
@@ -887,9 +823,11 @@ ${JSON.stringify({ question: questionObj.question, options: questionObj.options 
                  let lastOptionKey = '';
                  const cleanQuestionLines = [];
                  q.options = {};
+                 q.finalUsedLines = [];
 
-                 q.rawTextLines.forEach(line => {
-                    const trimmed = line.trim();
+                 q.rawTextLines.forEach((lineStr, idx) => {
+                    const originalLine = q.usedLines[idx];
+                    const trimmed = lineStr.trim();
                     const match = trimmed.match(optionPattern);
                     if (match) {
                         optionsStarted = true;
@@ -897,6 +835,7 @@ ${JSON.stringify({ question: questionObj.question, options: questionObj.options 
                         const optText = trimmed.substring(match[0].length).trim();
                         q.options[optKey] = optText;
                         lastOptionKey = optKey;
+                        if (originalLine) q.finalUsedLines.push(originalLine);
                     } else {
                         if (optionsStarted) {
                             // すでに選択肢の抽出が始まっている状態で、選択肢パターンにマッチしない行が来た場合
@@ -914,10 +853,12 @@ ${JSON.stringify({ question: questionObj.question, options: questionObj.options 
                              // まだ 'e' に達していない通常の文言であれば、直前の選択肢の複数行テキストとしてマージ
                              if (lastOptionKey) {
                                  q.options[lastOptionKey] += ' ' + trimmed;
+                                 if (originalLine) q.finalUsedLines.push(originalLine);
                              }
                          } else {
                              // まだ選択肢が始まっていない場合は、純粋な問題文の行
-                             cleanQuestionLines.push(line);
+                             cleanQuestionLines.push(lineStr);
+                             if (originalLine) q.finalUsedLines.push(originalLine);
                          }
                      }
                  });
@@ -929,9 +870,196 @@ ${JSON.stringify({ question: questionObj.question, options: questionObj.options 
             parsedQuestionsList = parsedQuestionsList.filter(q => {
                 const optCount = Object.keys(q.options).length;
                 return optCount >= 3;
-            });
+             });
 
-             // 2.5 全体の画像プールから問題へのマッピング・紐付け処理
+             // 2.3 確定した問題文と選択肢のテキスト要素キーを Set に登録
+             const assignedTextKeys = new Set();
+             parsedQuestionsList.forEach(q => {
+                 if (q.finalUsedLines) {
+                     q.finalUsedLines.forEach(line => {
+                         line.forEach(item => {
+                             const key = `${item.pageNum}_${item.x}_${item.y}_${item.text.trim()}`;
+                             assignedTextKeys.add(key);
+                         });
+                     });
+                 }
+             });
+
+             // 2.4 【第2パス】各ページから画像を抽出し、確定したテキストを除外してレジェンド探索
+             const allExtractedImagesPool = [];
+             let imageCounter = 0;
+
+             for (let pageNum = firstQuestionPage; pageNum <= totalPages; pageNum++) {
+                 setPdfProgress(prev => ({ ...prev, status: `ページ ${pageNum}/${totalPages} の画像を抽出・解析中...` }));
+                 const page = await pdf.getPage(pageNum);
+
+                 const pageData = rawPagesTextData.find(p => p.pageNum === pageNum);
+                 const textItems = pageData ? pageData.textItems : [];
+
+                 const filteredTextItems = textItems.filter(item => {
+                     const key = `${pageNum}_${item.x}_${item.y}_${item.text.trim()}`;
+                     return !assignedTextKeys.has(key);
+                 });
+
+                 // 画像オブジェクトの位置情報を収集
+                 const opList = await page.getOperatorList();
+                 const { fnArray, argsArray } = opList;
+                 const rawImageRects = [];
+                 const seenImgKeys = new Set();
+                 
+                 let transformStack = [];
+                 let currentTransform = [1, 0, 0, 1, 0, 0];
+
+                 for (let j = 0; j < fnArray.length; j++) {
+                     const fn = fnArray[j];
+                     const args = argsArray[j];
+                     
+                     if (fn === pdfjsLib.OPS.save) {
+                         transformStack.push([...currentTransform]);
+                     } else if (fn === pdfjsLib.OPS.restore) {
+                         if (transformStack.length > 0) {
+                             currentTransform = transformStack.pop();
+                         }
+                     } else if (fn === pdfjsLib.OPS.transform) {
+                         const [a1, b1, c1, d1, e1, f1] = currentTransform;
+                         const [a2, b2, c2, d2, e2, f2] = args;
+                         currentTransform = [
+                             a1 * a2 + c1 * b2,
+                             b1 * a2 + d1 * b2,
+                             a1 * c2 + c1 * d2,
+                             b1 * c2 + d1 * d2,
+                             a1 * e2 + c1 * f2 + e1,
+                             b1 * e2 + d1 * f2 + f1
+                         ];
+                     } else if (fn === pdfjsLib.OPS.paintImageXObject || fn === pdfjsLib.OPS.paintInlineImageXObject) {
+                         const imgKey = args ? args[0] : null;
+                         if (imgKey) {
+                             if (seenImgKeys.has(imgKey)) continue;
+                             seenImgKeys.add(imgKey);
+                         }
+                         
+                         const imgX = currentTransform[4];
+                         const imgY = currentTransform[5];
+                         const imgW = Math.abs(currentTransform[0]);
+                         const imgH = Math.abs(currentTransform[3]);
+                         
+                         if (imgW > 5 && imgH > 5) {
+                             rawImageRects.push({
+                                 x: imgX,
+                                 y: imgY,
+                                 w: imgW,
+                                 h: imgH
+                             });
+                         }
+                     }
+                 }
+
+                 const pageImages = [];
+
+                 if (rawImageRects.length > 0) {
+                     const combinedCrops = [];
+                     rawImageRects.forEach(rect => {
+                         const origMinX = rect.x;
+                         const origMinY = rect.y;
+                         const origMaxX = rect.x + rect.w;
+                         const origMaxY = rect.y + rect.h;
+
+                         const containedTexts = textItems.filter(item => {
+                             const txCenter = item.x + item.width / 2;
+                             const tyCenter = item.y + item.height / 2;
+                             return txCenter >= origMinX && txCenter <= origMaxX && tyCenter >= origMinY && tyCenter <= origMaxY;
+                         });
+
+                         const containedText = containedTexts.map(t => t.text).join(' ');
+                         
+                         let matchedQNum = null;
+                         const labelMatch = containedText.match(/(?:問|問題)\s*(?:番号)?\s*(\d+)/i);
+                         if (labelMatch) {
+                             matchedQNum = parseInt(labelMatch[1]);
+                         }
+
+                         const legendStr = extractLegendForImage(rect, filteredTextItems);
+
+                         combinedCrops.push({
+                             minX: origMinX,
+                             minY: origMinY,
+                             maxX: origMaxX,
+                             maxY: origMaxY,
+                             w: rect.w,
+                             h: rect.h,
+                             text: containedText,
+                             legendStr: legendStr,
+                             matchedQNum
+                         });
+                     });
+
+                     // ページ全体のレンダリングを実行（Canvas切り出し用）
+                     const scale = 1.5;
+                     const viewport = page.getViewport({ scale });
+                     const pageCanvas = document.createElement('canvas');
+                     pageCanvas.width = viewport.width;
+                     pageCanvas.height = viewport.height;
+                     const canvasCtx = pageCanvas.getContext('2d');
+                     
+                     await page.render({
+                         canvasContext: canvasCtx,
+                         viewport
+                     }).promise;
+
+                     // 統合バウンディングボックスに基づいて Canvas からクロップ実行
+                     combinedCrops.forEach((crop, idx) => {
+                         const pt1 = viewport.convertToViewportPoint(crop.minX, crop.minY);
+                         const pt2 = viewport.convertToViewportPoint(crop.maxX, crop.maxY);
+
+                         const cropX = Math.min(pt1[0], pt2[0]);
+                         const cropY = Math.min(pt1[1], pt2[1]);
+                         const cropW = Math.abs(pt1[0] - pt2[0]);
+                         const cropH = Math.abs(pt1[1] - pt2[1]);
+
+                         const safeX = Math.max(0, Math.min(cropX, pageCanvas.width));
+                         const safeY = Math.max(0, Math.min(cropY, pageCanvas.height));
+                         const safeW = Math.max(1, Math.min(cropW, pageCanvas.width - safeX));
+                         const safeH = Math.max(1, Math.min(cropH, pageCanvas.height - safeY));
+
+                         const cropCanvas = document.createElement('canvas');
+                         cropCanvas.width = safeW;
+                         cropCanvas.height = safeH;
+                         const cropCtx = cropCanvas.getContext('2d');
+                         cropCtx.drawImage(pageCanvas, safeX, safeY, safeW, safeH, 0, 0, safeW, safeH);
+
+                         const base64Data = cropCanvas.toDataURL('image/png');
+                         
+                         imageCounter++;
+                         
+                         const imgObj = {
+                             path: base64Data,
+                             x: crop.minX,
+                             y: crop.minY,
+                             legend: crop.legendStr || `図${idx + 1}`,
+                             detectedLegend: crop.legendStr || null,
+                             page: pageNum,
+                             matchedQNum: crop.matchedQNum
+                         };
+
+                         pageImages.push(imgObj);
+                         allExtractedImagesPool.push(imgObj);
+                     });
+                 }
+
+                 pageImages.sort((a, b) => {
+                     if (Math.abs(a.y - b.y) > 20) {
+                         return b.y - a.y;
+                     }
+                     return a.x - b.x;
+                 });
+
+                 pageImages.forEach((img, idx) => {
+                     const cleaned = cleanLegendPrefix(img.detectedLegend);
+                     img.legend = cleaned || `図${idx + 1}`;
+                 });
+             }
+
+              // 2.5 全体の画像プールから問題へのマッピング・紐付け処理
              parsedQuestionsList.forEach(q => {
                  q.pageImages = [];
              });
