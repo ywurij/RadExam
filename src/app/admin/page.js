@@ -18,8 +18,15 @@ const isValidLegendText = (text) => {
     if (trimmed.length === 0) return false;
     if (trimmed.length > 50) return false; // レジェンドとしては50文字超は長すぎる
 
+    // フッター（ページ番号）や単なる数値は無条件で除外する (二重の安全弁)
+    const isFooterOrPageNum = /^[ー―-]?\s*\d+\s*[ー―-]?$/.test(trimmed) || /^\d+$/.test(trimmed);
+    if (isFooterOrPageNum) {
+        return false;
+    }
+
     // 1. 問題文によくある表現が含まれている場合は除外
-    const questionKeywords = /どれか|選べ|正しい|誤っている|について|を示|はどれ|次の|のうち|で正しい|最も適切|治療法|診断|病変|状態|所見|特徴|原因|病態|画像として|どれか。|選べ。/;
+    // ※ "病変", "所見" などの名詞は有効なレジェンドに含まりうるため除外キーワードから削除し、指示表現のみに制限
+    const questionKeywords = /どれか|選べ|を示|はどれ|次の|のうち|最も適切|選べ。|どれか。/;
     if (questionKeywords.test(trimmed)) {
         return false;
     }
@@ -219,7 +226,9 @@ const extractLegendForImage = (rect, textItems) => {
         return inExtendedX && inExtendedY && !isInside;
     });
 
-    const labelCandidates = [...insideText, ...outsideText];
+    // 画像オブジェクト枠内（内部）のテキストは測定数値（7mm等）を含みやすいため除外し、
+    // 画像の外側近傍のみを探索範囲とする
+    const labelCandidates = outsideText;
 
     labelCandidates.forEach(item => {
         const text = item.text.trim();
@@ -898,7 +907,8 @@ ${JSON.stringify({ question: questionObj.question, options: questionObj.options 
 
                  const filteredTextItems = textItems.filter(item => {
                      const key = `${pageNum}_${item.x}_${item.y}_${item.text.trim()}`;
-                     return !assignedTextKeys.has(key);
+                     // ページ最下部のフッター領域（y < 60）のテキストアイテムは探索前に除外する
+                     return !assignedTextKeys.has(key) && item.y >= 60;
                  });
 
                  // 画像オブジェクトの位置情報を収集
