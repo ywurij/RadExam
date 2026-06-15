@@ -1487,10 +1487,10 @@ export default function AdminPage() {
             }}>
                 <div>
                     <h1 style={{ fontSize: '1.8rem', fontWeight: 800, margin: 0, color: '#1a202c' }}>
-                        ⚙️ ローカル試験管理ダッシュボード
+                        ⚙️ 試験管理ダッシュボード
                     </h1>
                     <p style={{ margin: '0.2rem 0 0 0', color: '#718096', fontSize: '0.9rem' }}>
-                        PDFから抽出した試験問題の追加、管理、バックアップをローカルブラウザ上で行います。
+                        PDFから抽出した試験問題の追加、管理、バックアップをアプリ上で行います。
                     </p>
                 </div>
                 <button
@@ -1577,9 +1577,9 @@ export default function AdminPage() {
                             ) : (
                                 /* 新規：PDF 自動インポート表示 */
                                 <>
-                                    <h3 style={{ margin: 0, marginBottom: '1rem' }}>過去問PDFの自動パースと問題登録</h3>
+                                    <h3 style={{ margin: 0, marginBottom: '1rem' }}>過去問PDFから自動登録</h3>
                                     <p style={{ color: '#718096', fontSize: '0.85rem', marginBottom: '1.5rem' }}>
-                                        試験過去問PDFファイルを選択すると、ブラウザ上でテキストと埋め込み画像を自動抽出し、ルールベースのアルゴリズムで問題分割と画像付き問題の登録データ生成を行います。
+                                        試験過去問PDFファイルを選択すると、アプリ上で問題文、選択肢、埋め込み画像を抽出し、登録用データを自動作成します。
                                     </p>
 
                                     {/* Exam Category Selection */}
@@ -1628,9 +1628,6 @@ export default function AdminPage() {
                                         <div style={{ fontSize: '3rem', marginBottom: '0.75rem' }}>📁</div>
                                         <div style={{ fontWeight: 'bold', color: '#2d3748', fontSize: '1.05rem', marginBottom: '0.3rem' }}>
                                             ここに過去問PDFファイルをドロップ、またはクリックして選択
-                                        </div>
-                                        <div style={{ fontSize: '0.8rem', color: '#718096' }}>
-                                            ※画像レジェンドや問題分割はルールベースで推定されるため、保存前に内容を確認してください。
                                         </div>
                                         <input
                                             id="pdf-file-selector"
