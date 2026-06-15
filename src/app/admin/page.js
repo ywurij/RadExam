@@ -794,6 +794,26 @@ export default function AdminPage() {
                 }
             };
 
+            const parseQuestionStart = (lineText) => {
+                const standardMatch = lineText.match(questionPattern);
+                if (standardMatch) {
+                    return {
+                        qNum: parseInt(standardMatch[1]),
+                        questionText: lineText.substring(standardMatch[0].length).trim(),
+                    };
+                }
+
+                const gluedMatch = lineText.match(/^\s*(\d{1,3})(?=[A-Za-z(（［【])/);
+                if (gluedMatch) {
+                    return {
+                        qNum: parseInt(gluedMatch[1]),
+                        questionText: lineText.substring(gluedMatch[0].length).trim(),
+                    };
+                }
+
+                return null;
+            };
+
             const buildLineText = (line) => {
                 if (line.length === 0) return '';
                 const heights = line.map(item => item.height || 0).filter(h => h > 0);
@@ -911,9 +931,9 @@ export default function AdminPage() {
                      const lineText = buildLineText(line).trim();
                      if (!lineText) return;
 
-                     const match = lineText.match(questionPattern);
-                     if (match) {
-                         const qNum = parseInt(match[1]);
+                     const parsedStart = parseQuestionStart(lineText);
+                     if (parsedStart) {
+                         const qNum = parsedStart.qNum;
                          // ガード条件: 
                          // 1. 問題番号が1〜150の範囲内
                          // 2. 行の長さが5文字以上
@@ -923,8 +943,7 @@ export default function AdminPage() {
                              if (currentQuestion) {
                                  parsedQuestionsList.push(currentQuestion);
                              }
-                             // 問題開始のテキストから問題番号とそれに続く空白（match[0]）をトリミング
-                             const questionText = lineText.substring(match[0].length).trim();
+                             const questionText = parsedStart.questionText;
                              currentQuestion = {
                                  id: qNum,
                                  questionNumber: qNum,
