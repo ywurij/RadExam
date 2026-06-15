@@ -325,8 +325,6 @@ export default function AdminPage() {
 
     // --- PDF Parser State Vars ---
     const [localExams, setLocalExams] = useState([]);
-    const [jsonInput, setJsonInput] = useState('');
-    const [importType, setImportType] = useState('pdf'); // 'json' or 'pdf'
     const [isParsingPdf, setIsParsingPdf] = useState(false);
     const [pdfProgress, setPdfProgress] = useState({ current: 0, total: 0, status: '' });
     const [parsedQuestions, setParsedQuestions] = useState([]);
@@ -338,7 +336,7 @@ export default function AdminPage() {
     const [importMode, setImportMode] = useState('new'); // 'new' or 'existing'
     const [isMerge, setIsMerge] = useState(true);
     const [examCategory, setExamCategory] = useState('1'); // '1': 放射線科, '2': 放射線診断, '3': 核医学, '4': IVR
-    const [activeTab, setActiveTab] = useState('import'); // 'import', 'manage', 'prompt'
+    const [activeTab, setActiveTab] = useState('import'); // 'import', 'manage'
     const [importStrategy, setImportStrategy] = useState('merge');
     const [editingExamId, setEditingExamId] = useState('');
     const [editingExamName, setEditingExamName] = useState('');
@@ -353,78 +351,6 @@ export default function AdminPage() {
     useEffect(() => {
         loadLocalExams();
     }, []);
-
-    const handleJsonFileUpload = (e) => {
-        const file = e.target.files[0];
-        if (!file) return;
-        const reader = new FileReader();
-        reader.onload = (event) => {
-            setJsonInput(event.target.result);
-        };
-        reader.onerror = (error) => {
-            console.error("Error reading JSON file:", error);
-            setErrorMsg("JSONファイルの読み込みに失敗しました。");
-        };
-        reader.readAsText(file);
-    };
-
-    const handleParseJson = (input) => {
-        setErrorMsg('');
-        setSuccessMsg('');
-
-        try {
-            const parsed = JSON.parse(input);
-            const sourceQuestions = Array.isArray(parsed) ? parsed : parsed.questions;
-
-            if (!Array.isArray(sourceQuestions) || sourceQuestions.length === 0) {
-                throw new Error('questions 配列を含むJSONを入力してください。');
-            }
-
-            const normalizedQuestions = sourceQuestions.map((q, index) => {
-                const year = Number(q.year) || new Date().getFullYear();
-                const questionNumber = Number(q.questionNumber ?? String(q.id ?? '').slice(-3) ?? index + 1) || (index + 1);
-                const id = buildQuestionId(year, questionNumber);
-                const options = q.options && typeof q.options === 'object' ? q.options : {};
-                const images = Array.isArray(q.images) ? q.images : [];
-
-                return {
-                    id,
-                    year,
-                    questionNumber,
-                    genre: q.genre || '',
-                    question: q.question || '',
-                    options: {
-                        a: options.a || '',
-                        b: options.b || '',
-                        c: options.c || '',
-                        d: options.d || '',
-                        e: options.e || '',
-                    },
-                    answer: q.answer || '',
-                    explanation: q.explanation || '',
-                    images: images.map((img, imgIdx) => ({
-                        path: img.path || 'image_placeholder',
-                        legend: img.legend || `図${imgIdx + 1}`,
-                    })),
-                };
-            });
-
-            const nextImageMap = {};
-            normalizedQuestions.forEach((q, index) => {
-                const localImages = q.images.filter((img) => img.path && img.path !== 'image_placeholder');
-                if (localImages.length > 0) {
-                    nextImageMap[index] = localImages;
-                }
-            });
-
-            setParsedQuestions(normalizedQuestions);
-            setImageMap(nextImageMap);
-            setSuccessMsg(`${normalizedQuestions.length} 問のJSONを読み込みました。内容を確認して保存してください。`);
-        } catch (e) {
-            console.error(e);
-            setErrorMsg(`JSONの解析に失敗しました: ${e.message}`);
-        }
-    };
 
     const handleImageChange = (questionIndex, file) => {
         if (!file) return;
@@ -1468,7 +1394,6 @@ export default function AdminPage() {
             setSuccessMsg(`試験「${examName}」をローカルに正常に保存しました！`);
             setExamId('');
             setExamName('');
-            setJsonInput('');
             setParsedQuestions([]);
             setImageMap({});
             setIsMerge(true); // デフォルト値をリセット
@@ -1612,20 +1537,6 @@ export default function AdminPage() {
                 >
                     🛠 データ管理 / バックアップ
                 </button>
-                <button
-                    onClick={() => setActiveTab('prompt')}
-                    style={{
-                        padding: '0.5rem 1rem',
-                        background: activeTab === 'prompt' ? '#3182ce' : '#fff',
-                        color: activeTab === 'prompt' ? '#fff' : '#4a5568',
-                        border: '1px solid #cbd5e0',
-                        borderRadius: '0.375rem',
-                        fontWeight: 'bold',
-                        cursor: 'pointer'
-                    }}
-                >
-                    🤖 AI指示プロンプト
-                </button>
             </div>
 
             {activeTab === 'import' && (
@@ -1637,42 +1548,6 @@ export default function AdminPage() {
                         boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
                         marginBottom: '1.5rem'
                     }}>
-                            {/* インポート方法の切り替え */}
-                            <div style={{ display: 'flex', borderBottom: '2px solid #edf2f7', marginBottom: '1.5rem', paddingBottom: '0.5rem' }}>
-                                <button
-                                    onClick={() => setImportType('json')}
-                                    disabled={isParsingPdf}
-                                    style={{
-                                        padding: '0.5rem 1rem',
-                                        background: 'none',
-                                        border: 'none',
-                                        borderBottom: importType === 'json' ? '3px solid #3182ce' : '3px solid transparent',
-                                        color: importType === 'json' ? '#3182ce' : '#718096',
-                                        fontWeight: 'bold',
-                                        cursor: 'pointer',
-                                        fontSize: '0.95rem'
-                                    }}
-                                >
-                                    📄 JSON貼り付け / ファイル読み込み
-                                </button>
-                                <button
-                                    onClick={() => setImportType('pdf')}
-                                    disabled={isParsingPdf}
-                                    style={{
-                                        padding: '0.5rem 1rem',
-                                        background: 'none',
-                                        border: 'none',
-                                        borderBottom: importType === 'pdf' ? '3px solid #3182ce' : '3px solid transparent',
-                                        color: importType === 'pdf' ? '#3182ce' : '#718096',
-                                        fontWeight: 'bold',
-                                        cursor: 'pointer',
-                                        fontSize: '0.95rem'
-                                    }}
-                                >
-                                    🧠 過去問PDFから自動インポート
-                                </button>
-                            </div>
-
                             {isParsingPdf ? (
                                 /* パース進捗表示画面 */
                                 <div style={{ padding: '2rem 1rem', textAlign: 'center' }}>
@@ -1699,76 +1574,6 @@ export default function AdminPage() {
                                         </div>
                                     )}
                                 </div>
-                            ) : importType === 'json' ? (
-                                /* 従来通りの JSON インポート表示 */
-                                <>
-                                    <div style={{
-                                        display: 'flex',
-                                        justifyContent: 'space-between',
-                                        alignItems: 'center',
-                                        marginBottom: '1rem',
-                                        flexWrap: 'wrap',
-                                        gap: '1rem'
-                                    }}>
-                                        <h3 style={{ margin: 0 }}>AIから出力されたJSONを貼り付ける、またはファイルを選択する</h3>
-                                        <div>
-                                            <label style={{
-                                                padding: '0.5rem 1rem',
-                                                background: '#38a169',
-                                                color: 'white',
-                                                borderRadius: '0.375rem',
-                                                fontWeight: 'bold',
-                                                cursor: 'pointer',
-                                                fontSize: '0.85rem',
-                                                display: 'inline-block'
-                                            }}>
-                                                📁 JSONファイルを選択
-                                                <input
-                                                    type="file"
-                                                    accept=".json"
-                                                    style={{ display: 'none' }}
-                                                    onChange={handleJsonFileUpload}
-                                                />
-                                            </label>
-                                        </div>
-                                    </div>
-                                    <p style={{ color: '#718096', fontSize: '0.85rem', marginBottom: '1rem' }}>
-                                        AIチャットから出力された問題データのJSONをコピーして以下の枠内に貼り付けるか、JSONファイルを直接選択してください。
-                                        （プロンプトは上部の「AI指示プロンプト」タブでコピーできます）
-                                    </p>
-                                    <textarea
-                                        value={jsonInput}
-                                        onChange={(e) => setJsonInput(e.target.value)}
-                                        placeholder='ここにJSONを入力してください...&#10;例:&#10;{&#10;  "questions": [&#10;    { "id": 2026001, "year": 2026, ... }&#10;  ]&#10;}'
-                                        style={{
-                                            width: '100%',
-                                            height: '350px',
-                                            padding: '0.75rem',
-                                            borderRadius: '0.375rem',
-                                            border: '1px solid #cbd5e0',
-                                            fontFamily: 'Courier, monospace',
-                                            fontSize: '0.85rem',
-                                            marginBottom: '1rem',
-                                            resize: 'vertical'
-                                        }}
-                                    />
-                                    <button
-                                        onClick={() => handleParseJson(jsonInput)}
-                                        style={{
-                                            width: '100%',
-                                            padding: '0.75rem',
-                                            background: '#3182ce',
-                                            color: 'white',
-                                            border: 'none',
-                                            borderRadius: '0.375rem',
-                                            fontWeight: 'bold',
-                                            cursor: 'pointer',
-                                            fontSize: '1rem'
-                                        }}
-                                    >
-                                        解析してステップ2に進む
-                                    </button>
-                                </>
                             ) : (
                                 /* 新規：PDF 自動インポート表示 */
                                 <>
@@ -2520,71 +2325,6 @@ export default function AdminPage() {
                 </div>
             )}
 
-            {/* Tab Content 3: Prompt */}
-            {activeTab === 'prompt' && (
-                <div style={{
-                    background: '#fff',
-                    padding: '1.5rem',
-                    borderRadius: '0.5rem',
-                    boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
-                }}>
-                    <h3 style={{ marginTop: 0, marginBottom: '0.5rem' }}>🤖 AI指示プロンプトテンプレート</h3>
-                    <p style={{ color: '#718096', fontSize: '0.85rem', marginBottom: '1.2rem' }}>
-                        本システムでインポート可能な JSON データを AI (Claude や ChatGPT 等) に抽出させるための指示プロンプトです。以下のスキーマ構造に則っています。
-                    </p>
-                    
-                    <div style={{
-                        background: '#f7fafc',
-                        padding: '1rem',
-                        borderRadius: '0.375rem',
-                        border: '1px solid #e2e8f0',
-                        marginBottom: '1.2rem',
-                        fontFamily: 'monospace',
-                        whiteSpace: 'pre-wrap',
-                        fontSize: '0.85rem',
-                        color: '#4a5568'
-                    }}>
-{`{
-  "questions": [
-    {
-      "id": 2026001, 
-      "year": 2026, 
-      "genre": "", 
-      "question": "問題文をここに入れます。",
-      "options": {
-        "a": "選択肢aのテキスト",
-        "b": "選択肢bのテキスト",
-        "c": "選択肢cのテキスト",
-        "d": "選択肢d of テキスト",
-        "e": "選択肢e of テキスト"
-      },
-      "images": [],
-      "answer": "", 
-      "explanation": ""
-    }
-  ]
-}`}
-                    </div>
-                    <button
-                        onClick={() => {
-                            const promptText = `あなたは優秀なドキュメント構造化AIです。添付された試験問題PDF（またはテキスト）を解析し、以下の厳密なJSON Schemaに従って、試験問題と選択肢をすべて抽出してください。\n\n【指示事項】\n- 各問題のIDは、"年度(4桁) + 3桁の問題番号" の形式にしてください（例: 2026年度の問題1なら 2026001、問題10なら 2026010）。\n- 表記のゆれ（1つ選べ、2つ選べ等）に関わらず、全ての選択肢を a〜e にマッピングしてください。\n- 出力はJSONフォーマットのみ（マークダウンのバッククォート \`\`\`json で囲ってもOK）とし、余計な説明文は一切含めないでください。\n- 正解（answer）はデフォルトで空欄 "" としてください。\n- 解説（explanation）はデフォルトで空欄 "" としてください。\n- 画像が含まれる問題（図がある問題など）については、images配列に [{"path": "image_placeholder", "legend": "図1"}] のようにプレースホルダを入れてください（画像データ自体は後で登録します）。画像がない場合は空の配列 [] としてください。\n- 数式、化学式、単位等で使われる上付き文字（例: ², ³, ᵃ, ᵇ 等）や下付き文字（例: ₁, ₂, ₐ, ₓ 等）は、Unicodeの上付き・下付き文字のままで出力せず、必ず <sup>text</sup> や <sub>text</sub> 形式のHTMLタグで囲んで出力してください。（例: m² は m<sup>2</sup>、H<sub>2</sub>O は H<sub>2</sub>O、10⁻⁵ は 10<sup>-5</sup> としてください）\n\n【スキーマ】\n{\n  "questions": [\n    {\n      "id": 2026001, \n      "year": 2026, \n      "genre": "", \n      "question": "問題文をここに入れます。",\n      "options": {\n        "a": "選択肢aのテキスト",\n        "b": "選択肢bのテキスト",\n        "c": "選択肢cのテキスト",\n        "d": "選択肢dのテキスト",\n        "e": "選択肢eのテキスト"\n      },\n      "images": [],\n      "answer": "", \n      "explanation": ""\n    }\n  ]\n}`;
-                            navigator.clipboard.writeText(promptText);
-                            alert("プロンプトをクリップボードにコピーしました！");
-                        }}
-                        style={{
-                            padding: '0.6rem 1.2rem',
-                            background: '#3182ce',
-                            color: 'white',
-                            border: 'none',
-                            borderRadius: '0.375rem',
-                            fontWeight: 'bold',
-                            cursor: 'pointer'
-                        }}
-                    >
-                        📋 プロンプトをコピーする
-                    </button>
-                </div>
-            )}
         </div>
     );
 }
