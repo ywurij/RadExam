@@ -5,7 +5,7 @@ import styles from '../login/login.module.scss';
 import { useRouter } from 'next/navigation';
 
 import { initializeLocalExams, getExamTypes } from '@/lib/data';
-import { saveLocalExam, deleteLocalExam, exportAllLocalData, importLocalData } from '@/lib/localDb';
+import { saveLocalExam, deleteLocalExam, exportAllLocalData, importLocalData, getLocalExam } from '@/lib/localDb';
 
 // レジェンドとして適切かどうかを判定する関数
 const isValidLegendText = (text, item = null, allPageTextItems = []) => {
@@ -340,6 +340,9 @@ export default function AdminPage() {
     const [examCategory, setExamCategory] = useState('1'); // '1': 放射線科, '2': 放射線診断, '3': 核医学, '4': IVR
     const [activeTab, setActiveTab] = useState('import'); // 'import', 'manage', 'prompt'
     const [importStrategy, setImportStrategy] = useState('merge');
+    const [editingExamId, setEditingExamId] = useState('');
+    const [editingExamName, setEditingExamName] = useState('');
+    const [editingQuestions, setEditingQuestions] = useState([]);
 
     const loadLocalExams = async () => {
         await initializeLocalExams();
@@ -363,6 +366,274 @@ export default function AdminPage() {
             setErrorMsg("JSONファイルの読み込みに失敗しました。");
         };
         reader.readAsText(file);
+    };
+
+    const handleParseJson = (input) => {
+        setErrorMsg('');
+        setSuccessMsg('');
+
+        try {
+            const parsed = JSON.parse(input);
+            const sourceQuestions = Array.isArray(parsed) ? parsed : parsed.questions;
+
+            if (!Array.isArray(sourceQuestions) || sourceQuestions.length === 0) {
+                throw new Error('questions 配列を含むJSONを入力してください。');
+            }
+
+            const normalizedQuestions = sourceQuestions.map((q, index) => {
+                const year = Number(q.year) || new Date().getFullYear();
+                const questionNumber = Number(q.questionNumber ?? String(q.id ?? '').slice(-3) ?? index + 1) || (index + 1);
+                const id = buildQuestionId(year, questionNumber);
+                const options = q.options && typeof q.options === 'object' ? q.options : {};
+                const images = Array.isArray(q.images) ? q.images : [];
+
+                return {
+                    id,
+                    year,
+                    questionNumber,
+                    genre: q.genre || '',
+                    question: q.question || '',
+                    options: {
+                        a: options.a || '',
+                        b: options.b || '',
+                        c: options.c || '',
+                        d: options.d || '',
+                        e: options.e || '',
+                    },
+                    answer: q.answer || '',
+                    explanation: q.explanation || '',
+                    images: images.map((img, imgIdx) => ({
+                        path: img.path || 'image_placeholder',
+                        legend: img.legend || `図${imgIdx + 1}`,
+                    })),
+                };
+            });
+
+            const nextImageMap = {};
+            normalizedQuestions.forEach((q, index) => {
+                const localImages = q.images.filter((img) => img.path && img.path !== 'image_placeholder');
+                if (localImages.length > 0) {
+                    nextImageMap[index] = localImages;
+                }
+            });
+
+            setParsedQuestions(normalizedQuestions);
+            setImageMap(nextImageMap);
+            setSuccessMsg(`${normalizedQuestions.length} 問のJSONを読み込みました。内容を確認して保存してください。`);
+        } catch (e) {
+            console.error(e);
+            setErrorMsg(`JSONの解析に失敗しました: ${e.message}`);
+        }
+    };
+
+    const handleImageChange = (questionIndex, file) => {
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = (event) => {
+            const imagePath = event.target?.result;
+            if (typeof imagePath !== 'string') return;
+
+            setImageMap((prev) => {
+                const currentImages = prev[questionIndex] || [];
+                return {
+                    ...prev,
+                    [questionIndex]: [
+                        ...currentImages,
+                        {
+                            path: imagePath,
+                            legend: `図${currentImages.length + 1}`,
+                        },
+                    ],
+                };
+            });
+        };
+        reader.onerror = (error) => {
+            console.error('Image load error:', error);
+            setErrorMsg('画像の読み込みに失敗しました。');
+        };
+        reader.readAsDataURL(file);
+    };
+
+    const handleRemoveImage = (questionIndex, imageIndex) => {
+        setImageMap((prev) => {
+            const currentImages = prev[questionIndex] || [];
+            const nextImages = currentImages.filter((_, idx) => idx !== imageIndex);
+            if (nextImages.length === 0) {
+                const { [questionIndex]: _removed, ...rest } = prev;
+                return rest;
+            }
+            return {
+                ...prev,
+                [questionIndex]: nextImages,
+            };
+        });
+    };
+
+    const loadExamForEditing = async (exam) => {
+        try {
+            const questions = await getLocalExam(exam.id);
+            const normalizedQuestions = questions.map((q, index) => {
+                const year = Number(q.year) || new Date().getFullYear();
+                const questionNumber = Number(q.questionNumber ?? String(q.id ?? '').slice(-3) ?? index + 1) || (index + 1);
+                const id = buildQuestionId(year, questionNumber);
+                return {
+                    id,
+                    year,
+                    questionNumber,
+                    genre: q.genre || '',
+                    question: q.question || '',
+                    options: {
+                        a: q.options?.a || '',
+                        b: q.options?.b || '',
+                        c: q.options?.c || '',
+                        d: q.options?.d || '',
+                        e: q.options?.e || '',
+                    },
+                    answer: q.answer || '',
+                    explanation: q.explanation || '',
+                    images: Array.isArray(q.images) ? q.images.map((img, imgIdx) => ({
+                        path: img.path || 'image_placeholder',
+                        legend: img.legend || `図${imgIdx + 1}`,
+                    })) : [],
+                };
+            });
+
+            setEditingExamId(exam.id);
+            setEditingExamName(exam.name);
+            setEditingQuestions(normalizedQuestions);
+            setSuccessMsg(`試験「${exam.name}」を編集モードで読み込みました。`);
+            setErrorMsg('');
+        } catch (e) {
+            console.error(e);
+            setErrorMsg(`試験データの読み込みに失敗しました: ${e.message}`);
+        }
+    };
+
+    const updateEditingQuestion = (questionIndex, updater) => {
+        setEditingQuestions((prev) => prev.map((question, index) => (
+            index === questionIndex ? updater(question) : question
+        )));
+    };
+
+    const handleEditingQuestionMetaChange = (questionIndex, field, value) => {
+        updateEditingQuestion(questionIndex, (question) => {
+            const nextQuestion = {
+                ...question,
+                [field]: value,
+            };
+            const nextYear = field === 'year' ? Number(value) || question.year : question.year;
+            const nextQuestionNumber = field === 'questionNumber' ? Number(value) || question.questionNumber : question.questionNumber;
+            return {
+                ...nextQuestion,
+                year: nextYear,
+                questionNumber: nextQuestionNumber,
+                id: buildQuestionId(nextYear, nextQuestionNumber),
+            };
+        });
+    };
+
+    const handleEditingQuestionFieldChange = (questionIndex, field, value) => {
+        updateEditingQuestion(questionIndex, (question) => ({
+            ...question,
+            [field]: value,
+        }));
+    };
+
+    const handleEditingOptionChange = (questionIndex, optionKey, value) => {
+        updateEditingQuestion(questionIndex, (question) => ({
+            ...question,
+            options: {
+                ...question.options,
+                [optionKey]: value,
+            },
+        }));
+    };
+
+    const handleEditingImageLegendChange = (questionIndex, imageIndex, value) => {
+        updateEditingQuestion(questionIndex, (question) => ({
+            ...question,
+            images: question.images.map((image, idx) => (
+                idx === imageIndex ? { ...image, legend: value } : image
+            )),
+        }));
+    };
+
+    const handleEditingImageAdd = (questionIndex, file) => {
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = (event) => {
+            const imagePath = event.target?.result;
+            if (typeof imagePath !== 'string') return;
+
+            updateEditingQuestion(questionIndex, (question) => ({
+                ...question,
+                images: [
+                    ...question.images,
+                    {
+                        path: imagePath,
+                        legend: `図${question.images.length + 1}`,
+                    },
+                ],
+            }));
+        };
+        reader.onerror = (error) => {
+            console.error('Editing image load error:', error);
+            setErrorMsg('画像の読み込みに失敗しました。');
+        };
+        reader.readAsDataURL(file);
+    };
+
+    const handleEditingImageRemove = (questionIndex, imageIndex) => {
+        updateEditingQuestion(questionIndex, (question) => ({
+            ...question,
+            images: question.images.filter((_, idx) => idx !== imageIndex),
+        }));
+    };
+
+    const handleAddEditingQuestion = () => {
+        const currentYear = editingQuestions[0]?.year || new Date().getFullYear();
+        const nextQuestionNumber = editingQuestions.reduce((max, question) => (
+            Math.max(max, Number(question.questionNumber) || 0)
+        ), 0) + 1;
+
+        setEditingQuestions((prev) => [
+            ...prev,
+            {
+                id: buildQuestionId(currentYear, nextQuestionNumber),
+                year: currentYear,
+                questionNumber: nextQuestionNumber,
+                genre: '',
+                question: '',
+                options: { a: '', b: '', c: '', d: '', e: '' },
+                answer: '',
+                explanation: '',
+                images: [],
+            },
+        ]);
+    };
+
+    const handleDeleteEditingQuestion = (questionIndex) => {
+        if (!confirm('この問題を削除しますか？')) return;
+        setEditingQuestions((prev) => prev.filter((_, index) => index !== questionIndex));
+    };
+
+    const handleSaveEditedExam = async () => {
+        if (!editingExamId || !editingExamName.trim()) {
+            setErrorMsg('編集対象の試験IDと試験名が必要です。');
+            return;
+        }
+
+        try {
+            await saveLocalExam(editingExamId, editingExamName, editingQuestions, false);
+            await initializeLocalExams(true);
+            await loadLocalExams();
+            setSuccessMsg(`試験「${editingExamName}」の編集内容を保存しました。`);
+        } catch (e) {
+            console.error(e);
+            setErrorMsg(`編集内容の保存に失敗しました: ${e.message}`);
+        }
     };
 
     const handlePdfImport = async (e) => {
@@ -2023,35 +2294,220 @@ export default function AdminPage() {
                                                 ID: {exam.id} | 問題数: {exam.count}問
                                             </span>
                                         </div>
-                                        <button
-                                            onClick={() => handleDeleteExam(exam.id, exam.name)}
-                                            style={{
-                                                padding: '0.4rem 0.8rem',
-                                                background: '#fff',
-                                                border: '1px solid #e53e3e',
-                                                borderRadius: '0.25rem',
-                                                color: '#e53e3e',
-                                                fontWeight: 'bold',
-                                                fontSize: '0.8rem',
-                                                cursor: 'pointer',
-                                                transition: 'all 0.2s'
-                                            }}
-                                            onMouseEnter={e => {
-                                                e.target.style.background = '#e53e3e';
-                                                e.target.style.color = '#fff';
-                                            }}
-                                            onMouseLeave={e => {
-                                                e.target.style.background = '#fff';
-                                                e.target.style.color = '#e53e3e';
-                                            }}
-                                        >
-                                            削除
-                                        </button>
+                                        <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                            <button
+                                                onClick={() => loadExamForEditing(exam)}
+                                                style={{
+                                                    padding: '0.4rem 0.8rem',
+                                                    background: '#fff',
+                                                    border: '1px solid #3182ce',
+                                                    borderRadius: '0.25rem',
+                                                    color: '#3182ce',
+                                                    fontWeight: 'bold',
+                                                    fontSize: '0.8rem',
+                                                    cursor: 'pointer'
+                                                }}
+                                            >
+                                                編集
+                                            </button>
+                                            <button
+                                                onClick={() => handleDeleteExam(exam.id, exam.name)}
+                                                style={{
+                                                    padding: '0.4rem 0.8rem',
+                                                    background: '#fff',
+                                                    border: '1px solid #e53e3e',
+                                                    borderRadius: '0.25rem',
+                                                    color: '#e53e3e',
+                                                    fontWeight: 'bold',
+                                                    fontSize: '0.8rem',
+                                                    cursor: 'pointer',
+                                                    transition: 'all 0.2s'
+                                                }}
+                                                onMouseEnter={e => {
+                                                    e.target.style.background = '#e53e3e';
+                                                    e.target.style.color = '#fff';
+                                                }}
+                                                onMouseLeave={e => {
+                                                    e.target.style.background = '#fff';
+                                                    e.target.style.color = '#e53e3e';
+                                                }}
+                                            >
+                                                削除
+                                            </button>
+                                        </div>
                                     </div>
                                 ))}
                             </div>
                         )}
                     </div>
+
+                    {editingExamId && (
+                        <div style={{
+                            background: '#fff',
+                            padding: '1.5rem',
+                            borderRadius: '0.5rem',
+                            boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+                            marginTop: '1.5rem'
+                        }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
+                                <div>
+                                    <h3 style={{ margin: 0 }}>📝 保存済み試験の編集</h3>
+                                    <p style={{ margin: '0.35rem 0 0 0', fontSize: '0.85rem', color: '#718096' }}>
+                                        問題文、選択肢、画像レジェンド、問題追加・削除、画像追加・削除をここで直接修正できます。
+                                    </p>
+                                </div>
+                                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                    <button
+                                        onClick={handleAddEditingQuestion}
+                                        style={{
+                                            padding: '0.5rem 0.9rem',
+                                            background: '#38a169',
+                                            color: '#fff',
+                                            border: 'none',
+                                            borderRadius: '0.375rem',
+                                            fontWeight: 'bold',
+                                            cursor: 'pointer'
+                                        }}
+                                    >
+                                        ＋ 問題を追加
+                                    </button>
+                                    <button
+                                        onClick={handleSaveEditedExam}
+                                        style={{
+                                            padding: '0.5rem 0.9rem',
+                                            background: '#3182ce',
+                                            color: '#fff',
+                                            border: 'none',
+                                            borderRadius: '0.375rem',
+                                            fontWeight: 'bold',
+                                            cursor: 'pointer'
+                                        }}
+                                    >
+                                        保存
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '1rem', marginBottom: '1.5rem' }}>
+                                <div>
+                                    <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '0.35rem' }}>試験ID</label>
+                                    <input value={editingExamId} disabled style={{ width: '100%', padding: '0.55rem', borderRadius: '0.375rem', border: '1px solid #cbd5e0', background: '#edf2f7' }} />
+                                </div>
+                                <div>
+                                    <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '0.35rem' }}>試験名</label>
+                                    <input value={editingExamName} onChange={(e) => setEditingExamName(e.target.value)} style={{ width: '100%', padding: '0.55rem', borderRadius: '0.375rem', border: '1px solid #cbd5e0' }} />
+                                </div>
+                            </div>
+
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                                {editingQuestions.map((question, questionIndex) => (
+                                    <div key={`${question.id}-${questionIndex}`} style={{
+                                        border: '1px solid #e2e8f0',
+                                        borderRadius: '0.5rem',
+                                        padding: '1rem',
+                                        background: '#f8fafc'
+                                    }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
+                                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(120px, 1fr))', gap: '0.75rem', flex: 1 }}>
+                                                <div>
+                                                    <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 'bold', marginBottom: '0.25rem' }}>年度</label>
+                                                    <input type="number" value={question.year} onChange={(e) => handleEditingQuestionMetaChange(questionIndex, 'year', e.target.value)} style={{ width: '100%', padding: '0.45rem', borderRadius: '0.25rem', border: '1px solid #cbd5e0' }} />
+                                                </div>
+                                                <div>
+                                                    <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 'bold', marginBottom: '0.25rem' }}>問題番号</label>
+                                                    <input type="number" value={question.questionNumber} onChange={(e) => handleEditingQuestionMetaChange(questionIndex, 'questionNumber', e.target.value)} style={{ width: '100%', padding: '0.45rem', borderRadius: '0.25rem', border: '1px solid #cbd5e0' }} />
+                                                </div>
+                                                <div>
+                                                    <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 'bold', marginBottom: '0.25rem' }}>問題ID</label>
+                                                    <input value={question.id} disabled style={{ width: '100%', padding: '0.45rem', borderRadius: '0.25rem', border: '1px solid #cbd5e0', background: '#edf2f7' }} />
+                                                </div>
+                                            </div>
+                                            <button
+                                                onClick={() => handleDeleteEditingQuestion(questionIndex)}
+                                                style={{
+                                                    padding: '0.45rem 0.8rem',
+                                                    background: '#fff',
+                                                    border: '1px solid #e53e3e',
+                                                    borderRadius: '0.25rem',
+                                                    color: '#e53e3e',
+                                                    fontWeight: 'bold',
+                                                    cursor: 'pointer'
+                                                }}
+                                            >
+                                                問題を削除
+                                            </button>
+                                        </div>
+
+                                        <div style={{ marginBottom: '1rem' }}>
+                                            <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '0.35rem' }}>ジャンル</label>
+                                            <input value={question.genre} onChange={(e) => handleEditingQuestionFieldChange(questionIndex, 'genre', e.target.value)} style={{ width: '100%', padding: '0.55rem', borderRadius: '0.375rem', border: '1px solid #cbd5e0' }} />
+                                        </div>
+
+                                        <div style={{ marginBottom: '1rem' }}>
+                                            <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '0.35rem' }}>問題文</label>
+                                            <textarea value={question.question} onChange={(e) => handleEditingQuestionFieldChange(questionIndex, 'question', e.target.value)} style={{ width: '100%', minHeight: '100px', padding: '0.65rem', borderRadius: '0.375rem', border: '1px solid #cbd5e0', resize: 'vertical' }} />
+                                        </div>
+
+                                        <div style={{ marginBottom: '1rem' }}>
+                                            <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '0.5rem' }}>選択肢</label>
+                                            <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '0.5rem' }}>
+                                                {['a', 'b', 'c', 'd', 'e'].map((optionKey) => (
+                                                    <div key={optionKey} style={{ display: 'grid', gridTemplateColumns: '36px 1fr', gap: '0.5rem', alignItems: 'center' }}>
+                                                        <span style={{ fontWeight: 'bold', textTransform: 'uppercase' }}>{optionKey}.</span>
+                                                        <input value={question.options?.[optionKey] || ''} onChange={(e) => handleEditingOptionChange(questionIndex, optionKey, e.target.value)} style={{ width: '100%', padding: '0.5rem', borderRadius: '0.375rem', border: '1px solid #cbd5e0' }} />
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+
+                                        <div>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
+                                                <label style={{ fontWeight: 'bold', fontSize: '0.8rem' }}>画像とレジェンド</label>
+                                                <label style={{
+                                                    padding: '0.45rem 0.8rem',
+                                                    background: '#2d3748',
+                                                    color: '#fff',
+                                                    borderRadius: '0.25rem',
+                                                    cursor: 'pointer',
+                                                    fontSize: '0.8rem',
+                                                    fontWeight: 'bold'
+                                                }}>
+                                                    ＋ 画像を追加
+                                                    <input type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => handleEditingImageAdd(questionIndex, e.target.files?.[0])} />
+                                                </label>
+                                            </div>
+                                            {question.images.length === 0 ? (
+                                                <div style={{ color: '#718096', fontSize: '0.8rem' }}>この問題に画像はありません。</div>
+                                            ) : (
+                                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                                                    {question.images.map((image, imageIndex) => (
+                                                        <div key={`${question.id}-image-${imageIndex}`} style={{ display: 'grid', gridTemplateColumns: '72px 1fr auto', gap: '0.75rem', alignItems: 'center', background: '#fff', padding: '0.6rem', borderRadius: '0.375rem', border: '1px solid #e2e8f0' }}>
+                                                            <img src={image.path} alt={image.legend || `image-${imageIndex + 1}`} style={{ width: '72px', height: '72px', objectFit: 'cover', borderRadius: '0.25rem', background: '#edf2f7' }} />
+                                                            <input value={image.legend || ''} onChange={(e) => handleEditingImageLegendChange(questionIndex, imageIndex, e.target.value)} placeholder="画像レジェンド" style={{ width: '100%', padding: '0.55rem', borderRadius: '0.375rem', border: '1px solid #cbd5e0' }} />
+                                                            <button
+                                                                onClick={() => handleEditingImageRemove(questionIndex, imageIndex)}
+                                                                style={{
+                                                                    padding: '0.45rem 0.75rem',
+                                                                    background: '#fff',
+                                                                    border: '1px solid #e53e3e',
+                                                                    borderRadius: '0.25rem',
+                                                                    color: '#e53e3e',
+                                                                    fontWeight: 'bold',
+                                                                    cursor: 'pointer'
+                                                                }}
+                                                            >
+                                                                削除
+                                                            </button>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
                 </div>
             )}
 

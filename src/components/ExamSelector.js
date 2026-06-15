@@ -24,10 +24,6 @@ export default function ExamSelector() {
      const [logicFilter, setLogicFilter] = useState('or');
      const [isShuffle, setIsShuffle] = useState(false);
  
-     // Offline Download State
-     const [downloadingExamId, setDownloadingExamId] = useState(null);
-     const [downloadProgress, setDownloadProgress] = useState({ current: 0, total: 0 });
- 
      // Derived options based on selected exam
      const years = useMemo(() => getYears(selectedExam), [selectedExam]);
      const genres = useMemo(() => {
@@ -39,6 +35,33 @@ export default function ExamSelector() {
      }, [selectedExam, userGenres]);
  
      const [sessions, setSessions] = useState([]);
+
+    const isYearValidForExam = (examId, yearValue) => {
+        if (!examId || yearValue === 'all' || yearValue === 'last3' || yearValue === 'last5') {
+            return true;
+        }
+        const availableYears = getYears(examId);
+        const numericYear = parseInt(yearValue, 10);
+        return availableYears.includes(numericYear) || availableYears.includes(yearValue.toString());
+    };
+
+    const applyExamSelection = (examId, nextSelectedYear = selectedYear, nextSelectedGenres = selectedGenres) => {
+        setSelectedExam(examId);
+
+        if (!isYearValidForExam(examId, nextSelectedYear)) {
+            setSelectedYear('all');
+        } else if (nextSelectedYear !== selectedYear) {
+            setSelectedYear(nextSelectedYear);
+        }
+
+        const availableGenres = getGenres(examId);
+        const sanitizedGenres = nextSelectedGenres.filter((genre) => availableGenres.includes(genre));
+        if (sanitizedGenres.length !== selectedGenres.length || sanitizedGenres.some((genre, index) => genre !== selectedGenres[index])) {
+            setSelectedGenres(sanitizedGenres);
+        } else if (nextSelectedGenres !== selectedGenres) {
+            setSelectedGenres(nextSelectedGenres);
+        }
+    };
 
     useEffect(() => {
         const init = async () => {
@@ -95,23 +118,31 @@ export default function ExamSelector() {
             if (lastSettings) {
                 try {
                     const settings = JSON.parse(lastSettings);
-                    if (settings.examId) {
-                        setSelectedExam(settings.examId);
-                    } else if (types[0]?.id) {
-                        setSelectedExam(types[0].id);
+                    const initialExamId = settings.examId || types[0]?.id || '';
+                    const initialYear = settings.year || 'all';
+                    const initialGenres = Array.isArray(settings.genres) ? settings.genres : [];
+
+                    if (initialExamId) {
+                        setSelectedExam(initialExamId);
+                        setSelectedYear(isYearValidForExam(initialExamId, initialYear) ? initialYear : 'all');
+                        setSelectedGenres(initialGenres.filter((genre) => getGenres(initialExamId).includes(genre)));
                     }
-                    if (settings.year) setSelectedYear(settings.year);
                     if (settings.count) setCount(settings.count);
                     if (settings.shuffle !== undefined) setIsShuffle(settings.shuffle);
                     if (settings.status) setStatusFilter(settings.status);
                     if (settings.logic) setLogicFilter(settings.logic);
-                    if (settings.genres) setSelectedGenres(settings.genres);
                 } catch (e) {
                     console.error("Failed to load last settings", e);
-                    if (types[0]?.id) setSelectedExam(types[0].id);
+                    if (types[0]?.id) {
+                        setSelectedExam(types[0].id);
+                        setSelectedYear('all');
+                        setSelectedGenres([]);
+                    }
                 }
             } else if (types[0]?.id) {
                 setSelectedExam(types[0].id);
+                setSelectedYear('all');
+                setSelectedGenres([]);
             }
         };
 
@@ -213,120 +244,6 @@ export default function ExamSelector() {
         localStorage.setItem(sessionsKey, JSON.stringify(updated));
     };
 
-    const handleDownloadOffline = async (e, examId, isAuto = false) => {
-        if (e) e.stopPropagation();
-        if (downloadingExamId) return;
-
-        // Check if Cache API is supported (requires HTTPS or localhost)
-        if (typeof window === 'undefined' || !('caches' in window)) {
-            if (!isAuto) {
-                alert("お使いの環境（非HTTPS接続など）では、オフライン用の画像ダウンロード機能はご利用いただけません。");
-            } else {
-                console.warn("[AutoDL] Cache API is not supported in this context (requires HTTPS or localhost). Skipping auto-download.");
-            }
-            return;
-        }
-
-        // Manual mode: Confirm
-        if (!isAuto) {
-            if (!confirm(`${examId} の全画像をダウンロードしますか？\n(Wi-Fi環境推奨)`)) return;
-        }
-
-        // We don't set downloading state yet for Auto, until we know we need to.
-        // But to avoid race conditions, let's set a temp state or just proceed carefully.
-        // Actually, fetching manifest is fast. Let's do it before setting state if possible, 
-        // OR set state and clear it quickly if skipped.
-        // Better: Set state to block duplicates.
-        setDownloadingExamId(examId);
-
-        try {
-            const res = await fetch('/data/image-manifest.json');
-            if (!res.ok) throw new Error("Manifest not found");
-            const manifest = await res.json();
-            const images = manifest[examId] || [];
-
-            if (images.length === 0) {
-                if (!isAuto) alert("ダウンロード対象の画像がありません。");
-                setDownloadingExamId(null);
-                return;
-            }
-
-            // Generate content hash (Simple stringify is sufficient for list of URLs)
-            const currentHash = JSON.stringify(images);
-            const savedHash = localStorage.getItem(`radexam_img_hash_${examId}`);
-
-            if (isAuto && savedHash === currentHash) {
-                // Content unchanged, skip download
-                console.log(`[AutoDL] ${examId}: Images up to date, skipping.`);
-                setDownloadingExamId(null);
-                return;
-            }
-
-            // Proceed with download
-            setDownloadProgress({ current: 0, total: images.length });
-
-            const cache = await caches.open('question-images');
-            const BATCH_SIZE = 10;
-
-            for (let i = 0; i < images.length; i += BATCH_SIZE) {
-                const batch = images.slice(i, i + BATCH_SIZE);
-                await Promise.all(batch.map(async (url) => {
-                    try {
-                        await cache.add(url);
-                    } catch (err) {
-                        console.warn(`Failed to cache ${url}`, err);
-                    }
-                }));
-                setDownloadProgress(prev => ({ ...prev, current: Math.min(prev.current + BATCH_SIZE, images.length) }));
-            }
-
-            if (!isAuto) alert("ダウンロードが完了しました。");
-
-            // Save new hash
-            localStorage.setItem(`radexam_img_hash_${examId}`, currentHash);
-            // Also keep timestamp just in case/debug
-            localStorage.setItem(`radexam_dl_${examId}`, Date.now().toString());
-
-        } catch (e) {
-            console.error(e);
-            if (!isAuto) alert("ダウンロードに失敗しました: " + e.message);
-        } finally {
-            setDownloadingExamId(null);
-        }
-    };
-
-    // Auto-download Trigger
-    useEffect(() => {
-        if (selectedExam) {
-            // Wait 1s to allow UI to settle and avoid conflict with initial mount
-            const timer = setTimeout(() => {
-                handleDownloadOffline(null, selectedExam, true);
-            }, 1000);
-            return () => clearTimeout(timer);
-        }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [selectedExam]);
-
-    // 試験変更時のフィルター整合性チェックと自動リセット
-    useEffect(() => {
-        if (!selectedExam) return;
-
-        // 1. 年度フィルターの整合性チェック
-        const availableYears = getYears(selectedExam);
-        if (selectedYear !== 'all' && selectedYear !== 'last3' && selectedYear !== 'last5') {
-            const numYear = parseInt(selectedYear);
-            const strYear = selectedYear.toString();
-            // 数値・文字列両方で存在チェック
-            if (!availableYears.includes(numYear) && !availableYears.includes(strYear)) {
-                setSelectedYear('all');
-            }
-        }
-
-        // 2. ジャンルフィルターの整合性チェック
-        const availableGenres = getGenres(selectedExam);
-        setSelectedGenres(prev => prev.filter(g => availableGenres.includes(g)));
-    }, [selectedExam, exams]);
-
     const toggleGenre = (genre) => {
         if (selectedGenres.includes(genre)) {
             setSelectedGenres(prev => prev.filter(g => g !== genre));
@@ -387,57 +304,16 @@ export default function ExamSelector() {
                 <h2 className={styles.label}>試験を選択</h2>
                 <div className={styles.examGrid}>
                     {exams.map(exam => (
-                        <div key={exam.id} style={{ position: 'relative' }}>
-                            <button
-                                className={`${styles.examCard} ${selectedExam === exam.id ? styles.active : ''}`}
-                                onClick={() => setSelectedExam(exam.id)}
-                                style={{ width: '100%', paddingRight: '2.5rem' }}
-                            >
-                                <span className={styles.examName}>{exam.name}</span>
-                                <span className={styles.examCount}>{exam.count} 問</span>
-                            </button>
-                            {/* Download Button */}
-                            {!exam.isLocal && (
-                                <button
-                                    onClick={(e) => handleDownloadOffline(e, exam.id)}
-                                    disabled={!!downloadingExamId}
-                                    title="オフライン用に画像をダウンロード"
-                                    style={{
-                                        position: 'absolute',
-                                        right: '10px',
-                                        top: '50%',
-                                        transform: 'translateY(-50%)',
-                                        background: 'none',
-                                        border: 'none',
-                                        cursor: 'pointer',
-                                        fontSize: '1.2rem',
-                                        opacity: 0.6,
-                                        transition: 'opacity 0.2s',
-                                        zIndex: 10
-                                    }}
-                                    onMouseEnter={e => e.target.style.opacity = 1}
-                                    onMouseLeave={e => e.target.style.opacity = 0.6}
-                                >
-                                    {downloadingExamId === exam.id ? '⏳' : '📥'}
-                                </button>
-                            )}
-                        </div>
+                        <button
+                            key={exam.id}
+                            className={`${styles.examCard} ${selectedExam === exam.id ? styles.active : ''}`}
+                            onClick={() => applyExamSelection(exam.id)}
+                        >
+                            <span className={styles.examName}>{exam.name}</span>
+                            <span className={styles.examCount}>{exam.count} 問</span>
+                        </button>
                     ))}
                 </div>
-                {/* Progress Bar */}
-                {downloadingExamId && (
-                    <div style={{ marginTop: '0.5rem', fontSize: '0.8rem', color: '#4a5568', textAlign: 'center' }}>
-                        ダウンロード中: {downloadProgress.current} / {downloadProgress.total} 枚完了 (画面を閉じないでください)
-                        <div style={{ width: '100%', height: '4px', background: '#e2e8f0', borderRadius: '2px', marginTop: '4px', overflow: 'hidden' }}>
-                            <div style={{
-                                width: `${(downloadProgress.current / downloadProgress.total) * 100}%`,
-                                height: '100%',
-                                background: '#3182ce',
-                                transition: 'width 0.3s'
-                            }} />
-                        </div>
-                    </div>
-                )}
             </div>
 
             <div className={styles.section}>
