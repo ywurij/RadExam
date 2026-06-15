@@ -1376,16 +1376,6 @@ export default function AdminPage() {
             const finalQuestions = new Array(totalQs);
             const finalImageMap = {};
             parsedQuestionsList.forEach((q, idx) => {
-                const fallbackLegends = q.pageImages.map((img, imgIdx) => ({
-                    legend: img.legend || `図${imgIdx + 1}`
-                }));
-                const inferredLegends = q.pageImages.length > 0
-                    ? extractLegendsRuleBased(q.question, q.pageImages.length)
-                    : [];
-                const resolvedLegends = fallbackLegends.map((img, imgIdx) => (
-                    inferredLegends[imgIdx]?.legend ? inferredLegends[imgIdx] : img
-                ));
-
                 finalQuestions[idx] = {
                     id: buildQuestionId(detectedYear, q.questionNumber),
                     year: detectedYear,
@@ -1395,16 +1385,16 @@ export default function AdminPage() {
                     options: q.options,
                     answer: '',
                     explanation: '',
-                    images: resolvedLegends.map((img) => ({
+                    images: q.pageImages.map((img, imgIdx) => ({
                         path: 'image_placeholder',
-                        legend: img.legend
+                        legend: img.legend || `図${imgIdx + 1}`
                     }))
                 };
 
                 if (q.pageImages.length > 0) {
                     finalImageMap[idx] = q.pageImages.map((img, imgIdx) => ({
                         path: img.path,
-                        legend: resolvedLegends[imgIdx]?.legend || img.legend || `図${imgIdx + 1}`
+                        legend: img.legend || `図${imgIdx + 1}`
                     }));
                 }
             });
