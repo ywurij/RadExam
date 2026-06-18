@@ -2,10 +2,10 @@
 
 import { useState, useEffect, useMemo, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
-import { getExamData, getAllQuestions, getQuestionsByYear, getGlobalQuestionId, getGenres } from '@/lib/data';
+import { getExamData, getAllQuestions, getQuestionsByYear, getGlobalQuestionId, getGenres, initializeLocalExams } from '@/lib/data';
 import QuestionCard from '@/components/QuestionCard';
 import styles from './quiz.module.scss';
-import { saveLocalProgress, getLocalProgress, getAllLocalOverrides } from '@/lib/localDb';
+import { saveLocalProgress, getLocalProgress, updateLocalQuestion } from '@/lib/localDb';
 import QuizResult from '@/components/QuizResult';
 
 const generateUUID = () => {
@@ -48,10 +48,7 @@ function QuizContent() {
         const loadData = async () => {
             setLoading(true);
 
-            // 1. Load Overrides (Local)
-            const overrides = await getAllLocalOverrides();
-
-            // 2. Load User Progress (Local)
+            // 1. Load User Progress (Local)
             let userProg = {};
             try {
                 userProg = await getLocalProgress();
@@ -59,7 +56,7 @@ function QuizContent() {
                 console.error("Failed to load local progress:", e);
             }
 
-            // 3. Prepare Questions
+            // 2. Prepare Questions
             let data = [];
 
             // CHECK FOR RESUME (Local only)
@@ -194,33 +191,8 @@ function QuizContent() {
             const staticGenres = getGenres(examId);
             staticGenres.forEach(g => addGenre(g));
 
-            // Map user progress 'note' to 'overrideExplanation' for the UI
-            Object.keys(combinedProgress).forEach(key => {
-                // Only consider progress for the current exam
-                if (!key.includes(`_${examId}_`)) return;
-
-                const p = combinedProgress[key];
-                if (p.note) {
-                    p.overrideExplanation = p.note;
-                }
-                addGenre(p.overrideGenre);
-            });
-
-            // (Optional) Global Overrides Fallback:
-            Object.keys(overrides).forEach(globalQid => {
-                // Only consider overrides for the current exam
-                if (!globalQid.includes(`_${examId}_`)) return;
-
-                const ov = overrides[globalQid];
-                const existing = combinedProgress[globalQid] || {};
-
-                combinedProgress[globalQid] = {
-                    ...existing,
-                    overrideAnswer: existing.overrideAnswer || ov.answer,
-                    overrideGenre: existing.overrideGenre || ov.genre,
-                    overrideExplanation: existing.note || ov.explanation
-                };
-                addGenre(ov.genre);
+            data.forEach(q => {
+                addGenre(q.genre);
             });
 
             setAllGenres(Array.from(uniqueGenres).sort());
@@ -284,57 +256,33 @@ function QuizContent() {
         await saveLocalProgress(globalId, updates);
     };
 
-    const handleSaveOverride = async (qid, overrideData) => {
+    const handleSaveQuestionData = async (qid, updates) => {
         const globalId = getGlobalQuestionId(examId, qid);
+        try {
+            await updateLocalQuestion(examId, qid, updates);
+            await initializeLocalExams(true);
 
-        // Update local state
-        setProgress(prev => {
-            const current = prev[globalId] || {};
-            return {
-                ...prev,
-                [globalId]: {
-                    ...current,
-                    overrideAnswer: overrideData.answer !== undefined ? overrideData.answer : current.overrideAnswer,
-                    overrideGenre: overrideData.genre !== undefined ? overrideData.genre : current.overrideGenre,
-                    overrideExplanation: overrideData.explanation !== undefined ? overrideData.explanation : current.overrideExplanation,
-                    note: overrideData.explanation !== undefined ? overrideData.explanation : current.note,
-                    overrideQuestion: overrideData.question !== undefined ? overrideData.question : current.overrideQuestion,
-                    overrideOptions: overrideData.options !== undefined ? overrideData.options : current.overrideOptions,
-                    overrideImages: overrideData.images !== undefined ? overrideData.images : current.overrideImages,
-                }
-            };
-        });
+            setQuestions(prev => prev.map((question) => (
+                question.id === qid ? { ...question, ...updates } : question
+            )));
 
-        // Dynamically update available genres if new one is added
-        if (overrideData.genre) {
-            const newGenres = new Set(allGenres);
-            const process = (val) => {
-                if (Array.isArray(val)) {
-                    val.forEach(g => newGenres.add(g));
-                } else if (typeof val === 'string') {
-                    val.split(/[,、\s]+/).forEach(g => g && newGenres.add(g.trim()));
-                }
-            };
-            process(overrideData.genre);
-
-            if (newGenres.size > allGenres.length) {
+            if (updates.genre !== undefined) {
+                const newGenres = new Set(allGenres);
+                const process = (val) => {
+                    if (Array.isArray(val)) {
+                        val.forEach(g => g && newGenres.add(g));
+                    } else if (typeof val === 'string') {
+                        val.split(/[,、\s]+/).forEach(g => g && newGenres.add(g.trim()));
+                    }
+                };
+                process(updates.genre);
                 setAllGenres(Array.from(newGenres).sort());
             }
+        } catch (error) {
+            console.error("Failed to update question data:", error);
+            alert("問題データの保存に失敗しました。");
+            throw error;
         }
-
-        // Save as Personal Private Data (Local)
-        const saveObj = {};
-        if (overrideData.answer !== undefined) saveObj.overrideAnswer = overrideData.answer;
-        if (overrideData.genre !== undefined) saveObj.overrideGenre = overrideData.genre;
-        if (overrideData.explanation !== undefined) {
-            saveObj.overrideExplanation = overrideData.explanation;
-            saveObj.note = overrideData.explanation;
-        }
-        if (overrideData.question !== undefined) saveObj.overrideQuestion = overrideData.question;
-        if (overrideData.options !== undefined) saveObj.overrideOptions = overrideData.options;
-        if (overrideData.images !== undefined) saveObj.overrideImages = overrideData.images;
-
-        await saveLocalProgress(globalId, saveObj);
     };
 
     const handleFinish = async () => {
@@ -427,7 +375,7 @@ function QuizContent() {
                 userProgress={progress[getGlobalQuestionId(examId, currentQuestion.id)]}
                 onAnswer={() => { }}
                 onUpdateStatus={handleUpdateStatus}
-                onSaveOverride={handleSaveOverride}
+                onSaveQuestionData={handleSaveQuestionData}
                 availableGenres={allGenres}
             />
 

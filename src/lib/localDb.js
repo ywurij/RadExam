@@ -136,13 +136,59 @@ export const deleteLocalExam = async (examId) => {
     await examsStore.removeItem(examId);
 };
 
+/**
+ * 指定したローカル試験内の1問を更新する
+ * @param {string} examId
+ * @param {string|number} questionId
+ * @param {Object} updates
+ */
+export const updateLocalQuestion = async (examId, questionId, updates) => {
+    if (!examId || !questionId || !updates || typeof updates !== 'object') return;
+
+    const examData = await examsStore.getItem(examId);
+    if (!examData || !Array.isArray(examData.questions)) {
+        throw new Error('編集対象の試験データが見つかりません。');
+    }
+
+    const targetId = String(questionId);
+    let found = false;
+
+    const nextQuestions = examData.questions.map((question) => {
+        if (String(question.id) !== targetId) {
+            return normalizeQuestionId(question);
+        }
+
+        found = true;
+        const mergedQuestion = normalizeQuestionId({
+            ...question,
+            ...updates,
+        });
+        return mergedQuestion;
+    });
+
+    if (!found) {
+        throw new Error('編集対象の問題が見つかりません。');
+    }
+
+    const years = [...new Set(nextQuestions.map(q => q.year).filter(Boolean))].map(Number).sort((a, b) => b - a);
+    const genres = [...new Set(nextQuestions.map(q => q.genre).filter(Boolean))].sort();
+
+    await examsStore.setItem(examId, {
+        ...examData,
+        questions: nextQuestions,
+        years,
+        genres,
+        updatedAt: new Date().toISOString(),
+    });
+};
+
 
 // --- ユーザー進捗 (User Progress) 関連のAPI ---
 
 /**
  * ユーザーの進捗状況をローカルに保存（マージ）する
  * @param {string|number} questionId - グローバルな問題ID (例: 'test_ivr_2016001')
- * @param {Object} data - 保存するデータ (status, isLiked, note, overrideAnswer など)
+ * @param {Object} data - 保存するデータ (status, isLiked など)
  */
 export const saveLocalProgress = async (questionId, data) => {
     if (!questionId) return;
@@ -178,36 +224,6 @@ export const getLocalProgress = async () => {
     return progress;
 };
 
-/**
- * 既存の `getAllOverrides` に適合する関数。
- * ユーザーが保存したノート（note）や上書きされた答え（overrideAnswer）などをグローバルにマージするために利用します。
- * @returns {Promise<Object>}
- */
-export const getAllLocalOverrides = async () => {
-    const overrides = {};
-    try {
-        await progressStore.iterate((value, key) => {
-            // overrideAnswer や overrideExplanation (note) があるものを抽出
-            const itemOverrides = {};
-            if (value.overrideAnswer) itemOverrides.answer = value.overrideAnswer;
-            if (value.note) itemOverrides.explanation = value.note;
-            if (value.overrideExplanation) itemOverrides.explanation = value.overrideExplanation;
-            if (value.overrideGenre) itemOverrides.genre = value.overrideGenre;
-            if (value.overrideQuestion) itemOverrides.question = value.overrideQuestion;
-            if (value.overrideOptions) itemOverrides.options = value.overrideOptions;
-            if (value.overrideImages) itemOverrides.images = value.overrideImages;
-            
-            if (Object.keys(itemOverrides).length > 0) {
-                overrides[key] = itemOverrides;
-            }
-        });
-    } catch (e) {
-        console.error("Failed to fetch local overrides:", e);
-    }
-    return overrides;
-};
-
-
 // --- バックアップと復元 (Backup & Restore) ---
 
 /**
@@ -238,46 +254,32 @@ export const exportAllLocalData = async () => {
 /**
  * バックアップJSONデータをローカルにインポートする
  * @param {Object} jsonData - インポートするバックアップデータ
- * @param {string} strategy - 'overwrite' (上書き) または 'merge' (既存優先で追加)
+ * @param {string} strategy - 'overwrite' (上書き)
  */
-export const importLocalData = async (jsonData, strategy = 'merge') => {
+export const importLocalData = async (jsonData, strategy = 'overwrite') => {
     if (!jsonData || typeof jsonData !== 'object') {
         throw new Error("Invalid backup data format");
+    }
+
+    if (strategy !== 'overwrite') {
+        throw new Error("Unsupported import strategy");
     }
 
     const { exams, progress } = jsonData;
 
     // 1. 試験データのインポート
     if (exams && typeof exams === 'object') {
-        if (strategy === 'overwrite') {
-            await examsStore.clear();
-        }
+        await examsStore.clear();
         for (const [key, value] of Object.entries(exams)) {
-            if (strategy === 'overwrite' || !(await examsStore.getItem(key))) {
-                await examsStore.setItem(key, value);
-            }
+            await examsStore.setItem(key, value);
         }
     }
 
     // 2. 進捗データのインポート
     if (progress && typeof progress === 'object') {
-        if (strategy === 'overwrite') {
-            await progressStore.clear();
-        }
+        await progressStore.clear();
         for (const [key, value] of Object.entries(progress)) {
-            const existing = await progressStore.getItem(key);
-            if (strategy === 'overwrite' || !existing) {
-                await progressStore.setItem(key, value);
-            } else if (strategy === 'merge') {
-                // mergeの場合は、日付が新しい方を残すか、単純にマージする
-                const mergedValue = {
-                    ...existing,
-                    ...value,
-                    // 両方にnoteがある場合は、長い方またはマージ日時の新しい方を優先するなど（ここでは単純にマージ）
-                    updatedAt: new Date().toISOString()
-                };
-                await progressStore.setItem(key, mergedValue);
-            }
+            await progressStore.setItem(key, value);
         }
     }
 };

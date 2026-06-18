@@ -328,19 +328,19 @@ export default function AdminPage() {
     const [isParsingPdf, setIsParsingPdf] = useState(false);
     const [pdfProgress, setPdfProgress] = useState({ current: 0, total: 0, status: '' });
     const [parsedQuestions, setParsedQuestions] = useState([]);
+    const [parsedYearInput, setParsedYearInput] = useState('');
     const [imageMap, setImageMap] = useState({});
     const [errorMsg, setErrorMsg] = useState('');
     const [successMsg, setSuccessMsg] = useState('');
     const [examId, setExamId] = useState('');
     const [examName, setExamName] = useState('');
     const [importMode, setImportMode] = useState('new'); // 'new' or 'existing'
-    const [isMerge, setIsMerge] = useState(true);
     const [examCategory, setExamCategory] = useState('1'); // '1': 放射線科, '2': 放射線診断, '3': 核医学, '4': IVR
     const [activeTab, setActiveTab] = useState('import'); // 'import', 'manage'
-    const [importStrategy, setImportStrategy] = useState('merge');
     const [editingExamId, setEditingExamId] = useState('');
     const [editingExamName, setEditingExamName] = useState('');
     const [editingQuestions, setEditingQuestions] = useState([]);
+    const [editingYearFilter, setEditingYearFilter] = useState('all');
 
     const loadLocalExams = async () => {
         await initializeLocalExams();
@@ -428,6 +428,8 @@ export default function AdminPage() {
             setEditingExamId(exam.id);
             setEditingExamName(exam.name);
             setEditingQuestions(normalizedQuestions);
+            const availableYears = [...new Set(normalizedQuestions.map(q => Number(q.year)).filter(Boolean))].sort((a, b) => b - a);
+            setEditingYearFilter(availableYears[0] ? String(availableYears[0]) : 'all');
             setSuccessMsg(`試験「${exam.name}」を編集モードで読み込みました。`);
             setErrorMsg('');
         } catch (e) {
@@ -516,6 +518,21 @@ export default function AdminPage() {
             ...question,
             images: question.images.filter((_, idx) => idx !== imageIndex),
         }));
+    };
+
+    const handleParsedQuestionsYearChange = (value) => {
+        setParsedYearInput(value);
+
+        if (!/^\d{4}$/.test(value)) {
+            return;
+        }
+
+        const numericYear = Number(value);
+        setParsedQuestions((prev) => prev.map((question) => ({
+            ...question,
+            year: numericYear,
+            id: buildQuestionId(numericYear, question.questionNumber),
+        })));
     };
 
     const handleAddEditingQuestion = () => {
@@ -1345,6 +1362,7 @@ export default function AdminPage() {
             });
 
             setParsedQuestions(finalQuestions);
+            setParsedYearInput(String(detectedYear));
             setImageMap(finalImageMap);
             setSuccessMsg(`PDFの自動パースが完了しました！合計 ${finalQuestions.length} 問の問題と画像を登録しました。内容を確認して保存してください。`);
         } catch (err) {
@@ -1370,6 +1388,10 @@ export default function AdminPage() {
             setErrorMsg('試験IDは半角英数字、ハイフン、アンダースコアのみ使用可能です。');
             return;
         }
+        if (!/^\d{4}$/.test(String(parsedQuestions[0]?.year ?? ''))) {
+            setErrorMsg('取り込み年度は4桁の西暦で入力してください。');
+            return;
+        }
         try {
             // 画像マッピングを統合した問題リストを作成
             const finalQuestions = parsedQuestions.map((q, idx) => {
@@ -1383,9 +1405,13 @@ export default function AdminPage() {
 
             // 既存IDの重複をチェック
             const isExistingExam = localExams.some(e => e.id === examId);
+            if (importMode === 'new' && isExistingExam) {
+                setErrorMsg('この試験IDは既に使われています。既存の試験に追加する場合は「既存の試験に追加 (マージ)」を選択してください。');
+                return;
+            }
 
-            // 保存を実行（マージオプションを指定。既存試験に追加モードの場合は強制マージ）
-            const finalIsMerge = importMode === 'existing' ? true : (isExistingExam ? isMerge : false);
+            // 保存を実行（マージは既存試験への追加モードに限定）
+            const finalIsMerge = importMode === 'existing';
             await saveLocalExam(examId, examName, finalQuestions, finalIsMerge);
             
             // data.js のメモリキャッシュを更新
@@ -1395,8 +1421,8 @@ export default function AdminPage() {
             setExamId('');
             setExamName('');
             setParsedQuestions([]);
+            setParsedYearInput('');
             setImageMap({});
-            setIsMerge(true); // デフォルト値をリセット
             loadLocalExams();
         } catch (e) {
             setErrorMsg(`保存に失敗しました: ${e.message}`);
@@ -1444,8 +1470,7 @@ export default function AdminPage() {
         const file = e.target.files[0];
         if (!file) return;
 
-        const strategyLabel = importStrategy === 'overwrite' ? '【完全同期 (上書き)】' : '【マージ結合 (既存優先)】';
-        if (!confirm(`現在の設定: ${strategyLabel}\nバックアップデータをインポート（復元）しますか？\n※上書きの場合、既存のローカルデータはすべて消去されます。`)) {
+        if (!confirm('バックアップデータを復元しますか？\n※現在のローカル試験データと学習進捗はすべて消去され、バックアップファイルの内容で完全に置き換えられます。')) {
             e.target.value = '';
             return;
         }
@@ -1453,7 +1478,7 @@ export default function AdminPage() {
         try {
             const text = await file.text();
             const json = JSON.parse(text);
-            await importLocalData(json, importStrategy);
+            await importLocalData(json);
             await initializeLocalExams(true);
             loadLocalExams();
             alert("データを復元しました。画面を再読み込みします。");
@@ -1651,6 +1676,21 @@ export default function AdminPage() {
                                 marginBottom: '1.5rem'
                             }}>
                                 <h3 style={{ marginTop: 0, marginBottom: '1rem' }}>ステップ2: 試験の設定と画像の紐付け</h3>
+                                <div style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '0.4rem',
+                                    marginBottom: '1rem',
+                                    padding: '0.35rem 0.7rem',
+                                    borderRadius: '9999px',
+                                    background: '#ebf8ff',
+                                    color: '#2b6cb0',
+                                    fontSize: '0.85rem',
+                                    fontWeight: '700'
+                                }}>
+                                    <span>取り込み問題数</span>
+                                    <span>{parsedQuestions.length}問</span>
+                                </div>
                                 {localExams.length > 0 && (
                                     <div style={{
                                         display: 'flex',
@@ -1670,7 +1710,6 @@ export default function AdminPage() {
                                                     if (localExams.length > 0) {
                                                         setExamId(localExams[0].id);
                                                         setExamName(localExams[0].name);
-                                                        setIsMerge(true);
                                                     }
                                                 }}
                                                 style={{ marginRight: '0.4rem', cursor: 'pointer' }}
@@ -1687,7 +1726,6 @@ export default function AdminPage() {
                                                     setImportMode('new');
                                                     setExamId('');
                                                     setExamName('');
-                                                    setIsMerge(false);
                                                 }}
                                                 style={{ marginRight: '0.4rem', cursor: 'pointer' }}
                                             />
@@ -1773,35 +1811,54 @@ export default function AdminPage() {
                                                     }}
                                                 />
                                             </div>
-
                                             {localExams.some(e => e.id === examId) && (
                                                 <div style={{
                                                     gridColumn: '1 / -1',
-                                                    background: '#ebf8ff',
-                                                    border: '1px solid #bee3f8',
+                                                    background: '#fffaf0',
+                                                    border: '1px solid #f6ad55',
                                                     padding: '0.75rem',
                                                     borderRadius: '0.25rem',
                                                     fontSize: '0.9rem',
-                                                    color: '#2b6cb0',
-                                                    display: 'flex',
-                                                    alignItems: 'center',
-                                                    gap: '0.5rem',
+                                                    color: '#c05621',
                                                     marginTop: '0.5rem'
                                                 }}>
-                                                    <input
-                                                        type="checkbox"
-                                                        id="is-merge-checkbox"
-                                                        checked={isMerge}
-                                                        onChange={(e) => setIsMerge(e.target.checked)}
-                                                        style={{ cursor: 'pointer' }}
-                                                    />
-                                                    <label htmlFor="is-merge-checkbox" style={{ fontWeight: '600', cursor: 'pointer', userSelect: 'none' }}>
-                                                        入力したIDの既存試験に問題を追加（マージ）する。チェックを外すと既存データは上書きされます。
-                                                    </label>
+                                                    この試験IDは既に使われています。追加登録する場合は「既存の試験に追加 (マージ)」を選択してください。
                                                 </div>
                                             )}
                                         </>
                                     )}
+                                </div>
+                                <div style={{ marginBottom: '1.5rem' }}>
+                                    <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '0.4rem' }}>
+                                        取り込み年度
+                                    </label>
+                                    <input
+                                        type="number"
+                                        min="2000"
+                                        max="2999"
+                                        inputMode="numeric"
+                                        value={parsedYearInput}
+                                        onChange={(e) => handleParsedQuestionsYearChange(e.target.value)}
+                                        onBlur={() => {
+                                            if (!/^\d{4}$/.test(parsedYearInput)) {
+                                                setParsedYearInput(String(parsedQuestions[0]?.year ?? ''));
+                                            }
+                                        }}
+                                        placeholder="例: 2025"
+                                        style={{
+                                            width: '100%',
+                                            padding: '0.6rem',
+                                            borderRadius: '0.375rem',
+                                            border: '1px solid #cbd5e0',
+                                            background: '#fff',
+                                            fontSize: '0.95rem',
+                                            fontWeight: '600',
+                                            color: '#2d3748'
+                                        }}
+                                    />
+                                    <p style={{ margin: '0.5rem 0 0 0', fontSize: '0.8rem', color: '#718096' }}>
+                                        年度を変更すると、プレビュー中の全問題の年度と問題IDに一括反映されます。
+                                    </p>
                                 </div>
                                 <div style={{ display: 'flex', gap: '1rem' }}>
                                     <button
@@ -1823,6 +1880,7 @@ export default function AdminPage() {
                                     <button
                                         onClick={() => {
                                             setParsedQuestions([]);
+                                            setParsedYearInput('');
                                             setImageMap({});
                                         }}
                                         style={{
@@ -2020,7 +2078,7 @@ export default function AdminPage() {
                                     fontSize: '0.9rem',
                                     display: 'inline-block'
                                 }}>
-                                    📥 インポート (復元・結合)
+                                    📥 インポート (完全復元)
                                     <input
                                         type="file"
                                         accept=".json"
@@ -2031,7 +2089,6 @@ export default function AdminPage() {
                             </div>
                         </div>
 
-                        {/* Import Strategy Selection */}
                         <div style={{
                             background: '#f7fafc',
                             padding: '1rem',
@@ -2040,37 +2097,13 @@ export default function AdminPage() {
                             fontSize: '0.9rem'
                         }}>
                             <div style={{ fontWeight: 'bold', color: '#4a5568', marginBottom: '0.5rem' }}>
-                                競合（インポート）時の動作戦略を設定：
+                                バックアップ復元の動作
                             </div>
-                            <div style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap' }}>
-                                <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', color: '#2d3748' }}>
-                                    <input
-                                        type="radio"
-                                        name="strategy"
-                                        value="merge"
-                                        checked={importStrategy === 'merge'}
-                                        onChange={() => setImportStrategy('merge')}
-                                        style={{ marginRight: '0.4rem', cursor: 'pointer' }}
-                                    />
-                                    <span>
-                                        <b>マージ結合 (既存優先)</b><br />
-                                        <span style={{ fontSize: '0.8rem', color: '#718096' }}>既存のローカル試験や進捗を維持し、ファイル内の新規データのみを追加します。</span>
-                                    </span>
-                                </label>
-                                <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', color: '#2d3748' }}>
-                                    <input
-                                        type="radio"
-                                        name="strategy"
-                                        value="overwrite"
-                                        checked={importStrategy === 'overwrite'}
-                                        onChange={() => setImportStrategy('overwrite')}
-                                        style={{ marginRight: '0.4rem', cursor: 'pointer' }}
-                                    />
-                                    <span>
-                                        <b>完全同期 (上書き)</b><br />
-                                        <span style={{ fontSize: '0.8rem', color: '#718096' }}>ローカルの既存データを消去し、バックアップファイルの内容で完全に上書きします。</span>
-                                    </span>
-                                </label>
+                            <div style={{ color: '#2d3748' }}>
+                                バックアップファイルに含まれる試験データ、問題文、選択肢、画像、画像レジェンド、学習進捗を復元します。
+                            </div>
+                            <div style={{ marginTop: '0.4rem', fontSize: '0.8rem', color: '#c05621' }}>
+                                ※復元時は現在のローカルデータをすべて消去し、バックアップ内容で完全に置き換えます。
                             </div>
                         </div>
                     </div>
@@ -2210,8 +2243,29 @@ export default function AdminPage() {
                                 </div>
                             </div>
 
+                            <div style={{ marginBottom: '1.5rem', display: 'grid', gridTemplateColumns: 'minmax(220px, 320px)', gap: '1rem' }}>
+                                <div>
+                                    <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '0.35rem' }}>表示年度</label>
+                                    <select
+                                        value={editingYearFilter}
+                                        onChange={(e) => setEditingYearFilter(e.target.value)}
+                                        style={{ width: '100%', padding: '0.55rem', borderRadius: '0.375rem', border: '1px solid #cbd5e0', background: '#fff' }}
+                                    >
+                                        <option value="all">全年度を表示</option>
+                                        {[...new Set(editingQuestions.map(q => Number(q.year)).filter(Boolean))].sort((a, b) => b - a).map((year) => (
+                                            <option key={year} value={String(year)}>
+                                                {year}年
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+                            </div>
+
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                                {editingQuestions.map((question, questionIndex) => (
+                                {editingQuestions
+                                    .map((question, questionIndex) => ({ question, questionIndex }))
+                                    .filter(({ question }) => editingYearFilter === 'all' || String(question.year) === editingYearFilter)
+                                    .map(({ question, questionIndex }) => (
                                     <div key={`${question.id}-${questionIndex}`} style={{
                                         border: '1px solid #e2e8f0',
                                         borderRadius: '0.5rem',

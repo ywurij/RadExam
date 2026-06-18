@@ -2,7 +2,6 @@ import Fuse from 'fuse.js';
 import metadata from '@/data/metadata.json';
 import { 
     getLocalProgress, 
-    getAllLocalOverrides, 
     getAllLocalExams, 
     getLocalExam 
 } from '@/lib/localDb';
@@ -114,48 +113,10 @@ export const getAllQuestions = async () => {
     return results.flatMap(r => r);
 };
 
-// ローカルに保存された進捗やメモを基に検索を行う
+// ローカル試験データを基に検索を行う
 export const searchQuestions = async (query, examId = null, customKeys = null) => {
     const rawData = examId ? await getExamData(examId) : await getAllQuestions();
-
-    // 1. ローカル上書きデータの取得 (ノートや上書き解答など)
-    let globalOverrides = {};
-    try {
-        globalOverrides = await getAllLocalOverrides();
-    } catch (e) {
-        console.error("Search local override fetch failed:", e);
-    }
-
-    // 2. ローカル進捗データの取得
-    let userProgress = {};
-    try {
-        userProgress = await getLocalProgress();
-    } catch (e) {
-        console.error("Search local progress fetch failed:", e);
-    }
-
-    // 3. データのマージ (進捗/ノート優先)
-    const data = rawData.map(q => {
-        let merged = q;
-
-        // グローバルな上書きの適用
-        const gov = globalOverrides[q.id];
-        if (gov) {
-            merged = { ...merged, ...gov };
-        }
-
-        // 個人の進捗/ノートの適用
-        const globalId = getGlobalQuestionId(q.examId, q.id);
-        const prog = userProgress[globalId];
-        if (prog) {
-            merged = { ...merged, ...prog };
-            if (prog.note) {
-                merged.explanation = prog.note; // ユーザーのメモを解説に上書き
-            }
-        }
-
-        return merged;
-    });
+    const data = rawData;
 
     const keys = customKeys || ['question', 'options.a', 'options.b', 'options.c', 'options.d', 'options.e', 'explanation', 'genre', 'year'];
 
@@ -210,4 +171,3 @@ export const getQuestionsByYear = async (examId, yearFilter) => {
 export const getGlobalQuestionId = (examId, questionId) => {
     return `test_${examId}_${questionId}`;
 };
-

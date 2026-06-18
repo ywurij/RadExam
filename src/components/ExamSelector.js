@@ -4,17 +4,12 @@ import { useState, useMemo, useEffect } from 'react';
 import { getExamTypes, getYears, getGenres, initializeLocalExams } from '@/lib/data';
 import styles from './ExamSelector.module.scss';
 import { useRouter } from 'next/navigation';
-import { 
-    getLocalProgress, 
-    getAllLocalOverrides
-} from '@/lib/localDb';
 
 export default function ExamSelector() {
     const router = useRouter();
 
     const [exams, setExams] = useState([]);
     const [selectedExam, setSelectedExam] = useState('');
-    const [userGenres, setUserGenres] = useState({});
  
      // Filters
      const [selectedYear, setSelectedYear] = useState('all');
@@ -26,13 +21,7 @@ export default function ExamSelector() {
  
      // Derived options based on selected exam
      const years = useMemo(() => getYears(selectedExam), [selectedExam]);
-     const genres = useMemo(() => {
-         const staticGenres = getGenres(selectedExam);
-         const uGenres = userGenres[selectedExam] || new Set();
-         const combined = new Set(staticGenres);
-         uGenres.forEach(g => combined.add(g));
-         return Array.from(combined).sort();
-     }, [selectedExam, userGenres]);
+     const genres = useMemo(() => getGenres(selectedExam), [selectedExam]);
  
      const [sessions, setSessions] = useState([]);
 
@@ -148,48 +137,6 @@ export default function ExamSelector() {
 
         init();
     }, []);
-
-    // Fetch user genres effect (Local IndexedDB)
-    useEffect(() => {
-        const fetchUserGenres = async () => {
-            try {
-                const genreMap = {};
-                const processGenre = (globalKey, genreVal) => {
-                    const parts = globalKey.split('_');
-                    if (parts.length >= 3) {
-                        const examId = parts[1];
-                        if (!genreMap[examId]) genreMap[examId] = new Set();
-                        const add = (val) => {
-                            if (Array.isArray(val)) {
-                                val.forEach(g => genreMap[examId].add(g));
-                            } else if (typeof val === 'string') {
-                                val.split(/[,、\s]+/).forEach(g => g && genreMap[examId].add(g));
-                            }
-                        };
-                        add(genreVal);
-                    }
-                };
-
-                const overrides = await getAllLocalOverrides();
-                Object.entries(overrides).forEach(([key, ov]) => {
-                    if (ov.genre) processGenre(key, ov.genre);
-                });
-
-                const progress = await getLocalProgress();
-                Object.entries(progress).forEach(([key, p]) => {
-                    if (p.overrideGenre) processGenre(key, p.overrideGenre);
-                });
-
-                setUserGenres(genreMap);
-            } catch (e) {
-                console.error("Failed to fetch user genres", e);
-            }
-        };
-        if (exams.length > 0) {
-            fetchUserGenres();
-        }
-    }, [exams]);
-
     const handleStart = () => {
         const params = new URLSearchParams();
         params.set('exam', selectedExam);

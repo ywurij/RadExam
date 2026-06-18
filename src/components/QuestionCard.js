@@ -9,7 +9,7 @@ import { getSelectionCount } from '@/lib/utils';
 import styles from './QuestionCard.module.scss';
 import 'katex/dist/katex.min.css'; // Import global Katex CSS here just in case
 
-export default function QuestionCard({ question, userProgress, onAnswer, onSaveOverride, onUpdateStatus, availableGenres }) {
+export default function QuestionCard({ question, userProgress, onAnswer, onSaveQuestionData, onUpdateStatus, availableGenres }) {
     const [selectedOptions, setSelectedOptions] = useState([]);
     const [showAnswer, setShowAnswer] = useState(false);
 
@@ -38,12 +38,12 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveO
     const EMPTY_ARRAY = useMemo(() => [], []);
 
     // Derived states
-    const currentAnswer = userProgress?.overrideAnswer || question.answer || EMPTY_ARRAY;
-    const currentGenre = userProgress?.overrideGenre || question.genre || "";
-    const currentExplanation = userProgress?.overrideExplanation || question.explanation || "";
-    const currentQuestionText = userProgress?.overrideQuestion || question.question || "";
-    const currentOptions = userProgress?.overrideOptions || question.options || {};
-    const currentImages = userProgress?.overrideImages || question.images || EMPTY_ARRAY;
+    const currentAnswer = question.answer || EMPTY_ARRAY;
+    const currentGenre = question.genre || "";
+    const currentExplanation = question.explanation || "";
+    const currentQuestionText = question.question || "";
+    const currentOptions = question.options || {};
+    const currentImages = question.images || EMPTY_ARRAY;
 
     // Parse selection limit
     const maxSelection = getSelectionCount(currentQuestionText);
@@ -130,8 +130,8 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveO
     };
 
     const handleSaveQuestionText = () => {
-        if (onSaveOverride) {
-            onSaveOverride(question.id, {
+        if (onSaveQuestionData) {
+            onSaveQuestionData(question.id, {
                 question: draftQuestionText
             });
         }
@@ -139,8 +139,8 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveO
     };
 
     const handleSaveOptions = () => {
-        if (onSaveOverride) {
-            onSaveOverride(question.id, {
+        if (onSaveQuestionData) {
+            onSaveQuestionData(question.id, {
                 options: draftOptions
             });
         }
@@ -148,14 +148,14 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveO
     };
 
     const handleSaveLegend = (idx) => {
-        if (onSaveOverride) {
+        if (onSaveQuestionData) {
             const updatedImages = currentImages.map((img, i) => {
                 if (i === idx) {
                     return { ...img, legend: draftLegendText };
                 }
                 return img;
             });
-            onSaveOverride(question.id, {
+            onSaveQuestionData(question.id, {
                 images: updatedImages
             });
         }
@@ -193,23 +193,19 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveO
     };
 
     const handleSaveAnswer = () => {
-        if (onSaveOverride) {
+        if (onSaveQuestionData) {
             const safeAnswer = editAnswerKey.split(/[,、\s]+/).map(s => s.trim()).filter(Boolean);
-            onSaveOverride(question.id, {
-                answer: safeAnswer,
-                genre: currentGenre,
-                explanation: currentExplanation
+            onSaveQuestionData(question.id, {
+                answer: safeAnswer
             });
         }
         setIsEditingAnswer(false);
     };
 
     const handleSaveGenre = () => {
-        if (onSaveOverride) {
-            onSaveOverride(question.id, {
-                answer: currentAnswer,
-                genre: editGenre,
-                explanation: currentExplanation
+        if (onSaveQuestionData) {
+            onSaveQuestionData(question.id, {
+                genre: editGenre
             });
         }
         setIsEditingGenre(false);
@@ -220,10 +216,8 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveO
         setIsSavingExplanation(true);
 
         try {
-            if (onSaveOverride) {
-                await onSaveOverride(question.id, {
-                    answer: currentAnswer,
-                    genre: currentGenre,
+            if (onSaveQuestionData) {
+                await onSaveQuestionData(question.id, {
                     explanation: draftExplanation
                 });
             }
