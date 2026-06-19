@@ -7,42 +7,52 @@ import "yet-another-react-lightbox/styles.css";
 import AnswerEditor from './AnswerEditor';
 import { getSelectionCount } from '@/lib/utils';
 import styles from './QuestionCard.module.scss';
-import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
-import { storage } from '@/lib/firebase';
 import 'katex/dist/katex.min.css'; // Import global Katex CSS here just in case
 
-export default function QuestionCard({ question, userProgress, onAnswer, onSaveOverride, onUpdateStatus, availableGenres }) {
+export default function QuestionCard({ question, userProgress, onAnswer, onSaveQuestionData, onUpdateStatus, availableGenres }) {
     const [selectedOptions, setSelectedOptions] = useState([]);
     const [showAnswer, setShowAnswer] = useState(false);
 
     // Editing States
-    // Editing States
     const [isEditingAnswer, setIsEditingAnswer] = useState(false);
     const [isEditingGenre, setIsEditingGenre] = useState(false);
     const [isEditingExplanation, setIsEditingExplanation] = useState(false);
+    const [isEditingQuestion, setIsEditingQuestion] = useState(false);
+    const [isEditingOptions, setIsEditingOptions] = useState(false);
+    const [editingLegendIdx, setEditingLegendIdx] = useState(null);
 
     const [editAnswerKey, setEditAnswerKey] = useState("");
     const [editGenre, setEditGenre] = useState("");
     const [draftExplanation, setDraftExplanation] = useState("");
     const [isSavingExplanation, setIsSavingExplanation] = useState(false);
+    
+    const [draftQuestionText, setDraftQuestionText] = useState("");
+    const [draftOptions, setDraftOptions] = useState({});
+    const [draftLegendText, setDraftLegendText] = useState("");
 
     // Lightbox state
     const [lightboxOpen, setLightboxOpen] = useState(false);
     const [lightboxIndex, setLightboxIndex] = useState(0);
 
-    // Parse selection limit
-    const maxSelection = getSelectionCount(question.question);
-
-    // Memoize slides
-    const slides = useMemo(() => question.images?.map(img => ({ src: `/${img.path}` })) || [], [question.images]);
-
     // Stable reference for empty array
     const EMPTY_ARRAY = useMemo(() => [], []);
 
     // Derived states
-    const currentAnswer = userProgress?.overrideAnswer || question.answer || EMPTY_ARRAY;
-    const currentGenre = userProgress?.overrideGenre || question.genre || "";
-    const currentExplanation = userProgress?.overrideExplanation || question.explanation || "";
+    const currentAnswer = question.answer || EMPTY_ARRAY;
+    const currentGenre = question.genre || "";
+    const currentExplanation = question.explanation || "";
+    const currentQuestionText = question.question || "";
+    const currentOptions = question.options || {};
+    const currentImages = question.images || EMPTY_ARRAY;
+
+    // Parse selection limit
+    const maxSelection = getSelectionCount(currentQuestionText);
+
+    // Memoize slides
+    const slides = useMemo(() => currentImages?.map(img => {
+        const isBase64 = img.path?.startsWith('data:');
+        return { src: isBase64 ? img.path : `/${img.path}` };
+    }) || [], [currentImages]);
 
     // KaTeX Rendering for View Mode
     useEffect(() => {
@@ -75,10 +85,16 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveO
         setIsEditingGenre(false);
         setIsEditingExplanation(false);
         setIsSavingExplanation(false);
+        setIsEditingQuestion(false);
+        setIsEditingOptions(false);
+        setEditingLegendIdx(null);
         // Reset drafts to avoid stale content
         setEditAnswerKey("");
         setEditGenre("");
         setDraftExplanation("");
+        setDraftQuestionText("");
+        setDraftOptions({});
+        setDraftLegendText("");
     }, [question.id]);
 
     // Handlers for starting edit
@@ -96,6 +112,54 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveO
     const startEditingExplanation = () => {
         setDraftExplanation(currentExplanation);
         setIsEditingExplanation(true);
+    };
+
+    const startEditingQuestion = () => {
+        setDraftQuestionText(currentQuestionText);
+        setIsEditingQuestion(true);
+    };
+
+    const startEditingOptions = () => {
+        setDraftOptions({ ...currentOptions });
+        setIsEditingOptions(true);
+    };
+
+    const startEditingLegend = (idx, currentLegend) => {
+        setDraftLegendText(currentLegend || "");
+        setEditingLegendIdx(idx);
+    };
+
+    const handleSaveQuestionText = () => {
+        if (onSaveQuestionData) {
+            onSaveQuestionData(question.id, {
+                question: draftQuestionText
+            });
+        }
+        setIsEditingQuestion(false);
+    };
+
+    const handleSaveOptions = () => {
+        if (onSaveQuestionData) {
+            onSaveQuestionData(question.id, {
+                options: draftOptions
+            });
+        }
+        setIsEditingOptions(false);
+    };
+
+    const handleSaveLegend = (idx) => {
+        if (onSaveQuestionData) {
+            const updatedImages = currentImages.map((img, i) => {
+                if (i === idx) {
+                    return { ...img, legend: draftLegendText };
+                }
+                return img;
+            });
+            onSaveQuestionData(question.id, {
+                images: updatedImages
+            });
+        }
+        setEditingLegendIdx(null);
     };
 
     const toggleOption = (key) => {
@@ -129,23 +193,19 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveO
     };
 
     const handleSaveAnswer = () => {
-        if (onSaveOverride) {
+        if (onSaveQuestionData) {
             const safeAnswer = editAnswerKey.split(/[,、\s]+/).map(s => s.trim()).filter(Boolean);
-            onSaveOverride(question.id, {
-                answer: safeAnswer,
-                genre: currentGenre,
-                explanation: currentExplanation
+            onSaveQuestionData(question.id, {
+                answer: safeAnswer
             });
         }
         setIsEditingAnswer(false);
     };
 
     const handleSaveGenre = () => {
-        if (onSaveOverride) {
-            onSaveOverride(question.id, {
-                answer: currentAnswer,
-                genre: editGenre,
-                explanation: currentExplanation
+        if (onSaveQuestionData) {
+            onSaveQuestionData(question.id, {
+                genre: editGenre
             });
         }
         setIsEditingGenre(false);
@@ -156,64 +216,15 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveO
         setIsSavingExplanation(true);
 
         try {
-            let finalExplanation = draftExplanation;
-
-            // DOMParser to parse HTML and extract Base64 images
-            const parser = new DOMParser();
-            const doc = parser.parseFromString(draftExplanation, 'text/html');
-            const images = doc.querySelectorAll('img');
-            const uploadPromises = [];
-
-            images.forEach((img) => {
-                const src = img.getAttribute('src');
-                if (src && src.startsWith('data:image/')) {
-                    const parts = src.split(',');
-                    if (parts.length < 2) return;
-
-                    const mimeMatch = parts[0].match(/:(.*?);/);
-                    if (!mimeMatch) return;
-                    const mime = mimeMatch[1];
-                    const base64Data = parts[1];
-
-                    // Convert Base64 to Blob
-                    const binaryString = atob(base64Data);
-                    const len = binaryString.length;
-                    const bytes = new Uint8Array(len);
-                    for (let i = 0; i < len; i++) {
-                        bytes[i] = binaryString.charCodeAt(i);
-                    }
-                    const blob = new Blob([bytes], { type: mime });
-                    const extension = mime.split('/')[1] || 'png';
-
-                    const timestamp = Date.now();
-                    const filename = `uploads/${timestamp}_pasted_${Math.random().toString(36).substring(2, 9)}.${extension}`;
-
-                    const uploadPromise = (async () => {
-                        const storageRef = ref(storage, filename);
-                        await uploadBytes(storageRef, blob);
-                        const url = await getDownloadURL(storageRef);
-                        img.setAttribute('src', url);
-                    })();
-                    uploadPromises.push(uploadPromise);
-                }
-            });
-
-            if (uploadPromises.length > 0) {
-                await Promise.all(uploadPromises);
-                finalExplanation = doc.body.innerHTML;
-            }
-
-            if (onSaveOverride) {
-                await onSaveOverride(question.id, {
-                    answer: currentAnswer,
-                    genre: currentGenre,
-                    explanation: finalExplanation
+            if (onSaveQuestionData) {
+                await onSaveQuestionData(question.id, {
+                    explanation: draftExplanation
                 });
             }
             setIsEditingExplanation(false);
         } catch (error) {
-            console.error("Failed to save explanation / upload images:", error);
-            alert("解説の保存または画像のアップロードに失敗しました。");
+            console.error("Failed to save explanation:", error);
+            alert("解説の保存に失敗しました。");
         } finally {
             setIsSavingExplanation(false);
         }
@@ -271,22 +282,62 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveO
             </div>
 
             {/* Question Text */}
-            <div
-                className={styles.questionText}
-                dangerouslySetInnerHTML={{ __html: question.question }}
-            />
+            <div className={styles.questionSection} style={{ marginBottom: '1.5rem' }}>
+                {!isEditingQuestion ? (
+                    <div className={styles.questionTextWrapper} style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '0.5rem' }}>
+                        <div
+                            className={styles.questionText}
+                            style={{ margin: 0, flex: 1 }}
+                            dangerouslySetInnerHTML={{ __html: currentQuestionText }}
+                        />
+                        <button onClick={startEditingQuestion} className={styles.iconEditBtn} style={{ marginTop: '4px' }} title="問題文を編集">✎</button>
+                    </div>
+                ) : (
+                    <div className={styles.editorWrapper} style={{ marginBottom: '1rem' }}>
+                        <h4 style={{ margin: '0 0 0.5rem 0' }}>問題文の編集</h4>
+                        <AnswerEditor content={draftQuestionText} onChange={setDraftQuestionText} />
+                        <div className={styles.editActions}>
+                            <button onClick={() => setIsEditingQuestion(false)} className={styles.cancelBtn}>キャンセル</button>
+                            <button onClick={handleSaveQuestionText} className={styles.saveBtn}>保存</button>
+                        </div>
+                    </div>
+                )}
+            </div>
 
             {/* Images */}
-            {question.images && question.images.length > 0 && (
-                <div className={`${styles.imageGrid} ${question.images.length === 1 ? styles.singleGrid : ''}`}>
-                    {question.images.map((img, idx) => (
+            {currentImages && currentImages.length > 0 && (
+                <div className={`${styles.imageGrid} ${currentImages.length === 1 ? styles.singleGrid : ''}`}>
+                    {currentImages.map((img, idx) => (
                         <div key={idx} className={styles.imageWrapper} onClick={() => { setLightboxIndex(idx); setLightboxOpen(true); }}>
                             <img
-                                src={`/${img.path}`}
+                                src={img.path?.startsWith('data:') ? img.path : `/${img.path}`}
                                 alt={img.legend || `Image ${idx + 1}`}
                                 className={styles.thumbnail}
                             />
-                            {img.legend && <div className={styles.legend} dangerouslySetInnerHTML={{ __html: img.legend }} />}
+                            {editingLegendIdx === idx ? (
+                                <div className={styles.legendEditWrapper} onClick={(e) => e.stopPropagation()} style={{ marginTop: '0.5rem', width: '100%' }}>
+                                    <input
+                                        type="text"
+                                        value={draftLegendText}
+                                        onChange={(e) => setDraftLegendText(e.target.value)}
+                                        style={{ width: '100%', padding: '0.3rem', fontSize: '0.85rem', border: '1px solid #cbd5e0', borderRadius: '0.25rem' }}
+                                        autoFocus
+                                    />
+                                    <div className={styles.legendEditActions} style={{ marginTop: '0.25rem', display: 'flex', justifyContent: 'flex-end', gap: '0.25rem' }}>
+                                        <button onClick={() => setEditingLegendIdx(null)} style={{ padding: '0.1rem 0.4rem', fontSize: '0.75rem', background: '#e2e8f0', border: 'none', borderRadius: '0.25rem', cursor: 'pointer' }}>✕</button>
+                                        <button onClick={() => handleSaveLegend(idx)} style={{ padding: '0.1rem 0.4rem', fontSize: '0.75rem', background: '#3182ce', color: 'white', border: 'none', borderRadius: '0.25rem', cursor: 'pointer' }}>✓</button>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className={styles.legendWrapper} onClick={(e) => e.stopPropagation()} style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.25rem' }}>
+                                    {img.legend ? (
+                                        <span className={styles.legend} style={{ margin: 0 }} dangerouslySetInnerHTML={{ __html: img.legend }} />
+                                    ) : (
+                                        <span className={styles.legend} style={{ margin: 0, color: '#a0aec0', fontStyle: 'italic' }}>凡例なし</span>
+                                    )}
+                                    <button onClick={() => startEditingLegend(idx, img.legend)} className={styles.iconEditBtn} style={{ padding: 0 }} title="凡例を編集">✎</button>
+                                </div>
+                            )}
                         </div>
                     ))}
                 </div>
@@ -299,31 +350,65 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveO
                 slides={slides}
             />
 
-            {/* Options */}
-            <div className={styles.options}>
-                {question.options && Object.entries(question.options).map(([key, text]) => {
-                    const isSelected = selectedOptions.includes(key);
-                    const isActualAnswer = Array.isArray(currentAnswer) ? currentAnswer.includes(key) : currentAnswer === key;
-                    const isCorrectChoice = isActualAnswer;
-                    let optionClass = styles.optionBtn;
-
-                    if (isSelected) optionClass += ` ${styles.selected}`;
-                    if (showAnswer) {
-                        if (isCorrectChoice) optionClass += ` ${styles.correct}`;
-                        if (isSelected && !isCorrectChoice) optionClass += ` ${styles.wrong}`;
-                    }
-
-                    return (
-                        <button
-                            key={key}
-                            className={optionClass}
-                            onClick={() => toggleOption(key)}
-                        >
-                            <span className={styles.optionKey}>{key}</span>
-                            <span dangerouslySetInnerHTML={{ __html: text }} />
+            {/* Options Section */}
+            <div className={styles.optionsSection} style={{ marginBottom: '2rem' }}>
+                <div className={styles.optionsHeader} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+                    <h4 style={{ margin: 0, fontSize: '1rem', color: '#4a5568' }}>選択肢</h4>
+                    {!isEditingOptions && (
+                        <button onClick={startEditingOptions} style={{ fontSize: '0.8rem', background: 'none', border: 'none', color: '#3182ce', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                            ✎ 選択肢を編集
                         </button>
-                    );
-                })}
+                    )}
+                </div>
+
+                {!isEditingOptions ? (
+                    <div className={styles.options} style={{ marginBottom: 0 }}>
+                        {currentOptions && Object.entries(currentOptions).sort((a,b) => a[0].localeCompare(b[0])).map(([key, text]) => {
+                            const isSelected = selectedOptions.includes(key);
+                            const isActualAnswer = Array.isArray(currentAnswer) ? currentAnswer.includes(key) : currentAnswer === key;
+                            const isCorrectChoice = isActualAnswer;
+                            let optionClass = styles.optionBtn;
+
+                            if (isSelected) optionClass += ` ${styles.selected}`;
+                            if (showAnswer) {
+                                if (isCorrectChoice) optionClass += ` ${styles.correct}`;
+                                if (isSelected && !isCorrectChoice) optionClass += ` ${styles.wrong}`;
+                            }
+
+                            return (
+                                <button
+                                    key={key}
+                                    className={optionClass}
+                                    onClick={() => toggleOption(key)}
+                                >
+                                    <span className={styles.optionKey}>{key}</span>
+                                    <span dangerouslySetInnerHTML={{ __html: text }} />
+                                </button>
+                            );
+                        })}
+                    </div>
+                ) : (
+                    <div className={styles.optionsEditForm} style={{ background: '#f8fafc', padding: '1rem', borderRadius: '0.5rem', border: '1px solid #e2e8f0' }}>
+                        {currentOptions && Object.keys(currentOptions).sort().map(key => (
+                            <div key={key} style={{ display: 'flex', alignItems: 'center', marginBottom: '0.5rem' }}>
+                                <span style={{ fontWeight: 'bold', width: '24px', color: '#4a5568' }}>{key}</span>
+                                <input
+                                    type="text"
+                                    value={draftOptions[key] || ""}
+                                    onChange={(e) => {
+                                        const val = e.target.value;
+                                        setDraftOptions(prev => ({ ...prev, [key]: val }));
+                                    }}
+                                    style={{ flex: 1, padding: '0.4rem', border: '1px solid #cbd5e0', borderRadius: '0.25rem', fontSize: '0.9rem' }}
+                                />
+                            </div>
+                        ))}
+                        <div className={styles.editActions} style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.75rem' }}>
+                            <button onClick={() => setIsEditingOptions(false)} className={styles.cancelBtn}>キャンセル</button>
+                            <button onClick={handleSaveOptions} className={styles.saveBtn}>保存</button>
+                        </div>
+                    </div>
+                )}
             </div>
 
             {/* Actions */}

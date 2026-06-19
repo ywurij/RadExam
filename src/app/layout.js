@@ -12,8 +12,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata = {
-  title: "RadTest",
-  description: "RadTest - Radiology Exam Practice",
+  title: "RadExam",
+  description: "RadExam - Radiology Exam Practice",
   manifest: "/manifest.json",
 };
 
@@ -25,17 +25,11 @@ export const viewport = {
   userScalable: false, // Often used in PWA to prevent zooming issues on inputs, verify accessibility if strict.
 };
 
-import { AuthProvider, ProtectedRoute } from '@/context/AuthContext';
-
 export default function RootLayout({ children }) {
   return (
     <html lang="en" suppressHydrationWarning>
       <body className={`${geistSans.variable} ${geistMono.variable}`}>
-        <AuthProvider>
-          <ProtectedRoute>
-            {children}
-          </ProtectedRoute>
-        </AuthProvider>
+        {children}
       </body>
     </html>
   );
