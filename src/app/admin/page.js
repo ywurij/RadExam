@@ -1561,7 +1561,12 @@ export default function AdminPage() {
                  if (pageImgs.length > 0 && qs.length > 0) {
                      if (parserProfile.imageAssignmentStrategy === 'nearest-preceding-question') {
                          pageImgs.forEach(img => {
-                             const targetQ = qs.find(q => q.anchorY >= img.y - 5) || qs[qs.length - 1];
+                             const precedingQuestions = qs.filter(q => q.anchorY >= img.y - 5);
+                             const targetQ = precedingQuestions.length > 0
+                                 ? precedingQuestions.reduce((closest, candidate) => (
+                                     (candidate.anchorY - img.y) < (closest.anchorY - img.y) ? candidate : closest
+                                 ))
+                                 : qs[qs.length - 1];
                              targetQ.pageImages.push(img);
                              assignedImages.add(img);
                          });
