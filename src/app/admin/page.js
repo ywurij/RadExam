@@ -11,6 +11,8 @@ const FOOTER_DASH_CLASS = 'ー―－\\-−–—';
 const FOOTER_PAGE_PATTERN = new RegExp(`^[${FOOTER_DASH_CLASS}]?\\s*[0-9０-９]+\\s*[${FOOTER_DASH_CLASS}]?$`);
 const FOOTER_PAGE_SUFFIX_PATTERN = new RegExp(`\\s*[${FOOTER_DASH_CLASS}]?\\s*[0-9０-９]+\\s*[${FOOTER_DASH_CLASS}]?\\s*$`, 'g');
 const FOOTER_DASH_ONLY_PATTERN = new RegExp(`^[${FOOTER_DASH_CLASS}]+$`);
+const IMAGE_ORIENTATION_LABEL_PATTERN = /^(?:右前斜位|左前斜位|右後斜位|左後斜位|前斜位|後斜位|正面|前面|後面|側面|右側面|左側面|右|左|前|後|上|下|矢状|冠状|横断|軸位|長軸|短軸)(?:像|位)?$/i;
+const WEAK_IMAGE_DESCRIPTOR_PATTERN = /^(?:[①-⑳]|\(?\s*[0-9０-９]+\s*\)?|[0-9０-９]+(?:\.[0-9０-９]+)?)$/;
 
 // レジェンドとして適切かどうかを判定する関数
 const isValidLegendText = (text, item = null, allPageTextItems = []) => {
@@ -423,7 +425,7 @@ const extractLegendForImage = (rect, textItems, limits = {}, allPageTextItems = 
     
     // (a) 画像の外側近傍 (上下20px, 左右40pxに制限し、隣接画像との干渉限界 limits でX座標を制限)
     const marginY = 20;
-    const marginX = 40; // 左右マージンを40pxに拡大
+    const marginX = Math.max(40, Math.min(120, imageWidth * 0.25));
     
     let descMinX = origMinX - marginX;
     let descMaxX = origMaxX + marginX;
@@ -456,20 +458,34 @@ const extractLegendForImage = (rect, textItems, limits = {}, allPageTextItems = 
     // 画像の外側近傍のみを探索範囲とする
     const labelCandidates = outsideText;
 
+    const orientationDescriptors = [];
+    const genericDescriptors = [];
+
     labelCandidates.forEach(item => {
         const text = item.text.trim();
         if (text.length > 0 && text.length <= shortLabelLimit) {
+            if (WEAK_IMAGE_DESCRIPTOR_PATTERN.test(text)) {
+                return;
+            }
+
+            const isOrientationLabel = IMAGE_ORIENTATION_LABEL_PATTERN.test(text);
             const isLabelLike = /^[a-zA-Z0-9-+\s()\/]+$/.test(text) || 
                                 /^(?:右|左|前|後|上|下|側面|正面|前面|後面|造影|シネ|遅延|早期|矢状|横断|冠状|エコー|シンチ|図|表|画像|負荷|安静|運動|ストレス|レスト)(?:時|像)?\d*$/i.test(text) ||
                                 /^(?:anterior|posterior|lateral|coronal|sagittal|transverse|axial|min|hour|hr|sec|iv|pre|post|delay|early|Right|Left|L|R|A|P|H|F|sup|inf)\d*$/i.test(text);
 
             if (isLabelLike && !usedWords.includes(text) && !mainTitle.includes(text)) {
-                descriptorsSet.add(text);
+                if (isOrientationLabel) {
+                    orientationDescriptors.push(text);
+                } else {
+                    genericDescriptors.push(text);
+                }
                 usedItems.push(item);
             }
         }
     });
 
+    const descriptorSource = orientationDescriptors.length > 0 ? orientationDescriptors : genericDescriptors;
+    descriptorSource.forEach(text => descriptorsSet.add(text));
     const descriptors = Array.from(descriptorsSet);
 
     let finalLegend = mainTitle.trim();
