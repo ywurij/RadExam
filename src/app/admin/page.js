@@ -7,6 +7,11 @@ import { useRouter } from 'next/navigation';
 import { initializeLocalExams, getExamTypes } from '@/lib/data';
 import { saveLocalExam, deleteLocalExam, exportAllLocalData, importLocalData, getLocalExam } from '@/lib/localDb';
 
+const FOOTER_DASH_CLASS = 'ー―－\\-−–—';
+const FOOTER_PAGE_PATTERN = new RegExp(`^[${FOOTER_DASH_CLASS}]?\\s*[0-9０-９]+\\s*[${FOOTER_DASH_CLASS}]?$`);
+const FOOTER_PAGE_SUFFIX_PATTERN = new RegExp(`\\s*[${FOOTER_DASH_CLASS}]?\\s*[0-9０-９]+\\s*[${FOOTER_DASH_CLASS}]?\\s*$`, 'g');
+const FOOTER_DASH_ONLY_PATTERN = new RegExp(`^[${FOOTER_DASH_CLASS}]+$`);
+
 // レジェンドとして適切かどうかを判定する関数
 const isValidLegendText = (text, item = null, allPageTextItems = []) => {
     if (!text) return false;
@@ -15,7 +20,7 @@ const isValidLegendText = (text, item = null, allPageTextItems = []) => {
     if (trimmed.length > 50) return false; // レジェンドとしては50文字超は長すぎる
 
     // フッター（ページ番号）や単なる数値は無条件で除外する (二重の安全弁)
-    const isFooterOrPageNum = /^[ー―-]?\s*\d+\s*[ー―-]?$/.test(trimmed) || /^\d+$/.test(trimmed);
+    const isFooterOrPageNum = FOOTER_PAGE_PATTERN.test(trimmed) || /^[0-9０-９]+$/.test(trimmed);
     if (isFooterOrPageNum) {
         return false;
     }
@@ -35,13 +40,13 @@ const isValidLegendText = (text, item = null, allPageTextItems = []) => {
     // 3. 選択肢と思われるパターン（a. 〜〜）は除外
     // 単に "a" や "b" や "a)" などは画像記号としてのレジェンドの可能性があるので、
     // 選択肢の記号から始まって、かつ後ろに文章が続いているものを除外する
-    if (/^[a-eａ-ｅ][\.．\s\)\)）].{2,}/i.test(trimmed)) {
+    if (/^[a-eA-Eａ-ｅＡ-Ｅ][\.．\s\)\)）].{2,}/.test(trimmed)) {
         return false;
     }
 
     // Left-side option prefix check
     if (item && allPageTextItems.length > 0) {
-        const optionPattern = /^[a-e\uff41-\uff45][\.\uff0e\s\)\)\uff09]?$/i;
+        const optionPattern = /^[a-eA-E\uff41-\uff45\uff21-\uff25][\.\uff0e\s\)\)\uff09]?$/;
         const sameLineLeftItems = allPageTextItems.filter(other => 
             Math.abs(other.y - item.y) <= 3 && other.x < item.x
         );
@@ -161,6 +166,116 @@ const mergeNestedImageRects = (rects) => {
 
     return independentRects;
 };
+
+const getPdfParserProfile = (examCategory) => {
+    if (examCategory === '4') {
+        return {
+            name: 'ivr',
+            questionPattern: /^\s*(?:(?:問|問題|No\.?)\s*(\d{1,3})|(\d{1,3})\s*[\.．])/i,
+            optionPattern: /^[a-eA-Eａ-ｅＡ-Ｅ][\.．\s\)\)）]/,
+            minQuestionLineLength: 4,
+            minOptionCount: 3,
+            footerMinY: 45,
+            imageAssignmentStrategy: 'nearest-preceding-question'
+        };
+    }
+
+    return {
+        name: 'default',
+        questionPattern: /^\s*(?:(?:問|問題|No\.?)\s*(\d{1,3})|(\d{1,3})\s*[\.．])/i,
+        optionPattern: /^[a-eA-Eａ-ｅＡ-Ｅ][\.．\s\)\)）]/,
+        minQuestionLineLength: 5,
+        minOptionCount: 3,
+        footerMinY: 60,
+        imageAssignmentStrategy: 'page-last-question'
+    };
+};
+
+const buildTextLinesFromItems = (textItems) => {
+    if (!textItems || textItems.length === 0) return [];
+
+    const sortedItems = [...textItems].sort((a, b) => {
+        if (Math.abs(b.y - a.y) > 4) return b.y - a.y;
+        return a.x - b.x;
+    });
+
+    const lines = [];
+    sortedItems.forEach(item => {
+        const existingLine = lines.find(line => Math.abs(line.y - item.y) <= 4);
+        if (existingLine) {
+            existingLine.items.push(item);
+            existingLine.y = existingLine.items.reduce((sum, current) => sum + current.y, 0) / existingLine.items.length;
+        } else {
+            lines.push({ y: item.y, items: [item] });
+        }
+    });
+
+    return lines
+        .map(line => {
+            const sortedLineItems = [...line.items].sort((a, b) => a.x - b.x);
+            return {
+                y: line.y,
+                text: sortedLineItems.map(item => item.text).join('').trim(),
+            };
+        })
+        .filter(line => line.text.length > 0)
+        .sort((a, b) => b.y - a.y);
+};
+
+const detectFirstQuestionPage = (lines, parserProfile) => {
+    const questionLineIndex = lines.findIndex(line => {
+        const match = line.text.match(parserProfile.questionPattern);
+        if (!match) return false;
+        return parseInt(match[1] || match[2], 10) === 1 && line.text.length >= parserProfile.minQuestionLineLength;
+    });
+
+    if (questionLineIndex === -1) return false;
+
+    if (parserProfile.name !== 'ivr') return true;
+
+    const tailLines = lines.slice(questionLineIndex);
+    const optionCount = tailLines.filter(line => parserProfile.optionPattern.test(line.text)).length;
+    return optionCount >= 1;
+};
+
+const buildTextItemKey = (item) => `${item.pageNum}_${item.x}_${item.y}_${item.text.trim()}`;
+
+const stripFooterSuffix = (text) => text.replace(FOOTER_PAGE_SUFFIX_PATTERN, '').trim();
+
+const canonicalizeOptionKey = (key) => {
+    const normalized = String(key || '').trim();
+    const map = {
+        a: 'a', A: 'a', ａ: 'a', Ａ: 'a',
+        b: 'b', B: 'b', ｂ: 'b', Ｂ: 'b',
+        c: 'c', C: 'c', ｃ: 'c', Ｃ: 'c',
+        d: 'd', D: 'd', ｄ: 'd', Ｄ: 'd',
+        e: 'e', E: 'e', ｅ: 'e', Ｅ: 'e',
+    };
+    return map[normalized] || normalized.toLowerCase();
+};
+
+const normalizeQuestionOptions = (options) => {
+    const source = options && typeof options === 'object' ? options : {};
+    const normalizedEntries = {};
+    Object.entries(source).forEach(([key, value]) => {
+        normalizedEntries[canonicalizeOptionKey(key)] = value;
+    });
+    return {
+        a: normalizedEntries.a ?? '',
+        b: normalizedEntries.b ?? '',
+        c: normalizedEntries.c ?? '',
+        d: normalizedEntries.d ?? '',
+        e: normalizedEntries.e ?? '',
+    };
+};
+
+const getFilledOptionCount = (options) => {
+    const normalized = normalizeQuestionOptions(options);
+    return Object.values(normalized).filter(value => String(value || '').trim().length > 0).length;
+};
+
+const GLUED_QUESTION_UNIT_PREFIX = /^(?:[a-z]|mSv|Sv|Gy|mGy|cGy|mm|cm|mL|kg|%|歳|年|か月|ヶ月)/i;
+const IVR_SECTION_TRANSITION_PATTERN = /(?:共通問題は以上です|次ページ以降も解答してください|IVR専門医試験受験者)/;
 
 // 画像の境界とテキスト要素のリストからレジェンドを抽出する関数
 // limits: { leftLimit, rightLimit, topLimit, bottomLimit } を受け取り、探索範囲を制限する
@@ -462,13 +577,7 @@ export default function AdminPage() {
                     questionNumber,
                     genre: q.genre || '',
                     question: q.question || '',
-                    options: {
-                        a: q.options?.a || '',
-                        b: q.options?.b || '',
-                        c: q.options?.c || '',
-                        d: q.options?.d || '',
-                        e: q.options?.e || '',
-                    },
+                    options: normalizeQuestionOptions(q.options),
                     answer: q.answer || '',
                     explanation: q.explanation || '',
                     images: Array.isArray(q.images) ? q.images.map((img, imgIdx) => ({
@@ -648,6 +757,7 @@ export default function AdminPage() {
         setPdfProgress({ current: 0, total: 0, status: 'PDFファイルを読み込んでいます...' });
 
         try {
+            const parserProfile = getPdfParserProfile(examCategory);
             // pdfjs-dist の ESM モジュールを動的インポート
             const pdfjsLib = await import('pdfjs-dist/build/pdf.mjs');
             pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
@@ -672,7 +782,7 @@ export default function AdminPage() {
             let firstQuestionPage = 1;
             let foundFirstPage = false;
 
-            const questionPattern = /^\s*(?:問|No\.?)?\s*(\d{1,3})\s*[\.．\s　]/i;
+            const questionPattern = parserProfile.questionPattern;
             const quizStartHeaderPattern = /(?:第\s*\d+\s*回[\s　]*[^\n]*(?:試験問題|筆記|試験)|放射線科専門医認定試験|核医学専門医試験|筆記試験)/i;
 
             for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
@@ -680,6 +790,12 @@ export default function AdminPage() {
                     const page = await pdf.getPage(pageNum);
                     const textContent = await page.getTextContent();
                     const textStr = textContent.items.map(item => item.str).join(' ');
+                    const scanTextItems = textContent.items.map(item => ({
+                        text: item.str,
+                        x: item.transform[4],
+                        y: item.transform[5],
+                    }));
+                    const scanLines = buildTextLinesFromItems(scanTextItems);
 
                     // 1. 年度自動検出 (最初の3ページのみ)
                     if (pageNum <= 3) {
@@ -697,16 +813,7 @@ export default function AdminPage() {
 
                     // 2. 問題開始ページ (firstQuestionPage) の検出
                     if (!foundFirstPage) {
-                        let hasQ1 = false;
-                        for (const item of textContent.items) {
-                            const match = item.str.match(/^\s*(?:問|問題|No\.?|第)\s*(?:1|１)(?!\d)/i);
-                            if (match) {
-                                hasQ1 = true;
-                                break;
-                            }
-                        }
-
-                        if (hasQ1) {
+                        if (detectFirstQuestionPage(scanLines, parserProfile)) {
                             firstQuestionPage = pageNum;
                             foundFirstPage = true;
                         }
@@ -793,17 +900,22 @@ export default function AdminPage() {
             const parseQuestionStart = (lineText) => {
                 const standardMatch = lineText.match(questionPattern);
                 if (standardMatch) {
+                    const qNum = parseInt(standardMatch[1] || standardMatch[2], 10);
                     return {
-                        qNum: parseInt(standardMatch[1]),
+                        qNum,
                         questionText: lineText.substring(standardMatch[0].length).trim(),
                     };
                 }
 
                 const gluedMatch = lineText.match(/^\s*(\d{1,3})(?=[A-Za-z(（［【])/);
                 if (gluedMatch) {
+                    const trailingText = lineText.substring(gluedMatch[0].length).trim();
+                    if (GLUED_QUESTION_UNIT_PREFIX.test(trailingText)) {
+                        return null;
+                    }
                     return {
                         qNum: parseInt(gluedMatch[1]),
-                        questionText: lineText.substring(gluedMatch[0].length).trim(),
+                        questionText: trailingText,
                     };
                 }
 
@@ -844,6 +956,9 @@ export default function AdminPage() {
                     return text;
                 }).join('');
             };
+
+            let ivrQuestionNumberOffset = 0;
+            let ivrSectionTransitionPending = false;
 
             rawPagesTextData.forEach((page) => {
                 // 1. 各テキストアイテムから、標準サイズに近い文字（ベースライン候補）のY座標を集める
@@ -927,15 +1042,28 @@ export default function AdminPage() {
                      const lineText = buildLineText(line).trim();
                      if (!lineText) return;
 
+                     if (parserProfile.name === 'ivr' && IVR_SECTION_TRANSITION_PATTERN.test(lineText)) {
+                         ivrSectionTransitionPending = true;
+                         return;
+                     }
+
                      const parsedStart = parseQuestionStart(lineText);
                      if (parsedStart) {
-                         const qNum = parsedStart.qNum;
+                         const rawQNum = parsedStart.qNum;
+                         let qNum = rawQNum;
+                         if (parserProfile.name === 'ivr') {
+                             if (currentQuestion && rawQNum <= (currentQuestion.rawQuestionNumber || currentQuestion.questionNumber)) {
+                                 ivrQuestionNumberOffset = currentQuestion.questionNumber;
+                             }
+                             qNum = ivrQuestionNumberOffset + rawQNum;
+                             ivrSectionTransitionPending = false;
+                         }
                          // ガード条件: 
                          // 1. 問題番号が1〜150の範囲内
                          // 2. 行の長さが5文字以上
                          // 3. 問題番号が昇順であること (前のアクティブな問題番号より大きい)
                          const isSequential = !currentQuestion || qNum > currentQuestion.questionNumber;
-                         if (qNum >= 1 && qNum <= 150 && lineText.length >= 5 && isSequential) {
+                         if (qNum >= 1 && qNum <= 150 && lineText.length >= parserProfile.minQuestionLineLength && isSequential) {
                              if (currentQuestion) {
                                  parsedQuestionsList.push(currentQuestion);
                              }
@@ -943,12 +1071,14 @@ export default function AdminPage() {
                              currentQuestion = {
                                  id: qNum,
                                  questionNumber: qNum,
+                                 rawQuestionNumber: rawQNum,
                                  question: questionText,
                                  options: {},
                                  images: [],
                                  rawTextLines: [questionText],
                                  pageImages: [],
                                  startPage: page.pageNum,
+                                 anchorY: Math.max(...line.map(item => item.y)),
                                  usedLines: [line]
                              };
                          } else if (currentQuestion) {
@@ -970,7 +1100,7 @@ export default function AdminPage() {
             }
 
             // 選択肢の簡易抽出
-            const optionPattern = /^[a-eａ-ｅ][\.．\s\)\)）]/i;
+            const optionPattern = parserProfile.optionPattern;
 
              parsedQuestionsList.forEach(q => {
                  let optionsStarted = false;
@@ -985,7 +1115,7 @@ export default function AdminPage() {
                     const match = trimmed.match(optionPattern);
                     if (match) {
                         optionsStarted = true;
-                        const optKey = trimmed[0][0].toLowerCase();
+                        const optKey = canonicalizeOptionKey(trimmed[0][0]);
                         const optText = trimmed.substring(match[0].length).trim();
                         q.options[optKey] = optText;
                         lastOptionKey = optKey;
@@ -995,7 +1125,7 @@ export default function AdminPage() {
                             // すでに選択肢の抽出が始まっている状態で、選択肢パターンにマッチしない行が来た場合
                             // これは選択肢の後に配置されている画像凡例やページ番号などのゴミ行
                             // フッター（ページ番号）や画像凡例と思われる行、またはすでに最後の選択肢eが出た後の行は除外する
-                            const isFooter = /^[ー―-]?\s*\d+\s*[ー―-]?$/.test(trimmed);
+                            const isFooter = FOOTER_PAGE_PATTERN.test(trimmed);
                             const isLegendLike = /(CT|MRI|像|写真|図|シンチ|造影|エコー|DWI|FLAIR|PET)/i.test(trimmed);
                             
                             if (isFooter || isLegendLike || lastOptionKey === 'e') {
@@ -1022,8 +1152,8 @@ export default function AdminPage() {
 
             // 選択肢が3つ未満の問題（シラバスや説明文など、誤検出されたもの）を除外
             parsedQuestionsList = parsedQuestionsList.filter(q => {
-                const optCount = Object.keys(q.options).length;
-                return optCount >= 3;
+                const optCount = getFilledOptionCount(q.options);
+                return optCount >= parserProfile.minOptionCount;
              });
 
              // 2.3 確定した問題文と選択肢のテキスト要素キーを Set に登録
@@ -1032,16 +1162,16 @@ export default function AdminPage() {
                  if (q.finalUsedLines) {
                      q.finalUsedLines.forEach(line => {
                          line.forEach(item => {
-                             const key = `${item.pageNum}_${item.x}_${item.y}_${item.text.trim()}`;
-                             assignedTextKeys.add(key);
-                         });
-                     });
-                 }
-             });
+                            assignedTextKeys.add(buildTextItemKey(item));
+                        });
+                    });
+                }
+            });
 
-             // 2.4 【第2パス】各ページから画像を抽出し、確定したテキストを除外してレジェンド探索
-             const allExtractedImagesPool = [];
-             let imageCounter = 0;
+            // 2.4 【第2パス】各ページから画像を抽出し、確定したテキストを除外してレジェンド探索
+            const allExtractedImagesPool = [];
+            const imageContainedTextKeys = new Set();
+            let imageCounter = 0;
 
              for (let pageNum = firstQuestionPage; pageNum <= totalPages; pageNum++) {
                  setPdfProgress(prev => ({ ...prev, status: `ページ ${pageNum}/${totalPages} の画像を抽出・解析中...` }));
@@ -1051,9 +1181,9 @@ export default function AdminPage() {
                  const textItems = pageData ? pageData.textItems : [];
 
                  const filteredTextItems = textItems.filter(item => {
-                     const key = `${pageNum}_${item.x}_${item.y}_${item.text.trim()}`;
+                     const key = buildTextItemKey(item);
                      // ページ最下部のフッター領域（y < 60）のテキストアイテムは探索前に除外する
-                     return !assignedTextKeys.has(key) && item.y >= 60;
+                     return !assignedTextKeys.has(key) && item.y >= parserProfile.footerMinY;
                  });
 
                  // 画像オブジェクトの位置情報を収集
@@ -1134,6 +1264,9 @@ export default function AdminPage() {
                              const tyCenter = item.y + item.height / 2;
                              return txCenter >= origMinX && txCenter <= origMaxX && tyCenter >= origMinY && tyCenter <= origMaxY;
                          });
+                         containedTexts.forEach(item => {
+                             imageContainedTextKeys.add(buildTextItemKey(item));
+                         });
 
                          const containedText = containedTexts.map(t => t.text).join(' ');
                          
@@ -1169,7 +1302,7 @@ export default function AdminPage() {
                           const limits = { leftLimit, rightLimit };
 
                           const availableTextItems = filteredTextItems.filter(item => {
-                              const key = `${pageNum}_${item.x}_${item.y}_${item.text.trim()}`;
+                              const key = buildTextItemKey(item);
                               return !usedLegendTextKeys.has(key);
                           });
 
@@ -1177,8 +1310,7 @@ export default function AdminPage() {
                           const legendStr = result.legendStr;
 
                           result.usedItems.forEach(item => {
-                              const key = `${pageNum}_${item.x}_${item.y}_${item.text.trim()}`;
-                              usedLegendTextKeys.add(key);
+                              usedLegendTextKeys.add(buildTextItemKey(item));
                           });
 
                          combinedCrops.push({
@@ -1325,6 +1457,72 @@ export default function AdminPage() {
                  });
              }
 
+             // 2.4.5 画像内テキストとフッター断片を除外した上で、問題文・選択肢を再構築
+             parsedQuestionsList.forEach(q => {
+                 const originalOptions = normalizeQuestionOptions(q.options);
+                 let optionsStarted = false;
+                 let lastOptionKey = '';
+                 const cleanQuestionLines = [];
+                 const rebuiltOptions = {};
+                 const rebuiltUsedLines = [];
+
+                 q.usedLines.forEach(line => {
+                     const sanitizedLineItems = line.filter(item => {
+                         if (imageContainedTextKeys.has(buildTextItemKey(item))) return false;
+                         const trimmed = item.text.trim();
+                         const isFooterFragment = item.y < (parserProfile.footerMinY + 8) && (
+                             FOOTER_DASH_ONLY_PATTERN.test(trimmed) ||
+                             /^[0-9０-９]+$/.test(trimmed)
+                         );
+                         return !isFooterFragment;
+                     });
+
+                     if (sanitizedLineItems.length === 0) return;
+
+                     let lineText = buildLineText(sanitizedLineItems).trim();
+                     if (!lineText) return;
+                     lineText = stripFooterSuffix(lineText);
+                     if (!lineText) return;
+
+                     const match = lineText.match(optionPattern);
+                     if (match) {
+                         optionsStarted = true;
+                         const optKey = canonicalizeOptionKey(lineText[0][0]);
+                         const optText = stripFooterSuffix(lineText.substring(match[0].length).trim());
+                         rebuiltOptions[optKey] = optText;
+                         lastOptionKey = optKey;
+                         rebuiltUsedLines.push(sanitizedLineItems);
+                     } else if (optionsStarted) {
+                         const isFooter = FOOTER_PAGE_PATTERN.test(lineText);
+                         const isLegendLike = /(CT|MRI|像|写真|図|シンチ|造影|エコー|DWI|FLAIR|PET)/i.test(lineText);
+
+                         if (isFooter || isLegendLike || lastOptionKey === 'e') {
+                             return;
+                         }
+
+                         if (lastOptionKey) {
+                             rebuiltOptions[lastOptionKey] += ` ${lineText}`;
+                             rebuiltUsedLines.push(sanitizedLineItems);
+                         }
+                     } else {
+                         const parsedStart = parseQuestionStart(lineText);
+                         cleanQuestionLines.push(parsedStart ? parsedStart.questionText : lineText);
+                         rebuiltUsedLines.push(sanitizedLineItems);
+                     }
+                 });
+
+                 q.question = cleanQuestionLines.join('\n').trim();
+                 q.options = getFilledOptionCount(rebuiltOptions) > 0
+                     ? normalizeQuestionOptions(rebuiltOptions)
+                     : originalOptions;
+                 q.finalUsedLines = rebuiltUsedLines;
+             });
+
+             parsedQuestionsList = parsedQuestionsList.filter(q => {
+                 const optCount = getFilledOptionCount(q.options);
+                 return optCount >= parserProfile.minOptionCount;
+             });
+
               // 2.5 全体の画像プールから問題へのマッピング・紐付け処理
              parsedQuestionsList.forEach(q => {
                  q.pageImages = [];
@@ -1353,7 +1551,7 @@ export default function AdminPage() {
 
              Object.keys(questionsByPage).forEach(pageNumStr => {
                  const pageNum = parseInt(pageNumStr);
-                 const qs = questionsByPage[pageNum];
+                 const qs = questionsByPage[pageNum].sort((a, b) => b.anchorY - a.anchorY);
                  
                  // そのページの未割り当て画像を取得し、Y座標（上から下）でソート
                  const pageImgs = allExtractedImagesPool
@@ -1361,12 +1559,20 @@ export default function AdminPage() {
                      .sort((a, b) => b.y - a.y); // Y座標降順 (PDFのY軸は下から上なので、大きい方が上)
 
                  if (pageImgs.length > 0 && qs.length > 0) {
-                     // ページ内で最後に出現した問題に全ての余った画像を割り当てる
-                     const lastQ = qs[qs.length - 1];
-                     pageImgs.forEach(img => {
-                         lastQ.pageImages.push(img);
-                         assignedImages.add(img);
-                     });
+                     if (parserProfile.imageAssignmentStrategy === 'nearest-preceding-question') {
+                         pageImgs.forEach(img => {
+                             const targetQ = qs.find(q => q.anchorY >= img.y - 5) || qs[qs.length - 1];
+                             targetQ.pageImages.push(img);
+                             assignedImages.add(img);
+                         });
+                     } else {
+                         // ページ内で最後に出現した問題に全ての余った画像を割り当てる
+                         const lastQ = qs[qs.length - 1];
+                         pageImgs.forEach(img => {
+                             lastQ.pageImages.push(img);
+                             assignedImages.add(img);
+                         });
+                     }
                  }
              });
 
@@ -1398,7 +1604,7 @@ export default function AdminPage() {
                     questionNumber: q.questionNumber,
                     genre: '',
                     question: q.question,
-                    options: q.options,
+                    options: normalizeQuestionOptions(q.options),
                     answer: '',
                     explanation: '',
                     images: q.pageImages.map((img, imgIdx) => ({
@@ -1992,7 +2198,7 @@ export default function AdminPage() {
                                                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', marginBottom: '1rem', background: '#f7fafc', padding: '0.75rem', borderRadius: '0.375rem' }}>
                                                         {Object.entries(q.options).map(([key, val]) => (
                                                             <div key={key} style={{ display: 'flex', gap: '0.5rem', fontSize: '0.85rem' }}>
-                                                                <span style={{ fontWeight: 'bold', minWidth: '20px', color: '#4a5568', textTransform: 'uppercase' }}>{key}.</span>
+                                                                <span style={{ fontWeight: 'bold', minWidth: '20px', color: '#4a5568' }}>{key}.</span>
                                                                 <span style={{ color: '#2d3748' }}>{val}</span>
                                                             </div>
                                                         ))}
@@ -2372,7 +2578,7 @@ export default function AdminPage() {
                                             <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '0.5rem' }}>
                                                 {['a', 'b', 'c', 'd', 'e'].map((optionKey) => (
                                                     <div key={optionKey} style={{ display: 'grid', gridTemplateColumns: '36px 1fr', gap: '0.5rem', alignItems: 'center' }}>
-                                                        <span style={{ fontWeight: 'bold', textTransform: 'uppercase' }}>{optionKey}.</span>
+                                                        <span style={{ fontWeight: 'bold' }}>{optionKey}.</span>
                                                         <input value={question.options?.[optionKey] || ''} onChange={(e) => handleEditingOptionChange(questionIndex, optionKey, e.target.value)} style={{ width: '100%', padding: '0.5rem', borderRadius: '0.375rem', border: '1px solid #cbd5e0' }} />
                                                     </div>
                                                 ))}
