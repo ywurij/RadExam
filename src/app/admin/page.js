@@ -109,6 +109,59 @@ const buildQuestionId = (year, questionNumber) => {
     return `${numericYear}${String(numericQuestionNumber).padStart(3, '0')}`;
 };
 
+const isRectContainedWithin = (outer, inner, tolerance = 4) => {
+    const outerMinX = outer.x - tolerance;
+    const outerMinY = outer.y - tolerance;
+    const outerMaxX = outer.x + outer.w + tolerance;
+    const outerMaxY = outer.y + outer.h + tolerance;
+    const innerMinX = inner.x;
+    const innerMinY = inner.y;
+    const innerMaxX = inner.x + inner.w;
+    const innerMaxY = inner.y + inner.h;
+
+    return (
+        innerMinX >= outerMinX &&
+        innerMaxX <= outerMaxX &&
+        innerMinY >= outerMinY &&
+        innerMaxY <= outerMaxY
+    );
+};
+
+const mergeNestedImageRects = (rects) => {
+    if (rects.length <= 1) return rects;
+
+    const uniqueRects = [];
+    rects.forEach(rect => {
+        const duplicate = uniqueRects.some(existing =>
+            Math.abs(existing.x - rect.x) < 1 &&
+            Math.abs(existing.y - rect.y) < 1 &&
+            Math.abs(existing.w - rect.w) < 1 &&
+            Math.abs(existing.h - rect.h) < 1
+        );
+        if (!duplicate) {
+            uniqueRects.push(rect);
+        }
+    });
+
+    const sortedByArea = [...uniqueRects].sort((a, b) => (b.w * b.h) - (a.w * a.h));
+    const independentRects = [];
+
+    sortedByArea.forEach(rect => {
+        const rectArea = rect.w * rect.h;
+        const hasContainer = independentRects.some(parent => {
+            const parentArea = parent.w * parent.h;
+            if (parentArea <= rectArea * 1.2) return false;
+            return isRectContainedWithin(parent, rect);
+        });
+
+        if (!hasContainer) {
+            independentRects.push(rect);
+        }
+    });
+
+    return independentRects;
+};
+
 // 画像の境界とテキスト要素のリストからレジェンドを抽出する関数
 // limits: { leftLimit, rightLimit, topLimit, bottomLimit } を受け取り、探索範囲を制限する
 const extractLegendForImage = (rect, textItems, limits = {}, allPageTextItems = []) => {
@@ -1057,12 +1110,13 @@ export default function AdminPage() {
                  }
 
                  const pageImages = [];
+                 const mergedImageRects = mergeNestedImageRects(rawImageRects);
 
-                  if (rawImageRects.length > 0) {
+                  if (mergedImageRects.length > 0) {
                       const combinedCrops = [];
                       
                       // Sort images: Y desc, X asc
-                      const sortedRects = [...rawImageRects].sort((a, b) => {
+                      const sortedRects = [...mergedImageRects].sort((a, b) => {
                           if (Math.abs(b.y - a.y) > 20) return b.y - a.y;
                           return a.x - b.x;
                       });
