@@ -169,6 +169,110 @@ const mergeNestedImageRects = (rects) => {
     return independentRects;
 };
 
+const findInkBoundsInCanvasRegion = (canvas, region, threshold = 245) => {
+    const x = Math.max(0, Math.floor(region.x));
+    const y = Math.max(0, Math.floor(region.y));
+    const w = Math.max(1, Math.min(canvas.width - x, Math.ceil(region.w)));
+    const h = Math.max(1, Math.min(canvas.height - y, Math.ceil(region.h)));
+
+    if (w <= 1 || h <= 1) return null;
+
+    const ctx = canvas.getContext('2d');
+    const { data } = ctx.getImageData(x, y, w, h);
+
+    const darkMask = new Uint8Array(w * h);
+
+    for (let py = 0; py < h; py++) {
+        for (let px = 0; px < w; px++) {
+            const idx = (py * w + px) * 4;
+            const alpha = data[idx + 3];
+            const r = data[idx];
+            const g = data[idx + 1];
+            const b = data[idx + 2];
+
+            if (alpha > 0 && (r < threshold || g < threshold || b < threshold)) {
+                darkMask[py * w + px] = 1;
+            }
+        }
+    }
+
+    const visited = new Uint8Array(w * h);
+    let bestComponent = null;
+    const neighbors = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+
+    for (let py = 0; py < h; py++) {
+        for (let px = 0; px < w; px++) {
+            const startIndex = py * w + px;
+            if (!darkMask[startIndex] || visited[startIndex]) continue;
+
+            const stack = [startIndex];
+            visited[startIndex] = 1;
+
+            let componentMinX = px;
+            let componentMinY = py;
+            let componentMaxX = px;
+            let componentMaxY = py;
+            let componentDarkPixelCount = 0;
+
+            while (stack.length > 0) {
+                const currentIndex = stack.pop();
+                const cx = currentIndex % w;
+                const cy = Math.floor(currentIndex / w);
+
+                componentDarkPixelCount++;
+                if (cx < componentMinX) componentMinX = cx;
+                if (cy < componentMinY) componentMinY = cy;
+                if (cx > componentMaxX) componentMaxX = cx;
+                if (cy > componentMaxY) componentMaxY = cy;
+
+                neighbors.forEach(([dx, dy]) => {
+                    const nx = cx + dx;
+                    const ny = cy + dy;
+                    if (nx < 0 || ny < 0 || nx >= w || ny >= h) return;
+                    const neighborIndex = ny * w + nx;
+                    if (!darkMask[neighborIndex] || visited[neighborIndex]) return;
+                    visited[neighborIndex] = 1;
+                    stack.push(neighborIndex);
+                });
+            }
+
+            const componentWidth = componentMaxX - componentMinX + 1;
+            const componentHeight = componentMaxY - componentMinY + 1;
+            if (componentDarkPixelCount < 80 || componentWidth < 20 || componentHeight < 20) {
+                continue;
+            }
+
+            if (!bestComponent || componentDarkPixelCount > bestComponent.darkPixelCount) {
+                bestComponent = {
+                    minX: componentMinX,
+                    minY: componentMinY,
+                    maxX: componentMaxX,
+                    maxY: componentMaxY,
+                    darkPixelCount: componentDarkPixelCount
+                };
+            }
+        }
+    }
+
+    if (!bestComponent) {
+        return null;
+    }
+
+    const bounds = {
+        x: x + bestComponent.minX,
+        y: y + bestComponent.minY,
+        w: bestComponent.maxX - bestComponent.minX + 1,
+        h: bestComponent.maxY - bestComponent.minY + 1,
+        darkPixelCount: bestComponent.darkPixelCount
+    };
+
+    if (bounds.w < 20 || bounds.h < 20) {
+        return null;
+    }
+
+    return bounds;
+};
+
 const getPdfParserProfile = (examCategory) => {
     if (examCategory === '4') {
         return {
@@ -1655,6 +1759,114 @@ export default function AdminPage() {
              });
 
              // 各問題ごとに紐づいた画像を位置順（ページ順 -> Y座標降順 -> X座標昇順）にソートし、legendを再設定
+             parsedQuestionsList.forEach(q => {
+                 q.pageImages.sort((a, b) => {
+                     if (a.page !== b.page) return a.page - b.page;
+                     if (Math.abs(a.y - b.y) > 20) return b.y - a.y;
+                     return a.x - b.x;
+                 });
+                 q.pageImages.forEach((img, idx) => {
+                     const cleaned = cleanLegendPrefix(img.detectedLegend);
+                     img.legend = cleaned || `図${idx + 1}`;
+                 });
+             });
+
+             // 2.5.5 ベクタ図形など画像オブジェクトとして検出できない図へのフォールバック
+             const figureCuePattern = /(?:図|画像|写真|シェーマ|模式図|図に示|画像を示|写真を示|造影を示|先端形状)/;
+             const renderedPageCache = new Map();
+
+             for (const [pageNumStr, pageQuestions] of Object.entries(questionsByPage)) {
+                 const pageNum = parseInt(pageNumStr, 10);
+                 const fallbackTargets = pageQuestions
+                     .filter(q => q.pageImages.length === 0 && figureCuePattern.test(q.question))
+                     .sort((a, b) => b.anchorY - a.anchorY);
+
+                 if (fallbackTargets.length === 0) continue;
+
+                 let rendered = renderedPageCache.get(pageNum);
+                 if (!rendered) {
+                     const page = await pdf.getPage(pageNum);
+                     const scale = 1.5;
+                     const viewport = page.getViewport({ scale });
+                     const pageCanvas = document.createElement('canvas');
+                     pageCanvas.width = viewport.width;
+                     pageCanvas.height = viewport.height;
+                     const canvasCtx = pageCanvas.getContext('2d');
+
+                     await page.render({
+                         canvasContext: canvasCtx,
+                         viewport
+                     }).promise;
+
+                     rendered = { page, viewport, pageCanvas };
+                     renderedPageCache.set(pageNum, rendered);
+                 }
+
+                 const { page, viewport, pageCanvas } = rendered;
+                 const sortedPageQuestions = [...pageQuestions].sort((a, b) => b.anchorY - a.anchorY);
+                 const pageWidthPdf = page.view?.[2] || page.getViewport({ scale: 1 }).width;
+                 const scanLeftPdfX = pageWidthPdf * 0.08;
+                 const scanRightPdfX = pageWidthPdf * 0.92;
+
+                 fallbackTargets.forEach(q => {
+                     const sourceLines = q.finalUsedLines?.length ? q.finalUsedLines : q.usedLines;
+                     const allLineItems = sourceLines.flat();
+                     if (allLineItems.length === 0) return;
+
+                     const questionBottomY = Math.min(...allLineItems.map(item => item.y));
+                     const currentIndex = sortedPageQuestions.findIndex(candidate => candidate === q);
+                     const nextQuestion = currentIndex >= 0 ? sortedPageQuestions[currentIndex + 1] : null;
+                     const scanTopPdfY = questionBottomY - 6;
+                     const footerExclusionY = parserProfile.footerMinY + 28;
+                     const scanBottomPdfY = nextQuestion
+                         ? Math.max(footerExclusionY, nextQuestion.anchorY + 10)
+                         : footerExclusionY;
+
+                     if (scanTopPdfY <= scanBottomPdfY + 12) return;
+
+                     const pointA = viewport.convertToViewportPoint(scanLeftPdfX, scanTopPdfY);
+                     const pointB = viewport.convertToViewportPoint(scanRightPdfX, scanBottomPdfY);
+                     const scanRegion = {
+                         x: Math.min(pointA[0], pointB[0]),
+                         y: Math.min(pointA[1], pointB[1]),
+                         w: Math.abs(pointB[0] - pointA[0]),
+                         h: Math.abs(pointB[1] - pointA[1])
+                     };
+
+                     const inkBounds = findInkBoundsInCanvasRegion(pageCanvas, scanRegion);
+                     if (!inkBounds) return;
+
+                     const padding = 6;
+                     const cropX = Math.max(0, inkBounds.x - padding);
+                     const cropY = Math.max(0, inkBounds.y - padding);
+                     const cropW = Math.min(pageCanvas.width - cropX, inkBounds.w + padding * 2);
+                     const cropH = Math.min(pageCanvas.height - cropY, inkBounds.h + padding * 2);
+
+                     if (cropW < 20 || cropH < 20) return;
+
+                     const cropCanvas = document.createElement('canvas');
+                     cropCanvas.width = cropW;
+                     cropCanvas.height = cropH;
+                     const cropCtx = cropCanvas.getContext('2d');
+                     cropCtx.drawImage(pageCanvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+
+                     const pdfPoint1 = viewport.convertToPdfPoint(cropX, cropY);
+                     const pdfPoint2 = viewport.convertToPdfPoint(cropX + cropW, cropY + cropH);
+                     const minPdfX = Math.min(pdfPoint1[0], pdfPoint2[0]);
+                     const minPdfY = Math.min(pdfPoint1[1], pdfPoint2[1]);
+
+                     q.pageImages.push({
+                         path: cropCanvas.toDataURL('image/png'),
+                         x: minPdfX,
+                         y: minPdfY,
+                         legend: `図${q.pageImages.length + 1}`,
+                         detectedLegend: null,
+                         page: pageNum,
+                         matchedQNum: q.questionNumber
+                     });
+                 });
+             }
+
              parsedQuestionsList.forEach(q => {
                  q.pageImages.sort((a, b) => {
                      if (a.page !== b.page) return a.page - b.page;
