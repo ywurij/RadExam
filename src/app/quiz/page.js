@@ -118,7 +118,12 @@ function QuizContent() {
 
                 if (idFilter) {
                     const allQs = await getAllQuestions();
-                    data = allQs.filter(q => q.id.toString() === idFilter);
+                    data = allQs.filter(q => {
+                        const globalId = getGlobalQuestionId(q.examId, q.id);
+                        if (idFilter === globalId) return true;
+                        if (searchParams.get('exam') === q.examId && q.id.toString() === idFilter) return true;
+                        return false;
+                    });
                 } else {
                     data = await getQuestionsByYear(examId, yearFilter);
 

@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { searchQuestions } from '@/lib/data';
+import { getGlobalQuestionId, searchQuestions } from '@/lib/data';
 import styles from './search.module.scss';
 
 export default function SearchPage() {
@@ -87,7 +87,11 @@ export default function SearchPage() {
 
             <div className={styles.results}>
                 {displayResults.map(q => (
-                    <div key={q.id} className={styles.resultItem} onClick={() => router.push(`/quiz?id=${q.id}`)}>
+                    <div
+                        key={getGlobalQuestionId(q.examId, q.id)}
+                        className={styles.resultItem}
+                        onClick={() => router.push(`/quiz?exam=${q.examId}&id=${getGlobalQuestionId(q.examId, q.id)}`)}
+                    >
                         <span className={styles.badge}>{q.year} - {q.genre}</span>
                         <p className={styles.questionPreview}>{q.question.replace(/<[^>]*>?/gm, '').substring(0, 80)}...</p>
                     </div>
