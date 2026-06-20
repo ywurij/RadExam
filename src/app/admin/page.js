@@ -13,6 +13,7 @@ const FOOTER_PAGE_SUFFIX_PATTERN = new RegExp(`\\s*[${FOOTER_DASH_CLASS}]?\\s*[0
 const FOOTER_DASH_ONLY_PATTERN = new RegExp(`^[${FOOTER_DASH_CLASS}]+$`);
 const IMAGE_ORIENTATION_LABEL_PATTERN = /^(?:右前斜位|左前斜位|右後斜位|左後斜位|前斜位|後斜位|正面|前面|後面|側面|右側面|左側面|右|左|前|後|上|下|矢状|冠状|横断|軸位|長軸|短軸)(?:像|位)?$/i;
 const WEAK_IMAGE_DESCRIPTOR_PATTERN = /^(?:[①-⑳]|\(?\s*[0-9０-９]+\s*\)?|[0-9０-９]+(?:\.[0-9０-９]+)?)$/;
+const TEMPORAL_IMAGE_LABEL_PATTERN = /^(?:入院直後|初診時|来院時|治療前|治療後|術前|術後|退院時|発症時|当日|翌日|前回|今回|現在|過去|[0-9０-９]+\s*(?:日|週|か月|ヶ月|月|年)(?:前|後)?|[0-9０-９]+\s*(?:時間|min|hr)\s*(?:前|後)?)$/i;
 
 // レジェンドとして適切かどうかを判定する関数
 const isValidLegendText = (text, item = null, allPageTextItems = []) => {
@@ -1527,6 +1528,20 @@ export default function AdminPage() {
                               if (group.length < 2) return;
                               group.sort((a, b) => b.minY - a.minY);
 
+                              const groupNeedsSharing = group.some(crop => {
+                                  const legend = (crop.legendStr || '').trim();
+                                  if (!legend) return true;
+
+                                  const legendMatch = legend.match(/^([^(]+)\(([^)]+)\)$/);
+                                  if (legendMatch) {
+                                      return false;
+                                  }
+
+                                  return IMAGE_ORIENTATION_LABEL_PATTERN.test(legend);
+                              });
+
+                              if (!groupNeedsSharing) return;
+
                               const bottomCrop = group[group.length - 1];
                               const bottomLegend = bottomCrop.legendStr || '';
                               if (!bottomLegend) return;
@@ -1539,7 +1554,8 @@ export default function AdminPage() {
                                   descPart = match[2].trim();
                               }
 
-                              const hasModalityOrColumnIndicator = /(?:[A-Za-z0-9]+|[\u8840\u6d41\u63db\u6c17\u8ca0\u8377\u5b89\u9759\u904b\u52d5\u30b9\u30c8\u30ec\u30b9\u30ec\u30b9\u30c8\u30b7\u30f3\u30c1\u30a8\u30b3\u30fc\u8d85\u97f3\u6ce2])/i.test(mainPart);
+                              const hasModalityOrColumnIndicator = !TEMPORAL_IMAGE_LABEL_PATTERN.test(mainPart) &&
+                                  /(?:CT|MRI|PET|SPECT|US|X線|レントゲン|シンチ|造影|エコー|超音波|血流|換気|負荷|安静|運動|ストレス|レスト)/i.test(mainPart);
                               if (!hasModalityOrColumnIndicator) return;
 
                               group.forEach(crop => {
