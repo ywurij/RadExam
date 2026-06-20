@@ -417,6 +417,47 @@ const extractLegendForImage = (rect, textItems, limits = {}, allPageTextItems = 
         mainTitle = aboveLines.join(' ');
     }
 
+    // (c) 画像右側の探索 (上下で見つからない場合のみ)
+    if (!mainTitle) {
+        const sideMarginX = Math.max(40, Math.min(120, imageWidth * 0.25));
+        const textRight = textItems.filter(item => {
+            const txCenter = item.x + item.width / 2;
+            const tyCenter = item.y + item.height / 2;
+            const xMatch = txCenter >= origMaxX && txCenter <= (origMaxX + sideMarginX);
+            const yMatch = tyCenter >= (origMinY - 10) && tyCenter <= (origMaxY + 10);
+            return xMatch && yMatch;
+        });
+
+        if (textRight.length > 0) {
+            const rightLinesMap = new Map();
+            textRight.forEach(item => {
+                const lineKey = Math.round(item.y / 3) * 3;
+                const existing = rightLinesMap.get(lineKey) || [];
+                existing.push(item);
+                rightLinesMap.set(lineKey, existing);
+            });
+
+            const rightLines = Array.from(rightLinesMap.values())
+                .map(lineItems => {
+                    const sorted = [...lineItems].sort((a, b) => a.x - b.x);
+                    const lineText = sorted.map(t => t.text).join(' ').trim();
+                    return { lineItems: sorted, lineText };
+                })
+                .filter(({ lineText, lineItems }) => lineText && isValidLegendText(lineText, lineItems[0], allPageTextItems))
+                .sort((a, b) => {
+                    const aOrientation = IMAGE_ORIENTATION_LABEL_PATTERN.test(a.lineText) ? 1 : 0;
+                    const bOrientation = IMAGE_ORIENTATION_LABEL_PATTERN.test(b.lineText) ? 1 : 0;
+                    if (aOrientation !== bOrientation) return bOrientation - aOrientation;
+                    return a.lineItems[0].y - b.lineItems[0].y;
+                });
+
+            if (rightLines.length > 0) {
+                mainTitle = rightLines[0].lineText;
+                rightLines[0].lineItems.forEach(item => usedItems.push(item));
+            }
+        }
+    }
+
     // --- 2. 四辺および内部の記述子（ラベル）の回収 ---
     const descriptorsSet = new Set();
     const shortLabelLimit = 15; // 記述子とする最大文字数
@@ -1269,7 +1310,23 @@ export default function AdminPage() {
 
                       const usedLegendTextKeys = new Set();
 
-                      sortedRects.forEach(rect => {
+                          const pageImageContainedTextKeys = new Set();
+                          sortedRects.forEach(rect => {
+                             const origMinX = rect.x - 2;
+                             const origMinY = rect.y - 2;
+                             const origMaxX = rect.x + rect.w + 2;
+                             const origMaxY = rect.y + rect.h + 2;
+
+                             textItems.forEach(item => {
+                                 const txCenter = item.x + item.width / 2;
+                                 const tyCenter = item.y + item.height / 2;
+                                 if (txCenter >= origMinX && txCenter <= origMaxX && tyCenter >= origMinY && tyCenter <= origMaxY) {
+                                     pageImageContainedTextKeys.add(buildTextItemKey(item));
+                                 }
+                             });
+                          });
+
+                          sortedRects.forEach(rect => {
                          const origMinX = rect.x;
                          const origMinY = rect.y;
                          const origMaxX = rect.x + rect.w;
@@ -1319,10 +1376,10 @@ export default function AdminPage() {
 
                           const availableTextItems = filteredTextItems.filter(item => {
                               const key = buildTextItemKey(item);
-                              return !usedLegendTextKeys.has(key);
+                              return !usedLegendTextKeys.has(key) && !pageImageContainedTextKeys.has(key);
                           });
 
-                          const result = extractLegendForImage(rect, availableTextItems, limits);
+                          const result = extractLegendForImage(rect, availableTextItems, limits, textItems);
                           const legendStr = result.legendStr;
 
                           result.usedItems.forEach(item => {
