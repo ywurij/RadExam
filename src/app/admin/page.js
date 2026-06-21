@@ -14,6 +14,7 @@ const FOOTER_DASH_ONLY_PATTERN = new RegExp(`^[${FOOTER_DASH_CLASS}]+$`);
 const IMAGE_ORIENTATION_LABEL_PATTERN = /^(?:右前斜位|左前斜位|右後斜位|左後斜位|前斜位|後斜位|正面|前面|後面|側面|右側面|左側面|右|左|前|後|上|下|矢状|冠状|横断|軸位|長軸|短軸)(?:像|位)?$/i;
 const WEAK_IMAGE_DESCRIPTOR_PATTERN = /^(?:[①-⑳]|\(?\s*[0-9０-９]+\s*\)?|[0-9０-９]+(?:\.[0-9０-９]+)?)$/;
 const TEMPORAL_IMAGE_LABEL_PATTERN = /^(?:入院直後|初診時|来院時|治療前|治療後|術前|術後|退院時|発症時|当日|翌日|前回|今回|現在|過去|[0-9０-９]+\s*(?:日|週|か月|ヶ月|月|年)(?:前|後)?|[0-9０-９]+\s*(?:時間|min|hr)\s*(?:前|後)?)$/i;
+const DEFAULT_IMAGE_QUESTION_LABEL_PATTERN = /(?:問|問題)\s*(?:番号)?\s*(\d{1,3})/i;
 
 // レジェンドとして適切かどうかを判定する関数
 const isValidLegendText = (text, item = null, allPageTextItems = []) => {
@@ -275,6 +276,21 @@ const findInkBoundsInCanvasRegion = (canvas, region, threshold = 245) => {
 };
 
 const getPdfParserProfile = (examCategory) => {
+    if (examCategory === '3') {
+        return {
+            name: 'nuclear',
+            questionPattern: /^\s*(\d{2})\s*[\.．]/,
+            optionPattern: /^[a-eA-Eａ-ｅＡ-Ｅ][\.．\s\)\)）]/,
+            minQuestionLineLength: 3,
+            minOptionCount: 3,
+            maxQuestionNumber: 99,
+            footerMinY: 45,
+            fixedFirstQuestionPage: 3,
+            imageAssignmentStrategy: 'label-only',
+            imageLabelPattern: /(?:[\[［【]?\s*No\.?\s*([0-9]{2,3})\s*[\]］】]?)/i,
+        };
+    }
+
     if (examCategory === '4') {
         return {
             name: 'ivr',
@@ -282,6 +298,7 @@ const getPdfParserProfile = (examCategory) => {
             optionPattern: /^[a-eA-Eａ-ｅＡ-Ｅ][\.．\s\)\)）]/,
             minQuestionLineLength: 4,
             minOptionCount: 3,
+            maxQuestionNumber: 150,
             footerMinY: 45,
             imageAssignmentStrategy: 'nearest-preceding-question'
         };
@@ -293,6 +310,7 @@ const getPdfParserProfile = (examCategory) => {
         optionPattern: /^[a-eA-Eａ-ｅＡ-Ｅ][\.．\s\)\)）]/,
         minQuestionLineLength: 5,
         minOptionCount: 3,
+        maxQuestionNumber: 150,
         footerMinY: 60,
         imageAssignmentStrategy: 'page-last-question'
     };
@@ -327,6 +345,64 @@ const buildTextLinesFromItems = (textItems) => {
         })
         .filter(line => line.text.length > 0)
         .sort((a, b) => b.y - a.y);
+};
+
+const extractQuestionNumberFromText = (text, patterns = []) => {
+    for (const pattern of patterns) {
+        if (!pattern) continue;
+        const match = text.match(pattern);
+        if (!match) continue;
+
+        const value = parseInt(match[1], 10);
+        if (Number.isInteger(value)) {
+            return value;
+        }
+    }
+
+    return null;
+};
+
+const detectImageMatchedQuestionNumber = (rect, textItems, parserProfile) => {
+    const patterns = [parserProfile.imageLabelPattern, DEFAULT_IMAGE_QUESTION_LABEL_PATTERN];
+
+    const containedText = textItems
+        .filter(item => {
+            const txCenter = item.x + item.width / 2;
+            const tyCenter = item.y + item.height / 2;
+            return (
+                txCenter >= rect.x &&
+                txCenter <= rect.x + rect.w &&
+                tyCenter >= rect.y &&
+                tyCenter <= rect.y + rect.h
+            );
+        })
+        .map(item => item.text)
+        .join(' ');
+    const containedMatch = extractQuestionNumberFromText(containedText, patterns);
+    if (containedMatch !== null) {
+        return containedMatch;
+    }
+
+    const nearbyItems = textItems.filter(item => {
+        const txCenter = item.x + item.width / 2;
+        const tyCenter = item.y + item.height / 2;
+        return (
+            txCenter >= rect.x - 80 &&
+            txCenter <= rect.x + rect.w + 80 &&
+            tyCenter >= rect.y - 30 &&
+            tyCenter <= rect.y + rect.h + 50
+        );
+    });
+
+    const nearbyLines = buildTextLinesFromItems(nearbyItems);
+    for (const line of nearbyLines) {
+        const matched = extractQuestionNumberFromText(line.text, patterns);
+        if (matched !== null) {
+            return matched;
+        }
+    }
+
+    return null;
 };
 
 const detectFirstQuestionPage = (lines, parserProfile) => {
@@ -907,12 +983,6 @@ export default function AdminPage() {
         const file = e.target.files[0];
         if (!file) return;
 
-        if (examCategory === '3') {
-            alert('核医学専門医試験向けの取り込みシステムは現在開発中のため、まだ実行できません。');
-            e.target.value = null; // Reset file input
-            return;
-        }
-
         setIsParsingPdf(true);
         setErrorMsg('');
         setSuccessMsg('');
@@ -941,8 +1011,8 @@ export default function AdminPage() {
             // A. PDFから「年度」および「最初の問題開始ページ」をスキャン・同定
             // -------------------------------------------------------------
             let detectedYear = new Date().getFullYear();
-            let firstQuestionPage = 1;
-            let foundFirstPage = false;
+            let firstQuestionPage = parserProfile.fixedFirstQuestionPage || 1;
+            let foundFirstPage = Boolean(parserProfile.fixedFirstQuestionPage);
 
             const questionPattern = parserProfile.questionPattern;
             const quizStartHeaderPattern = /(?:第\s*\d+\s*回[\s　]*[^\n]*(?:試験問題|筆記|試験)|放射線科専門医認定試験|核医学専門医試験|筆記試験)/i;
@@ -1225,7 +1295,7 @@ export default function AdminPage() {
                          // 2. 行の長さが5文字以上
                          // 3. 問題番号が昇順であること (前のアクティブな問題番号より大きい)
                          const isSequential = !currentQuestion || qNum > currentQuestion.questionNumber;
-                         if (qNum >= 1 && qNum <= 150 && lineText.length >= parserProfile.minQuestionLineLength && isSequential) {
+                         if (qNum >= 1 && qNum <= parserProfile.maxQuestionNumber && lineText.length >= parserProfile.minQuestionLineLength && isSequential) {
                              if (currentQuestion) {
                                  parsedQuestionsList.push(currentQuestion);
                              }
@@ -1447,12 +1517,7 @@ export default function AdminPage() {
                          });
 
                          const containedText = containedTexts.map(t => t.text).join(' ');
-                         
-                         let matchedQNum = null;
-                         const labelMatch = containedText.match(/(?:問|問題)\s*(?:番号)?\s*(\d+)/i);
-                         if (labelMatch) {
-                             matchedQNum = parseInt(labelMatch[1]);
-                         }
+                         const matchedQNum = detectImageMatchedQuestionNumber(rect, textItems, parserProfile);
 
                           // Find adjacent limits
                           let leftLimit = undefined;
@@ -1752,6 +1817,10 @@ export default function AdminPage() {
                      .sort((a, b) => b.y - a.y); // Y座標降順 (PDFのY軸は下から上なので、大きい方が上)
 
                  if (pageImgs.length > 0 && qs.length > 0) {
+                     if (parserProfile.imageAssignmentStrategy === 'label-only') {
+                         return;
+                     }
+
                      if (parserProfile.imageAssignmentStrategy === 'nearest-preceding-question') {
                          pageImgs.forEach(img => {
                              const precedingQuestions = qs.filter(q => q.anchorY >= img.y - 5);
@@ -1791,96 +1860,98 @@ export default function AdminPage() {
              const figureCuePattern = /(?:図|画像|写真|シェーマ|模式図|図に示|画像を示|写真を示|造影を示|先端形状)/;
              const renderedPageCache = new Map();
 
-             for (const [pageNumStr, pageQuestions] of Object.entries(questionsByPage)) {
-                 const pageNum = parseInt(pageNumStr, 10);
-                 const fallbackTargets = pageQuestions
-                     .filter(q => q.pageImages.length === 0 && figureCuePattern.test(q.question))
-                     .sort((a, b) => b.anchorY - a.anchorY);
+             if (parserProfile.imageAssignmentStrategy !== 'label-only') {
+                 for (const [pageNumStr, pageQuestions] of Object.entries(questionsByPage)) {
+                     const pageNum = parseInt(pageNumStr, 10);
+                     const fallbackTargets = pageQuestions
+                         .filter(q => q.pageImages.length === 0 && figureCuePattern.test(q.question))
+                         .sort((a, b) => b.anchorY - a.anchorY);
 
-                 if (fallbackTargets.length === 0) continue;
+                     if (fallbackTargets.length === 0) continue;
 
-                 let rendered = renderedPageCache.get(pageNum);
-                 if (!rendered) {
-                     const page = await pdf.getPage(pageNum);
-                     const scale = 1.5;
-                     const viewport = page.getViewport({ scale });
-                     const pageCanvas = document.createElement('canvas');
-                     pageCanvas.width = viewport.width;
-                     pageCanvas.height = viewport.height;
-                     const canvasCtx = pageCanvas.getContext('2d');
+                     let rendered = renderedPageCache.get(pageNum);
+                     if (!rendered) {
+                         const page = await pdf.getPage(pageNum);
+                         const scale = 1.5;
+                         const viewport = page.getViewport({ scale });
+                         const pageCanvas = document.createElement('canvas');
+                         pageCanvas.width = viewport.width;
+                         pageCanvas.height = viewport.height;
+                         const canvasCtx = pageCanvas.getContext('2d');
 
-                     await page.render({
-                         canvasContext: canvasCtx,
-                         viewport
-                     }).promise;
+                         await page.render({
+                             canvasContext: canvasCtx,
+                             viewport
+                         }).promise;
 
-                     rendered = { page, viewport, pageCanvas };
-                     renderedPageCache.set(pageNum, rendered);
-                 }
+                         rendered = { page, viewport, pageCanvas };
+                         renderedPageCache.set(pageNum, rendered);
+                     }
 
-                 const { page, viewport, pageCanvas } = rendered;
-                 const sortedPageQuestions = [...pageQuestions].sort((a, b) => b.anchorY - a.anchorY);
-                 const pageWidthPdf = page.view?.[2] || page.getViewport({ scale: 1 }).width;
-                 const scanLeftPdfX = pageWidthPdf * 0.08;
-                 const scanRightPdfX = pageWidthPdf * 0.92;
+                     const { page, viewport, pageCanvas } = rendered;
+                     const sortedPageQuestions = [...pageQuestions].sort((a, b) => b.anchorY - a.anchorY);
+                     const pageWidthPdf = page.view?.[2] || page.getViewport({ scale: 1 }).width;
+                     const scanLeftPdfX = pageWidthPdf * 0.08;
+                     const scanRightPdfX = pageWidthPdf * 0.92;
 
-                 fallbackTargets.forEach(q => {
-                     const sourceLines = q.finalUsedLines?.length ? q.finalUsedLines : q.usedLines;
-                     const allLineItems = sourceLines.flat();
-                     if (allLineItems.length === 0) return;
+                     fallbackTargets.forEach(q => {
+                         const sourceLines = q.finalUsedLines?.length ? q.finalUsedLines : q.usedLines;
+                         const allLineItems = sourceLines.flat();
+                         if (allLineItems.length === 0) return;
 
-                     const questionBottomY = Math.min(...allLineItems.map(item => item.y));
-                     const currentIndex = sortedPageQuestions.findIndex(candidate => candidate === q);
-                     const nextQuestion = currentIndex >= 0 ? sortedPageQuestions[currentIndex + 1] : null;
-                     const scanTopPdfY = questionBottomY - 6;
-                     const footerExclusionY = parserProfile.footerMinY + 28;
-                     const scanBottomPdfY = nextQuestion
-                         ? Math.max(footerExclusionY, nextQuestion.anchorY + 10)
-                         : footerExclusionY;
+                         const questionBottomY = Math.min(...allLineItems.map(item => item.y));
+                         const currentIndex = sortedPageQuestions.findIndex(candidate => candidate === q);
+                         const nextQuestion = currentIndex >= 0 ? sortedPageQuestions[currentIndex + 1] : null;
+                         const scanTopPdfY = questionBottomY - 6;
+                         const footerExclusionY = parserProfile.footerMinY + 28;
+                         const scanBottomPdfY = nextQuestion
+                             ? Math.max(footerExclusionY, nextQuestion.anchorY + 10)
+                             : footerExclusionY;
 
-                     if (scanTopPdfY <= scanBottomPdfY + 12) return;
+                         if (scanTopPdfY <= scanBottomPdfY + 12) return;
 
-                     const pointA = viewport.convertToViewportPoint(scanLeftPdfX, scanTopPdfY);
-                     const pointB = viewport.convertToViewportPoint(scanRightPdfX, scanBottomPdfY);
-                     const scanRegion = {
-                         x: Math.min(pointA[0], pointB[0]),
-                         y: Math.min(pointA[1], pointB[1]),
-                         w: Math.abs(pointB[0] - pointA[0]),
-                         h: Math.abs(pointB[1] - pointA[1])
-                     };
+                         const pointA = viewport.convertToViewportPoint(scanLeftPdfX, scanTopPdfY);
+                         const pointB = viewport.convertToViewportPoint(scanRightPdfX, scanBottomPdfY);
+                         const scanRegion = {
+                             x: Math.min(pointA[0], pointB[0]),
+                             y: Math.min(pointA[1], pointB[1]),
+                             w: Math.abs(pointB[0] - pointA[0]),
+                             h: Math.abs(pointB[1] - pointA[1])
+                         };
 
-                     const inkBounds = findInkBoundsInCanvasRegion(pageCanvas, scanRegion);
-                     if (!inkBounds) return;
+                         const inkBounds = findInkBoundsInCanvasRegion(pageCanvas, scanRegion);
+                         if (!inkBounds) return;
 
-                     const padding = 6;
-                     const cropX = Math.max(0, inkBounds.x - padding);
-                     const cropY = Math.max(0, inkBounds.y - padding);
-                     const cropW = Math.min(pageCanvas.width - cropX, inkBounds.w + padding * 2);
-                     const cropH = Math.min(pageCanvas.height - cropY, inkBounds.h + padding * 2);
+                         const padding = 6;
+                         const cropX = Math.max(0, inkBounds.x - padding);
+                         const cropY = Math.max(0, inkBounds.y - padding);
+                         const cropW = Math.min(pageCanvas.width - cropX, inkBounds.w + padding * 2);
+                         const cropH = Math.min(pageCanvas.height - cropY, inkBounds.h + padding * 2);
 
-                     if (cropW < 20 || cropH < 20) return;
+                         if (cropW < 20 || cropH < 20) return;
 
-                     const cropCanvas = document.createElement('canvas');
-                     cropCanvas.width = cropW;
-                     cropCanvas.height = cropH;
-                     const cropCtx = cropCanvas.getContext('2d');
-                     cropCtx.drawImage(pageCanvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+                         const cropCanvas = document.createElement('canvas');
+                         cropCanvas.width = cropW;
+                         cropCanvas.height = cropH;
+                         const cropCtx = cropCanvas.getContext('2d');
+                         cropCtx.drawImage(pageCanvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
 
-                     const pdfPoint1 = viewport.convertToPdfPoint(cropX, cropY);
-                     const pdfPoint2 = viewport.convertToPdfPoint(cropX + cropW, cropY + cropH);
-                     const minPdfX = Math.min(pdfPoint1[0], pdfPoint2[0]);
-                     const minPdfY = Math.min(pdfPoint1[1], pdfPoint2[1]);
+                         const pdfPoint1 = viewport.convertToPdfPoint(cropX, cropY);
+                         const pdfPoint2 = viewport.convertToPdfPoint(cropX + cropW, cropY + cropH);
+                         const minPdfX = Math.min(pdfPoint1[0], pdfPoint2[0]);
+                         const minPdfY = Math.min(pdfPoint1[1], pdfPoint2[1]);
 
-                     q.pageImages.push({
-                         path: cropCanvas.toDataURL('image/png'),
-                         x: minPdfX,
-                         y: minPdfY,
-                         legend: `図${q.pageImages.length + 1}`,
-                         detectedLegend: null,
-                         page: pageNum,
-                         matchedQNum: q.questionNumber
+                         q.pageImages.push({
+                             path: cropCanvas.toDataURL('image/png'),
+                             x: minPdfX,
+                             y: minPdfY,
+                             legend: `図${q.pageImages.length + 1}`,
+                             detectedLegend: null,
+                             page: pageNum,
+                             matchedQNum: q.questionNumber
+                         });
                      });
-                 });
+                 }
              }
 
              parsedQuestionsList.forEach(q => {
@@ -2198,11 +2269,6 @@ export default function AdminPage() {
                                                 </label>
                                             ))}
                                         </div>
-                                        {examCategory === '3' && (
-                                            <div style={{ marginTop: '0.75rem', fontSize: '0.85rem', color: '#e53e3e', fontWeight: 'bold' }}>
-                                                ※核医学専門医試験向けの取り込みシステムは現在開発中のため、パースを実行できません。
-                                            </div>
-                                        )}
                                     </div>
 
                                     <div style={{
