@@ -21,6 +21,7 @@ function QuizContent() {
 
     // Params
     const examId = searchParams.get('exam') || 'diagnostic';
+    const viewMode = searchParams.get('mode') || 'practice';
     const yearFilter = searchParams.get('year') || 'all';
     const countFilter = searchParams.get('count') || '10';
     const isShuffle = searchParams.get('shuffle') === 'true';
@@ -29,6 +30,7 @@ function QuizContent() {
     }, [searchParams]);
     const statusFilter = searchParams.get('status') || 'all';
     const idFilter = searchParams.get('id');
+    const isSearchMode = viewMode === 'search';
 
     const [questions, setQuestions] = useState([]);
     const [currentIndex, setCurrentIndex] = useState(0);
@@ -113,8 +115,12 @@ function QuizContent() {
                 }
             } else {
                 // 新規セッション開始
-                const newId = generateUUID();
-                setSessionId(newId);
+                if (!isSearchMode) {
+                    const newId = generateUUID();
+                    setSessionId(newId);
+                } else {
+                    setSessionId(null);
+                }
 
                 if (idFilter) {
                     const allQs = await getAllQuestions();
@@ -207,11 +213,11 @@ function QuizContent() {
         };
 
         loadData();
-    }, [examId, yearFilter, countFilter, isShuffle, searchParams, statusFilter, idFilter, user, router]);
+    }, [examId, yearFilter, countFilter, isShuffle, searchParams, statusFilter, idFilter, user, router, isSearchMode]);
 
     // Save Session Effect
     useEffect(() => {
-        if (questions.length > 0 && !isFinished && !isReviewing && sessionId) {
+        if (!isSearchMode && questions.length > 0 && !isFinished && !isReviewing && sessionId) {
             const sessionData = {
                 id: sessionId,
                 questionIds: questions.map(q => q.id),
@@ -223,6 +229,7 @@ function QuizContent() {
                 statusFilter: searchParams.get('status') ? searchParams.get('status').split(',') : [],
                 genreFilter,
                 isShuffle,
+                mode: viewMode,
                 userId: user?.uid
             };
 
@@ -249,7 +256,7 @@ function QuizContent() {
                 localStorage.setItem(sessionsKey, JSON.stringify(localSessions));
             }
         }
-    }, [questions, currentIndex, examId, isFinished, isReviewing, user, sessionId, yearFilter, countFilter, genreFilter, isShuffle, searchParams]);
+    }, [questions, currentIndex, examId, isFinished, isReviewing, user, sessionId, yearFilter, countFilter, genreFilter, isShuffle, searchParams, isSearchMode, viewMode]);
 
     const handleUpdateStatus = async (qid, updates) => {
         const globalId = getGlobalQuestionId(examId, qid);
@@ -327,7 +334,7 @@ function QuizContent() {
                 }
             }
         }
-        router.push('/');
+        router.push(isSearchMode ? '/search' : '/');
     };
 
     const handleEditQuestion = (index) => {
@@ -403,6 +410,8 @@ function QuizContent() {
             <header className={styles.topBar}>
                 {isReviewing ? (
                     <button onClick={handleBackToResults} className={styles.backBtn}>← 結果に戻る</button>
+                ) : isSearchMode ? (
+                    <button onClick={() => router.push('/search')} className={styles.backBtn}>← 検索に戻る</button>
                 ) : (
                     <button onClick={() => router.push('/')} className={styles.backBtn}>← 中断</button>
                 )}

@@ -5,22 +5,73 @@ import { useRouter } from 'next/navigation';
 import { getGlobalQuestionId, searchQuestions } from '@/lib/data';
 import styles from './search.module.scss';
 
+const SEARCH_HISTORY_KEY = 'radexam_search_history';
+const MAX_SEARCH_HISTORY = 6;
+const loadSearchHistory = () => {
+    if (typeof window === 'undefined') return [];
+    try {
+        const raw = localStorage.getItem(SEARCH_HISTORY_KEY);
+        const parsed = JSON.parse(raw || '[]');
+        if (Array.isArray(parsed)) {
+            return parsed.filter((item) => typeof item === 'string' && item.trim()).slice(0, MAX_SEARCH_HISTORY);
+        }
+    } catch (error) {
+        console.error('Failed to load search history:', error);
+    }
+    return [];
+};
+
 export default function SearchPage() {
     const router = useRouter();
     const [query, setQuery] = useState('');
     const [results, setResults] = useState([]);
     const [filterYear, setFilterYear] = useState('all');
     const [sortOrder, setSortOrder] = useState('relevance');
+    const [searchHistory, setSearchHistory] = useState(loadSearchHistory);
+    const [isHistoryVisible, setIsHistoryVisible] = useState(false);
 
-    const handleSearch = async (e) => {
-        const q = e.target.value;
-        setQuery(q);
-        if (q.length > 1) { // Searching with 2+ chars
-            const res = await searchQuestions(q);
-            setResults(res.slice(0, 100)); // Increased limit slightly for sorting potential
+    const persistSearchHistory = (nextHistory) => {
+        setSearchHistory(nextHistory);
+        if (typeof window !== 'undefined') {
+            localStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(nextHistory));
+        }
+    };
+
+    const recordSearchHistory = (term) => {
+        const normalized = String(term || '').trim();
+        if (normalized.length < 2) return;
+        const nextHistory = [
+            normalized,
+            ...searchHistory.filter((item) => item !== normalized)
+        ].slice(0, MAX_SEARCH_HISTORY);
+        persistSearchHistory(nextHistory);
+    };
+
+    const runSearch = async (nextQuery) => {
+        const normalized = String(nextQuery || '');
+        setQuery(normalized);
+
+        if (normalized.trim().length > 1) {
+            const res = await searchQuestions(normalized);
+            setResults(res.slice(0, 100));
+            recordSearchHistory(normalized);
         } else {
             setResults([]);
         }
+    };
+
+    const handleSearch = async (e) => {
+        const q = e.target.value;
+        await runSearch(q);
+    };
+
+    const handleHistorySelect = async (term) => {
+        setIsHistoryVisible(false);
+        await runSearch(term);
+    };
+
+    const clearSearchHistory = () => {
+        persistSearchHistory([]);
     };
 
     // Derived Logic
@@ -48,10 +99,32 @@ export default function SearchPage() {
                     type="text"
                     value={query}
                     onChange={handleSearch}
+                    onFocus={() => setIsHistoryVisible(true)}
+                    onBlur={() => window.setTimeout(() => setIsHistoryVisible(false), 120)}
                     placeholder="問題文や解説を検索..."
                     autoFocus
                     className={styles.input}
                 />
+                {isHistoryVisible && searchHistory.length > 0 && (
+                    <div className={styles.historyPanel}>
+                        <div className={styles.historyHeader}>
+                            <span>最近の検索</span>
+                            <button type="button" onMouseDown={clearSearchHistory} className={styles.historyClearBtn}>クリア</button>
+                        </div>
+                        <div className={styles.historyList}>
+                            {searchHistory.map((term) => (
+                                <button
+                                    key={term}
+                                    type="button"
+                                    className={styles.historyChip}
+                                    onMouseDown={() => handleHistorySelect(term)}
+                                >
+                                    {term}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                )}
             </div>
 
             {results.length > 0 && (
@@ -90,7 +163,7 @@ export default function SearchPage() {
                     <div
                         key={getGlobalQuestionId(q.examId, q.id)}
                         className={styles.resultItem}
-                        onClick={() => router.push(`/quiz?exam=${q.examId}&id=${getGlobalQuestionId(q.examId, q.id)}`)}
+                        onClick={() => router.push(`/quiz?mode=search&exam=${q.examId}&id=${getGlobalQuestionId(q.examId, q.id)}`)}
                     >
                         <span className={styles.badge}>{q.year} - {q.genre}</span>
                         <p className={styles.questionPreview}>{q.question.replace(/<[^>]*>?/gm, '').substring(0, 80)}...</p>

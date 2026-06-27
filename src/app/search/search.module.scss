@@ -25,6 +25,7 @@
 }
 
 .searchBox {
+    position: relative;
     margin-bottom: 2rem;
 }
 
@@ -38,6 +39,63 @@
     &:focus {
         outline: none;
         border-color: #3b82f6;
+    }
+}
+
+.historyPanel {
+    position: absolute;
+    top: calc(100% + 0.5rem);
+    left: 0;
+    right: 0;
+    z-index: 10;
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-radius: 0.75rem;
+    box-shadow: 0 14px 36px rgba(15, 23, 42, 0.12);
+    padding: 0.9rem 1rem 1rem;
+}
+
+.historyHeader {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 0.75rem;
+    color: #4a5568;
+    font-size: 0.9rem;
+    font-weight: 600;
+}
+
+.historyClearBtn {
+    border: none;
+    background: none;
+    color: #718096;
+    cursor: pointer;
+    font-size: 0.85rem;
+
+    &:hover {
+        color: #2d3748;
+    }
+}
+
+.historyList {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.historyChip {
+    border: 1px solid #cbd5e0;
+    background: #f8fafc;
+    color: #2d3748;
+    border-radius: 999px;
+    padding: 0.4rem 0.8rem;
+    font-size: 0.9rem;
+    cursor: pointer;
+
+    &:hover {
+        background: #eff6ff;
+        border-color: #93c5fd;
     }
 }
 

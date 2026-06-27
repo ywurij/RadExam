@@ -100,7 +100,7 @@ export default function ExamSelector() {
                 }
             }
 
-            setSessions(localSessions);
+            setSessions(localSessions.filter((session) => session?.mode !== 'search'));
 
             // 前回設定のロード
             const lastSettings = localStorage.getItem('radexam_last_settings');
