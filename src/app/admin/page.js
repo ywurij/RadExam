@@ -1123,18 +1123,34 @@ const getFilledOptionCount = (options) => {
     return Object.values(normalized).filter(value => String(value || '').trim().length > 0).length;
 };
 
-const GLUED_QUESTION_UNIT_PREFIX = /^(?:[a-z]|mSv|Sv|Gy|mGy|cGy|mm|cm|mL|kg|%|歳|年|か月|ヶ月)/i;
+const GLUED_QUESTION_UNIT_PREFIX = /^(?:mSv|Sv|Gy|mGy|cGy|mm|cm|mL|kg|%|歳|年|か月|ヶ月|月|日|週|時間|min|hr)\b/i;
 const PLAIN_NUMBER_QUESTION_DISQUALIFIER = /^(?:[a-eA-Eａ-ｅＡ-Ｅ][\.．\s\)）]|mSv|Sv|Gy|mGy|cGy|mm|cm|mL|kg|%|歳|年|か月|ヶ月|月|日|週|時間|min|hr)\b/i;
 const PLAIN_NUMBER_QUESTION_HINT = /(?:次の|以下|最も|正しい|誤って|適切|どれか|選べ|患者|症例|図|画像|所見|疾患|診断|治療|検査|読影|について|に関して|Which|What|Choose|Select|Regarding|About)/i;
+const SELECTION_COUNT_LINE_PATTERN = /^[0-9０-９]+\s*つ選べ(?:。)?$/;
+const QUESTION_RANGE_HEADER_PATTERN = /^問\s*[0-9０-９]{1,3}\s*[～~〜-]\s*[0-9０-９]{1,3}\s*(?:が|は)/;
+const LEADING_COUNTER_CONTINUATION_PATTERN = /^(?:つ(?:選べ)?|本|個|枚|回|例|人|台|枝|歳|年|か月|ヶ月|月|日|週|時間|min|hr)(?:$|\s|の|を|は|で|に)/i;
 const IVR_SECTION_TRANSITION_PATTERN = /(?:共通問題は以上です|次ページ以降も解答してください|IVR専門医試験受験者)/;
 
 const parseQuestionStartText = (lineText, questionPattern) => {
+    const normalizedLineText = String(lineText || '').replace(/\s+/g, ' ').trim();
+    if (!normalizedLineText) {
+        return null;
+    }
+
+    if (SELECTION_COUNT_LINE_PATTERN.test(normalizedLineText) || QUESTION_RANGE_HEADER_PATTERN.test(normalizedLineText)) {
+        return null;
+    }
+
     const standardMatch = lineText.match(questionPattern);
     if (standardMatch) {
         const qNum = parseInt(standardMatch[1] || standardMatch[2], 10);
+        const questionText = lineText.substring(standardMatch[0].length).trim();
+        if (!questionText || /^[～~〜-]/.test(questionText)) {
+            return null;
+        }
         return {
             qNum,
-            questionText: lineText.substring(standardMatch[0].length).trim(),
+            questionText,
         };
     }
 
@@ -1153,7 +1169,12 @@ const parseQuestionStartText = (lineText, questionPattern) => {
     const spacedMatch = lineText.match(/^\s*(\d{1,3})\s+(.+)$/);
     if (spacedMatch) {
         const trailingText = spacedMatch[2].trim();
-        if (!trailingText || PLAIN_NUMBER_QUESTION_DISQUALIFIER.test(trailingText)) {
+        if (
+            !trailingText
+            || PLAIN_NUMBER_QUESTION_DISQUALIFIER.test(trailingText)
+            || SELECTION_COUNT_LINE_PATTERN.test(normalizedLineText)
+            || LEADING_COUNTER_CONTINUATION_PATTERN.test(trailingText)
+        ) {
             return null;
         }
         if (!PLAIN_NUMBER_QUESTION_HINT.test(trailingText) && trailingText.length < 12) {
