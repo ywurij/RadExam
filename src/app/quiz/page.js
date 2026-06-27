@@ -341,6 +341,43 @@ function QuizContent() {
 
     const currentQuestion = questions[currentIndex];
 
+    const renderNavigation = (className) => (
+        <div className={className}>
+            <button
+                onClick={() => setCurrentIndex((p) => Math.max(0, p - 1))}
+                disabled={currentIndex === 0}
+                className={styles.navBtn}
+            >
+                前の問題
+            </button>
+
+            {isReviewing ? (
+                <button
+                    onClick={handleBackToResults}
+                    className={styles.navBtn}
+                    style={{ border: '2px solid #3b82f6', color: '#3b82f6' }}
+                >
+                    結果に戻る
+                </button>
+            ) : currentIndex === questions.length - 1 ? (
+                <button
+                    onClick={handleFinish}
+                    className={`${styles.navBtn} ${styles.finishBtn}`}
+                    style={{ background: '#ef4444', borderColor: '#ef4444', color: '#fff' }}
+                >
+                    終了する
+                </button>
+            ) : (
+                <button
+                    onClick={() => setCurrentIndex((p) => Math.min(questions.length - 1, p + 1))}
+                    className={styles.navBtn}
+                >
+                    次の問題
+                </button>
+            )}
+        </div>
+    );
+
     if (loading) return <div className={styles.loading}>読み込み中...</div>;
 
     if (isFinished && !isReviewing) {
@@ -375,6 +412,8 @@ function QuizContent() {
                 </div>
             </header>
 
+            {renderNavigation(styles.topNavigation)}
+
             <QuestionCard
                 question={currentQuestion}
                 userProgress={progress[getGlobalQuestionId(examId, currentQuestion.id)]}
@@ -384,40 +423,7 @@ function QuizContent() {
                 availableGenres={allGenres}
             />
 
-            <div className={styles.navigation}>
-                <button
-                    onClick={() => setCurrentIndex(p => Math.max(0, p - 1))}
-                    disabled={currentIndex === 0}
-                    className={styles.navBtn}
-                >
-                    前の問題
-                </button>
-
-                {isReviewing ? (
-                    <button
-                        onClick={handleBackToResults}
-                        className={styles.navBtn}
-                        style={{ border: '2px solid #3b82f6', color: '#3b82f6' }}
-                    >
-                        結果に戻る
-                    </button>
-                ) : currentIndex === questions.length - 1 ? (
-                    <button
-                        onClick={handleFinish}
-                        className={`${styles.navBtn} ${styles.finishBtn}`}
-                        style={{ background: '#ef4444', borderColor: '#ef4444', color: '#fff' }}
-                    >
-                        終了する
-                    </button>
-                ) : (
-                    <button
-                        onClick={() => setCurrentIndex(p => Math.min(questions.length - 1, p + 1))}
-                        className={styles.navBtn}
-                    >
-                        次の問題
-                    </button>
-                )}
-            </div>
+            {renderNavigation(styles.navigation)}
         </div>
     );
 }

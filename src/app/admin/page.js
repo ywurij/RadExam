@@ -14,6 +14,9 @@ const FOOTER_DASH_ONLY_PATTERN = new RegExp(`^[${FOOTER_DASH_CLASS}]+$`);
 const IMAGE_ORIENTATION_LABEL_PATTERN = /^(?:右前斜位|左前斜位|右後斜位|左後斜位|前斜位|後斜位|正面|前面|後面|側面|右側面|左側面|右|左|前|後|上|下|矢状|冠状|横断|軸位|長軸|短軸)(?:像|位)?$/i;
 const WEAK_IMAGE_DESCRIPTOR_PATTERN = /^(?:[①-⑳]|\(?\s*[0-9０-９]+\s*\)?|[0-9０-９]+(?:\.[0-9０-９]+)?)$/;
 const TEMPORAL_IMAGE_LABEL_PATTERN = /^(?:入院直後|初診時|来院時|治療前|治療後|術前|術後|退院時|発症時|当日|翌日|前回|今回|現在|過去|[0-9０-９]+\s*(?:日|週|か月|ヶ月|月|年)(?:前|後)?|[0-9０-９]+\s*(?:時間|min|hr)\s*(?:前|後)?)$/i;
+const DEFAULT_IMAGE_QUESTION_LABEL_PATTERN = /(?:問|問題)\s*(?:番号)?\s*(\d{1,3})/i;
+const NO_QUESTION_LABEL_PATTERN = /^[\s\[\]［］【】]*(?:No\.?|NO\.?)\s*[0-9０-９]{1,3}[\s\[\]［］【】]*$/i;
+const FIGURE_HEADER_PATTERN = /図\s*[0-9０-９]+/;
 
 // レジェンドとして適切かどうかを判定する関数
 const isValidLegendText = (text, item = null, allPageTextItems = []) => {
@@ -25,6 +28,9 @@ const isValidLegendText = (text, item = null, allPageTextItems = []) => {
     // フッター（ページ番号）や単なる数値は無条件で除外する (二重の安全弁)
     const isFooterOrPageNum = FOOTER_PAGE_PATTERN.test(trimmed) || /^[0-9０-９]+$/.test(trimmed);
     if (isFooterOrPageNum) {
+        return false;
+    }
+    if (NO_QUESTION_LABEL_PATTERN.test(trimmed)) {
         return false;
     }
 
@@ -79,9 +85,33 @@ const isValidLegendText = (text, item = null, allPageTextItems = []) => {
 };
 
 // プレフィックスを除去する関数
+const convertLegendMarkupToUnicode = (text) => String(text || '')
+    .replace(/<sup>(.*?)<\/sup>/gi, (_match, value) => (
+        String(value)
+            .split('')
+            .map(char => ({
+                0: '⁰', 1: '¹', 2: '²', 3: '³', 4: '⁴',
+                5: '⁵', 6: '⁶', 7: '⁷', 8: '⁸', 9: '⁹',
+                '+': '⁺', '-': '⁻'
+            }[char] || char))
+            .join('')
+    ))
+    .replace(/<sub>(.*?)<\/sub>/gi, (_match, value) => (
+        String(value)
+            .split('')
+            .map(char => ({
+                0: '₀', 1: '₁', 2: '₂', 3: '₃', 4: '₄',
+                5: '₅', 6: '₆', 7: '₇', 8: '₈', 9: '₉',
+                '+': '₊', '-': '₋'
+            }[char] || char))
+            .join('')
+    ));
+
 const cleanLegendPrefix = (text) => {
     if (!text) return '';
-    let cleaned = text.trim();
+    let cleaned = convertLegendMarkupToUnicode(text).trim();
+
+    cleaned = cleaned.replace(/^(?:No\.?|NO\.?)\s*[0-9０-９]{1,3}\s*/i, '');
     
     // 「図1」「図 1」「Fig. 1」「Fig1」「画像1」などのプレフィックスパターン
     // および、それに続くコロン、ドット、スペースなどを除去
@@ -116,6 +146,8 @@ const buildQuestionId = (year, questionNumber) => {
     }
     return `${numericYear}${String(numericQuestionNumber).padStart(3, '0')}`;
 };
+
+const buildTextItemKeySet = (items = []) => new Set(items.map(item => buildTextItemKey(item)));
 
 const isRectContainedWithin = (outer, inner, tolerance = 4) => {
     const outerMinX = outer.x - tolerance;
@@ -168,6 +200,614 @@ const mergeNestedImageRects = (rects) => {
     });
 
     return independentRects;
+};
+
+const getRectGap = (aMin, aMax, bMin, bMax) => {
+    if (aMax < bMin) return bMin - aMax;
+    if (bMax < aMin) return aMin - bMax;
+    return 0;
+};
+
+const unionRects = (rects) => {
+    const minX = Math.min(...rects.map(rect => rect.x));
+    const minY = Math.min(...rects.map(rect => rect.y));
+    const maxX = Math.max(...rects.map(rect => rect.x + rect.w));
+    const maxY = Math.max(...rects.map(rect => rect.y + rect.h));
+
+    return {
+        x: minX,
+        y: minY,
+        w: maxX - minX,
+        h: maxY - minY
+    };
+};
+
+const shouldMergeNuclearRects = (a, b) => {
+    if (a.matchedQNum === null || b.matchedQNum === null || a.matchedQNum !== b.matchedQNum) {
+        return false;
+    }
+
+    const aMinX = a.x;
+    const aMaxX = a.x + a.w;
+    const aMinY = a.y;
+    const aMaxY = a.y + a.h;
+    const bMinX = b.x;
+    const bMaxX = b.x + b.w;
+    const bMinY = b.y;
+    const bMaxY = b.y + b.h;
+
+    const horizontalGap = getRectGap(aMinX, aMaxX, bMinX, bMaxX);
+    const verticalGap = getRectGap(aMinY, aMaxY, bMinY, bMaxY);
+    const xOverlap = Math.max(0, Math.min(aMaxX, bMaxX) - Math.max(aMinX, bMinX));
+    const yOverlap = Math.max(0, Math.min(aMaxY, bMaxY) - Math.max(aMinY, bMinY));
+    const minWidth = Math.min(a.w, b.w);
+    const minHeight = Math.min(a.h, b.h);
+
+    const horizontallyAligned = yOverlap >= minHeight * 0.35 && horizontalGap <= 36;
+    const verticallyAligned = xOverlap >= minWidth * 0.35 && verticalGap <= 36;
+    const nearlyTouching = horizontalGap <= 10 && verticalGap <= 10;
+
+    return horizontallyAligned || verticallyAligned || nearlyTouching;
+};
+
+const mergeNuclearImageRects = (rects) => {
+    if (rects.length <= 1) return rects;
+
+    const visited = new Set();
+    const merged = [];
+
+    rects.forEach((rect, index) => {
+        if (visited.has(index)) return;
+
+        const stack = [index];
+        const cluster = [];
+        visited.add(index);
+
+        while (stack.length > 0) {
+            const currentIndex = stack.pop();
+            const currentRect = rects[currentIndex];
+            cluster.push(currentRect);
+
+            rects.forEach((candidate, candidateIndex) => {
+                if (visited.has(candidateIndex)) return;
+                if (!shouldMergeNuclearRects(currentRect, candidate)) return;
+                visited.add(candidateIndex);
+                stack.push(candidateIndex);
+            });
+        }
+
+        const mergedRect = unionRects(cluster);
+        merged.push({
+            ...mergedRect,
+            matchedQNum: cluster[0].matchedQNum
+        });
+    });
+
+    return merged;
+};
+
+const shouldMergeDenseNuclearSectionRects = (a, b) => {
+    const aMinX = a.x;
+    const aMaxX = a.x + a.w;
+    const aMinY = a.y;
+    const aMaxY = a.y + a.h;
+    const bMinX = b.x;
+    const bMaxX = b.x + b.w;
+    const bMinY = b.y;
+    const bMaxY = b.y + b.h;
+
+    const horizontalGap = getRectGap(aMinX, aMaxX, bMinX, bMaxX);
+    const verticalGap = getRectGap(aMinY, aMaxY, bMinY, bMaxY);
+    const xOverlap = Math.max(0, Math.min(aMaxX, bMaxX) - Math.max(aMinX, bMinX));
+    const yOverlap = Math.max(0, Math.min(aMaxY, bMaxY) - Math.max(aMinY, bMinY));
+    const minWidth = Math.min(a.w, b.w);
+    const minHeight = Math.min(a.h, b.h);
+
+    const sameRowTouching = yOverlap >= minHeight * 0.4 && horizontalGap <= 1;
+    const stackedTouching = xOverlap >= minWidth * 0.2 && verticalGap <= 1;
+    const overlapping = xOverlap > 0 && yOverlap > 0;
+
+    return sameRowTouching || stackedTouching || overlapping;
+};
+
+const mergeDenseNuclearSectionRects = (rects) => {
+    if (rects.length <= 1) return rects;
+
+    const visited = new Set();
+    const merged = [];
+
+    rects.forEach((rect, index) => {
+        if (visited.has(index)) return;
+        visited.add(index);
+
+        const stack = [index];
+        const cluster = [];
+
+        while (stack.length > 0) {
+            const currentIndex = stack.pop();
+            const currentRect = rects[currentIndex];
+            cluster.push(currentRect);
+
+            rects.forEach((candidate, candidateIndex) => {
+                if (visited.has(candidateIndex)) return;
+                if (!shouldMergeDenseNuclearSectionRects(currentRect, candidate)) return;
+                visited.add(candidateIndex);
+                stack.push(candidateIndex);
+            });
+        }
+
+        merged.push(unionRects(cluster));
+    });
+
+    return merged;
+};
+
+const stripLeadingQuestionLabel = (text) => String(text || '')
+    .replace(/^[\s\[\]［］【】]*(?:No\.?|NO\.?)\s*[0-9０-９]{1,3}\s*/i, '')
+    .trim();
+
+const getRectCenterY = (rect) => rect.y + (rect.h / 2);
+const getRectCenterX = (rect) => rect.x + (rect.w / 2);
+const isNuclearSideLabelText = (text) => /^(?:右|左|前|後|上|下|上段|下段|術前|術後|水平断面|冠状断面|矢状断面|短軸像|垂直長軸像|水平長軸像|安静時|負荷時)$/i.test(text);
+const isPotentialNuclearTopCaption = (text) => /^(?:安静時|負荷時|アセタゾラミド負荷時|術前|術後|18.?F.*|201Tl.*|99mTc.*|123I.*|MRI.*|CT.*|PET.*|PYP.*|FDG.*|BMIPP.*|MIBG.*|IMP.*|T2WI.*|T1WI.*|FLAIR.*|DWI.*)$/i.test(String(text || '').trim());
+
+const collectNuclearSideLabelItems = (rect, textItems, excludedKeys = new Set()) => {
+    const sideMargin = Math.max(90, Math.min(160, rect.w * 0.35));
+    const verticalPadding = Math.max(24, Math.min(60, rect.h * 0.12));
+
+    return textItems.filter(item => {
+        const key = buildTextItemKey(item);
+        if (excludedKeys.has(key)) return false;
+
+        const text = stripLeadingQuestionLabel(item.text.trim());
+        if (!text) return false;
+        if (NO_QUESTION_LABEL_PATTERN.test(text) || FIGURE_HEADER_PATTERN.test(text)) return false;
+        if (!isNuclearSideLabelText(text)) return false;
+
+        const centerX = item.x + item.width / 2;
+        const centerY = item.y + item.height / 2;
+        const withinVerticalBand = centerY >= (rect.y - verticalPadding) && centerY <= (rect.y + rect.h + verticalPadding);
+        const inLeftBand = centerX < rect.x && centerX >= (rect.x - sideMargin);
+        const inRightBand = centerX > (rect.x + rect.w) && centerX <= (rect.x + rect.w + sideMargin);
+
+        return withinVerticalBand && (inLeftBand || inRightBand);
+    });
+};
+
+const NUCLEAR_CHILD_SECTION_PATTERN = /^(?:図\s*([0-9０-９]+)(?:-[0-9０-９]+)?|(?:No\.?|NO\.?)\s*([0-9０-９]{1,3})\s*[-ー−‐–―]\s*([0-9０-９]+))/i;
+
+const isNuclearChildAnchorText = (text, questionNumber = null) => {
+    const trimmed = String(text || '').trim();
+    if (!trimmed) return false;
+    const match = trimmed.match(NUCLEAR_CHILD_SECTION_PATTERN);
+    if (!match) return false;
+    if (match[2] && questionNumber !== null && parseInt(match[2], 10) !== questionNumber) return false;
+    return true;
+};
+
+const doesLineOverlapRect = (line, rect, minOverlap = 18) => {
+    const items = line.items || [];
+    if (items.length === 0) return false;
+    const lineMinX = Math.min(...items.map(item => item.x));
+    const lineMaxX = Math.max(...items.map(item => item.x + item.width));
+    const overlap = Math.min(lineMaxX, rect.x + rect.w) - Math.max(lineMinX, rect.x);
+    return overlap >= Math.min(minOverlap, rect.w * 0.8);
+};
+
+const buildNuclearChildAnchors = (sectionLines, sectionRects, questionNumber) => {
+    const anchors = [];
+
+    sectionLines.forEach(line => {
+        const items = line.items || [];
+        if (items.length === 0) return;
+
+        const wholeLineText = buildInlineTextFromItems(items) || line.text || '';
+        const wholeLineTrimmed = wholeLineText.trim();
+        if (isNuclearChildAnchorText(wholeLineTrimmed, questionNumber)) {
+            const lineMinX = Math.min(...items.map(item => item.x));
+            anchors.push({
+                y: line.y,
+                x: lineMinX,
+                text: cleanLegendPrefix(stripLeadingQuestionLabel(wholeLineTrimmed)),
+                rawText: wholeLineTrimmed,
+                items
+            });
+            return;
+        }
+
+        for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
+            const item = items[itemIndex];
+            const itemText = item.text.trim();
+            if (!isNuclearChildAnchorText(itemText, questionNumber)) continue;
+
+            const anchorItems = [item];
+            for (let nextIndex = itemIndex + 1; nextIndex < items.length; nextIndex++) {
+                const nextItem = items[nextIndex];
+                const nextText = nextItem.text.trim();
+                if (!nextText) continue;
+                if (NO_QUESTION_LABEL_PATTERN.test(nextText)) break;
+                if (isNuclearChildAnchorText(nextText, questionNumber)) break;
+                anchorItems.push(nextItem);
+            }
+
+            const rawText = buildInlineTextFromItems(anchorItems) || anchorItems.map(entry => entry.text).join(' ').trim();
+            anchors.push({
+                y: line.y,
+                x: item.x,
+                text: cleanLegendPrefix(stripLeadingQuestionLabel(rawText)),
+                rawText,
+                items: anchorItems
+            });
+        }
+    });
+
+    const topCaptionAnchors = sectionLines
+        .map(line => {
+            const captionText = stripLeadingQuestionLabel(buildInlineTextFromItems(line.items || []) || line.text);
+            return {
+                ...line,
+                captionText,
+                x: Math.min(...(line.items || []).map(item => item.x))
+            };
+        })
+        .filter(line => {
+            if (!line.captionText) return false;
+            if (NO_QUESTION_LABEL_PATTERN.test(line.captionText)) return false;
+            if (FIGURE_HEADER_PATTERN.test(line.captionText)) return false;
+            if (line.captionText.length > 30) return false;
+            if (!isPotentialNuclearTopCaption(line.captionText)) return false;
+            return sectionRects.some(rect => {
+                if (!doesLineOverlapRect(line, rect, 24)) return false;
+                const topGap = line.y - (rect.y + rect.h);
+                return topGap >= 0 && topGap <= 42;
+            });
+        })
+        .map(line => ({
+            y: line.y,
+            x: line.x,
+            text: cleanLegendPrefix(line.captionText),
+            rawText: line.captionText,
+            items: line.items || []
+        }));
+
+    return [...anchors, ...topCaptionAnchors]
+        .filter((anchor, index, array) => {
+            const normalized = `${Math.round(anchor.x)}_${Math.round(anchor.y)}_${anchor.rawText}`;
+            return array.findIndex(candidate => `${Math.round(candidate.x)}_${Math.round(candidate.y)}_${candidate.rawText}` === normalized) === index;
+        })
+        .sort((a, b) => {
+            if (Math.abs(b.y - a.y) > 8) return b.y - a.y;
+            return a.x - b.x;
+        });
+};
+
+const buildNuclearSubsections = (sectionStart, nextSection, sectionLines, sectionRects, parserProfile) => {
+    const sectionTopY = sectionStart.y + 18;
+    const sectionBottomY = nextSection ? nextSection.y + 18 : parserProfile.footerMinY;
+    const childAnchors = buildNuclearChildAnchors(sectionLines, sectionRects, sectionStart.questionNumber);
+
+    if (childAnchors.length === 0) {
+        return [{
+            topY: sectionTopY,
+            bottomY: sectionBottomY,
+            leftX: -Infinity,
+            rightX: Infinity,
+            anchor: null,
+            questionNumber: sectionStart.questionNumber
+        }];
+    }
+
+    const rows = [];
+    childAnchors.forEach(anchor => {
+        const existingRow = rows.find(row => Math.abs(row.y - anchor.y) <= 8);
+        if (existingRow) {
+            existingRow.anchors.push(anchor);
+        } else {
+            rows.push({ y: anchor.y, anchors: [anchor] });
+        }
+    });
+    rows.sort((a, b) => b.y - a.y);
+
+    const subsections = [];
+    rows.forEach((row, rowIndex) => {
+        const nextRow = rows[rowIndex + 1] || null;
+        row.anchors.sort((a, b) => a.x - b.x);
+
+        row.anchors.forEach((anchor, anchorIndex) => {
+            const leftX = anchorIndex === 0
+                ? -Infinity
+                : (row.anchors[anchorIndex - 1].x + anchor.x) / 2;
+            const rightX = anchorIndex === row.anchors.length - 1
+                ? Infinity
+                : (anchor.x + row.anchors[anchorIndex + 1].x) / 2;
+
+            subsections.push({
+                topY: anchor.y + 16,
+                bottomY: nextRow ? nextRow.y + 16 : sectionBottomY,
+                leftX,
+                rightX,
+                anchor,
+                questionNumber: sectionStart.questionNumber
+            });
+        });
+    });
+
+    return subsections;
+};
+
+const buildNuclearLegendBlocks = (sectionLines, candidateRects, excludedTextKeys) => {
+    const legendLines = sectionLines
+        .map(line => {
+            const items = (line.items || []).filter(item => !excludedTextKeys.has(buildTextItemKey(item)));
+            if (items.length === 0) return null;
+            const text = cleanLegendPrefix(stripLeadingQuestionLabel(buildInlineTextFromItems(items) || line.text));
+            if (!text) return null;
+            if (!isValidLegendText(text, items[0], sectionLines.flatMap(entry => entry.items || []))) return null;
+
+            const lineMinX = Math.min(...items.map(item => item.x));
+            const lineMaxX = Math.max(...items.map(item => item.x + item.width));
+            const lineMinY = Math.min(...items.map(item => item.y));
+            const lineMaxY = Math.max(...items.map(item => item.y + item.height));
+
+            const overlapsRect = candidateRects.some(rect => (
+                lineMaxX > rect.x &&
+                lineMinX < (rect.x + rect.w) &&
+                lineMaxY > rect.y &&
+                lineMinY < (rect.y + rect.h)
+            ));
+            if (overlapsRect) return null;
+
+            return {
+                y: line.y,
+                text,
+                items,
+                minX: lineMinX,
+                maxX: lineMaxX,
+                minY: lineMinY,
+                maxY: lineMaxY
+            };
+        })
+        .filter(Boolean)
+        .sort((a, b) => {
+            if (Math.abs(b.y - a.y) > 10) return b.y - a.y;
+            return a.minX - b.minX;
+        });
+
+    const blocks = [];
+    legendLines.forEach(line => {
+        const previous = blocks[blocks.length - 1];
+        if (!previous) {
+            blocks.push({
+                text: line.text,
+                items: [...line.items],
+                minX: line.minX,
+                maxX: line.maxX,
+                minY: line.minY,
+                maxY: line.maxY,
+                centerX: (line.minX + line.maxX) / 2,
+                centerY: (line.minY + line.maxY) / 2
+            });
+            return;
+        }
+
+        const verticalGap = Math.abs(previous.minY - line.maxY);
+        const horizontalOverlap = Math.min(previous.maxX, line.maxX) - Math.max(previous.minX, line.minX);
+        const shouldMerge = verticalGap <= 18 && horizontalOverlap >= -12;
+
+        if (!shouldMerge) {
+            blocks.push({
+                text: line.text,
+                items: [...line.items],
+                minX: line.minX,
+                maxX: line.maxX,
+                minY: line.minY,
+                maxY: line.maxY,
+                centerX: (line.minX + line.maxX) / 2,
+                centerY: (line.minY + line.maxY) / 2
+            });
+            return;
+        }
+
+        previous.text = `${previous.text} ${line.text}`.trim();
+        previous.items.push(...line.items);
+        previous.minX = Math.min(previous.minX, line.minX);
+        previous.maxX = Math.max(previous.maxX, line.maxX);
+        previous.minY = Math.min(previous.minY, line.minY);
+        previous.maxY = Math.max(previous.maxY, line.maxY);
+        previous.centerX = (previous.minX + previous.maxX) / 2;
+        previous.centerY = (previous.minY + previous.maxY) / 2;
+    });
+
+    return blocks;
+};
+
+const buildNuclearGroupsFromSubsection = (subsection, sectionLines, sectionRects) => {
+    const subsectionRects = sectionRects.filter(rect => {
+        const centerY = getRectCenterY(rect);
+        const centerX = getRectCenterX(rect);
+        return centerY < subsection.topY
+            && centerY > subsection.bottomY
+            && centerX >= subsection.leftX
+            && centerX < subsection.rightX;
+    });
+
+    if (subsectionRects.length === 0) {
+        return [];
+    }
+
+    const firstCropRects = mergeDenseNuclearSectionRects(subsectionRects).sort((a, b) => {
+        if (Math.abs(getRectCenterY(b) - getRectCenterY(a)) > 20) return getRectCenterY(b) - getRectCenterY(a);
+        return getRectCenterX(a) - getRectCenterX(b);
+    });
+
+    const subsectionLines = sectionLines.filter(line => {
+        const centerY = line.y;
+        const items = line.items || [];
+        if (items.length === 0) return false;
+        const centerX = (Math.min(...items.map(item => item.x)) + Math.max(...items.map(item => item.x + item.width))) / 2;
+        return centerY <= subsection.topY && centerY > subsection.bottomY && centerX >= subsection.leftX && centerX < subsection.rightX;
+    });
+
+    const excludedTextKeys = new Set(buildTextItemKeySet(subsection.anchor?.items || []));
+    firstCropRects.forEach(rect => {
+        subsectionLines.forEach(line => {
+            (line.items || []).forEach(item => {
+                const txCenter = item.x + item.width / 2;
+                const tyCenter = item.y + item.height / 2;
+                if (txCenter >= rect.x && txCenter <= rect.x + rect.w && tyCenter >= rect.y && tyCenter <= rect.y + rect.h) {
+                    excludedTextKeys.add(buildTextItemKey(item));
+                }
+            });
+        });
+    });
+
+    const legendBlocks = buildNuclearLegendBlocks(subsectionLines, firstCropRects, excludedTextKeys);
+
+    if (legendBlocks.length === firstCropRects.length) {
+        return firstCropRects.map(rect => {
+            const bestLegend = legendBlocks.reduce((closest, candidate) => {
+                if (!closest) return candidate;
+                const currentDistance = Math.abs(candidate.centerX - getRectCenterX(rect)) + Math.abs(candidate.centerY - getRectCenterY(rect));
+                const bestDistance = Math.abs(closest.centerX - getRectCenterX(rect)) + Math.abs(closest.centerY - getRectCenterY(rect));
+                return currentDistance < bestDistance ? candidate : closest;
+            }, null);
+
+            return {
+                rect,
+                matchedQNum: subsection.questionNumber,
+                legend: subsection.anchor?.text || cleanLegendPrefix(bestLegend?.text || ''),
+                headerItems: subsection.anchor?.items || [],
+                forceLegendOutsideCrop: true
+            };
+        });
+    }
+
+    if (legendBlocks.length <= 1) {
+        return [{
+            rect: unionRects(firstCropRects),
+            matchedQNum: subsection.questionNumber,
+            legend: subsection.anchor?.text || cleanLegendPrefix(legendBlocks[0]?.text || ''),
+            headerItems: subsection.anchor?.items || [],
+            forceLegendOutsideCrop: true
+        }];
+    }
+
+    if (legendBlocks.length > firstCropRects.length) {
+        return [{
+            rect: unionRects(firstCropRects),
+            matchedQNum: subsection.questionNumber,
+            legend: subsection.anchor?.text || '',
+            headerItems: subsection.anchor?.items || [],
+            forceLegendOutsideCrop: true
+        }];
+    }
+
+    const sortedLegends = [...legendBlocks].sort((a, b) => {
+        if (Math.abs(b.centerY - a.centerY) > 20) return b.centerY - a.centerY;
+        return a.centerX - b.centerX;
+    });
+
+    const rectGroups = sortedLegends.map(() => []);
+    firstCropRects.forEach(rect => {
+        let bestIndex = 0;
+        let bestDistance = Infinity;
+        sortedLegends.forEach((legend, legendIndex) => {
+            const distance = Math.abs(legend.centerX - getRectCenterX(rect)) + Math.abs(legend.centerY - getRectCenterY(rect));
+            if (distance < bestDistance) {
+                bestDistance = distance;
+                bestIndex = legendIndex;
+            }
+        });
+        rectGroups[bestIndex].push(rect);
+    });
+
+    return rectGroups
+        .map((rectGroup, legendIndex) => {
+            if (rectGroup.length === 0) return null;
+            return {
+                rect: unionRects(rectGroup),
+                matchedQNum: subsection.questionNumber,
+                legend: subsection.anchor?.text || cleanLegendPrefix(sortedLegends[legendIndex]?.text || ''),
+                headerItems: subsection.anchor?.items || [],
+                forceLegendOutsideCrop: true
+            };
+        })
+        .filter(Boolean);
+};
+
+const buildNuclearSectionImageGroups = (textItems, imageRects, parserProfile) => {
+    const lines = buildTextLineEntriesFromItems(textItems);
+    const sectionStarts = lines
+        .map(line => ({
+            ...line,
+            questionNumber: extractQuestionNumberFromText(line.text, [parserProfile.imageLabelPattern])
+        }))
+        .filter(line => line.questionNumber !== null)
+        .sort((a, b) => b.y - a.y);
+
+    if (sectionStarts.length === 0 || imageRects.length === 0) {
+        return [];
+    }
+
+    const groups = [];
+
+    sectionStarts.forEach((sectionStart, index) => {
+        const nextSection = sectionStarts[index + 1] || null;
+        const sectionTopY = sectionStart.y + 18;
+        const sectionBottomY = nextSection ? nextSection.y + 18 : parserProfile.footerMinY;
+        const rawSectionRects = imageRects.filter(rect => {
+            const centerY = getRectCenterY(rect);
+            if (!(centerY < sectionTopY && centerY > sectionBottomY)) return false;
+            if (Math.abs(centerY - sectionStart.y) <= (rect.h / 2)) {
+                return centerY < sectionStart.y;
+            }
+            return true;
+        });
+        const sectionRects = mergeDenseNuclearSectionRects(rawSectionRects);
+
+        if (sectionRects.length === 0) {
+            return;
+        }
+
+        const sectionLines = lines.filter(line => line.y <= sectionTopY && line.y > sectionBottomY);
+        const subsections = buildNuclearSubsections(sectionStart, nextSection, sectionLines, sectionRects, parserProfile);
+        const usedSectionRects = new Set();
+
+        subsections.forEach(subsection => {
+            const subsectionGroups = buildNuclearGroupsFromSubsection(subsection, sectionLines, sectionRects);
+            subsectionGroups.forEach(group => {
+                groups.push(group);
+                sectionRects.forEach(rect => {
+                    const centerY = getRectCenterY(rect);
+                    const centerX = getRectCenterX(rect);
+                    if (centerY < subsection.topY
+                        && centerY > subsection.bottomY
+                        && centerX >= subsection.leftX
+                        && centerX < subsection.rightX) {
+                        usedSectionRects.add(rect);
+                    }
+                });
+            });
+        });
+
+        sectionRects
+            .filter(rect => !usedSectionRects.has(rect))
+            .sort((a, b) => {
+                if (Math.abs(getRectCenterY(b) - getRectCenterY(a)) > 20) return getRectCenterY(b) - getRectCenterY(a);
+                return getRectCenterX(a) - getRectCenterX(b);
+            })
+            .forEach(rect => {
+                groups.push({
+                    rect,
+                    matchedQNum: sectionStart.questionNumber,
+                    legend: '',
+                    headerItems: [],
+                    forceLegendOutsideCrop: false
+                });
+            });
+    });
+
+    return groups;
 };
 
 const findInkBoundsInCanvasRegion = (canvas, region, threshold = 245) => {
@@ -275,13 +915,29 @@ const findInkBoundsInCanvasRegion = (canvas, region, threshold = 245) => {
 };
 
 const getPdfParserProfile = (examCategory) => {
+    if (examCategory === '3') {
+        return {
+            name: 'nuclear',
+            questionPattern: /^\s*(\d{2})\s*[\.．:：\)）]/,
+            optionPattern: /^[a-eA-Eａ-ｅＡ-Ｅ][\.．\s\)\)）]/,
+            minQuestionLineLength: 3,
+            minOptionCount: 3,
+            maxQuestionNumber: 99,
+            footerMinY: 45,
+            fixedFirstQuestionPage: 3,
+            imageAssignmentStrategy: 'label-only',
+            imageLabelPattern: /(?:[\[［【]?\s*No\.?\s*([0-9]{2,3})\s*[\]］】]?)/i,
+        };
+    }
+
     if (examCategory === '4') {
         return {
             name: 'ivr',
-            questionPattern: /^\s*(?:(?:問|問題|No\.?)\s*(\d{1,3})|(\d{1,3})\s*[\.．])/i,
+            questionPattern: /^\s*(?:(?:問|問題|No\.?)\s*(\d{1,3})|(\d{1,3})\s*[\.．:：\)）])/i,
             optionPattern: /^[a-eA-Eａ-ｅＡ-Ｅ][\.．\s\)\)）]/,
             minQuestionLineLength: 4,
             minOptionCount: 3,
+            maxQuestionNumber: 150,
             footerMinY: 45,
             imageAssignmentStrategy: 'nearest-preceding-question'
         };
@@ -289,16 +945,17 @@ const getPdfParserProfile = (examCategory) => {
 
     return {
         name: 'default',
-        questionPattern: /^\s*(?:(?:問|問題|No\.?)\s*(\d{1,3})|(\d{1,3})\s*[\.．])/i,
+        questionPattern: /^\s*(?:(?:問|問題|No\.?)\s*(\d{1,3})|(\d{1,3})\s*[\.．:：\)）])/i,
         optionPattern: /^[a-eA-Eａ-ｅＡ-Ｅ][\.．\s\)\)）]/,
         minQuestionLineLength: 5,
         minOptionCount: 3,
+        maxQuestionNumber: 150,
         footerMinY: 60,
         imageAssignmentStrategy: 'page-last-question'
     };
 };
 
-const buildTextLinesFromItems = (textItems) => {
+const buildTextLineEntriesFromItems = (textItems) => {
     if (!textItems || textItems.length === 0) return [];
 
     const sortedItems = [...textItems].sort((a, b) => {
@@ -323,26 +980,111 @@ const buildTextLinesFromItems = (textItems) => {
             return {
                 y: line.y,
                 text: sortedLineItems.map(item => item.text).join('').trim(),
+                items: sortedLineItems,
             };
         })
         .filter(line => line.text.length > 0)
         .sort((a, b) => b.y - a.y);
 };
 
-const detectFirstQuestionPage = (lines, parserProfile) => {
-    const questionLineIndex = lines.findIndex(line => {
-        const match = line.text.match(parserProfile.questionPattern);
-        if (!match) return false;
-        return parseInt(match[1] || match[2], 10) === 1 && line.text.length >= parserProfile.minQuestionLineLength;
+const buildTextLinesFromItems = (textItems) => buildTextLineEntriesFromItems(textItems).map(({ y, text }) => ({ y, text }));
+
+const buildInlineTextFromItems = (items) => {
+    if (!items || items.length === 0) return '';
+
+    const sortedItems = [...items].sort((a, b) => a.x - b.x);
+    const heights = sortedItems.map(item => item.height || 0).filter(h => h > 0);
+    if (heights.length === 0) {
+        return sortedItems.map(item => item.text).join('').trim();
+    }
+
+    const normalHeight = Math.max(...heights);
+    const normalYItems = sortedItems.filter(item => Math.abs((item.height || 0) - normalHeight) < 2);
+    const normalY = normalYItems.length > 0
+        ? normalYItems.reduce((sum, item) => sum + item.y, 0) / normalYItems.length
+        : sortedItems[0].y;
+
+    return sortedItems.map(item => {
+        const text = item.text;
+        if (!text.trim()) return text;
+
+        const itemHeight = item.height || 0;
+        const diffY = item.y - normalY;
+        const isSizeSmaller = normalHeight > 4 && (itemHeight / normalHeight < 0.85);
+        const isPosShifted = Math.abs(diffY) > 1.5;
+
+        if (isSizeSmaller && isPosShifted && text.length < 10) {
+            if (diffY > 1.0) {
+                return `<sup>${text}</sup>`;
+            }
+            if (diffY < -1.0) {
+                return `<sub>${text}</sub>`;
+            }
+        }
+
+        return text;
+    }).join('').trim();
+};
+
+const extractQuestionNumberFromText = (text, patterns = []) => {
+    for (const pattern of patterns) {
+        if (!pattern) continue;
+        const match = text.match(pattern);
+        if (!match) continue;
+
+        const value = parseInt(match[1], 10);
+        if (Number.isInteger(value)) {
+            return value;
+        }
+    }
+
+    return null;
+};
+
+const detectImageMatchedQuestionNumber = (rect, textItems, parserProfile) => {
+    const patterns = [parserProfile.imageLabelPattern, DEFAULT_IMAGE_QUESTION_LABEL_PATTERN];
+    const xPadding = parserProfile?.name === 'nuclear' ? 180 : 80;
+    const bottomPadding = parserProfile?.name === 'nuclear' ? 90 : 50;
+    const topPadding = parserProfile?.name === 'nuclear' ? 50 : 30;
+
+    const containedText = textItems
+        .filter(item => {
+            const txCenter = item.x + item.width / 2;
+            const tyCenter = item.y + item.height / 2;
+            return (
+                txCenter >= rect.x &&
+                txCenter <= rect.x + rect.w &&
+                tyCenter >= rect.y &&
+                tyCenter <= rect.y + rect.h
+            );
+        })
+        .map(item => item.text)
+        .join(' ');
+    const containedMatch = extractQuestionNumberFromText(containedText, patterns);
+    if (containedMatch !== null) {
+        return containedMatch;
+    }
+
+    const nearbyItems = textItems.filter(item => {
+        const txCenter = item.x + item.width / 2;
+        const tyCenter = item.y + item.height / 2;
+        return (
+            txCenter >= rect.x - xPadding &&
+            txCenter <= rect.x + rect.w + xPadding &&
+            tyCenter >= rect.y - topPadding &&
+            tyCenter <= rect.y + rect.h + bottomPadding
+        );
     });
 
-    if (questionLineIndex === -1) return false;
+    const nearbyLines = buildTextLinesFromItems(nearbyItems);
+    for (const line of nearbyLines) {
+        const matched = extractQuestionNumberFromText(line.text, patterns);
+        if (matched !== null) {
+            return matched;
+        }
+    }
 
-    if (parserProfile.name !== 'ivr') return true;
-
-    const tailLines = lines.slice(questionLineIndex);
-    const optionCount = tailLines.filter(line => parserProfile.optionPattern.test(line.text)).length;
-    return optionCount >= 1;
+    return null;
 };
 
 const buildTextItemKey = (item) => `${item.pageNum}_${item.x}_${item.y}_${item.text.trim()}`;
@@ -382,17 +1124,76 @@ const getFilledOptionCount = (options) => {
 };
 
 const GLUED_QUESTION_UNIT_PREFIX = /^(?:[a-z]|mSv|Sv|Gy|mGy|cGy|mm|cm|mL|kg|%|歳|年|か月|ヶ月)/i;
+const PLAIN_NUMBER_QUESTION_DISQUALIFIER = /^(?:[a-eA-Eａ-ｅＡ-Ｅ][\.．\s\)）]|mSv|Sv|Gy|mGy|cGy|mm|cm|mL|kg|%|歳|年|か月|ヶ月|月|日|週|時間|min|hr)\b/i;
+const PLAIN_NUMBER_QUESTION_HINT = /(?:次の|以下|最も|正しい|誤って|適切|どれか|選べ|患者|症例|図|画像|所見|疾患|診断|治療|検査|読影|について|に関して|Which|What|Choose|Select|Regarding|About)/i;
 const IVR_SECTION_TRANSITION_PATTERN = /(?:共通問題は以上です|次ページ以降も解答してください|IVR専門医試験受験者)/;
+
+const parseQuestionStartText = (lineText, questionPattern) => {
+    const standardMatch = lineText.match(questionPattern);
+    if (standardMatch) {
+        const qNum = parseInt(standardMatch[1] || standardMatch[2], 10);
+        return {
+            qNum,
+            questionText: lineText.substring(standardMatch[0].length).trim(),
+        };
+    }
+
+    const gluedMatch = lineText.match(/^\s*(\d{1,3})(?=[A-Za-z(（［【])/);
+    if (gluedMatch) {
+        const trailingText = lineText.substring(gluedMatch[0].length).trim();
+        if (GLUED_QUESTION_UNIT_PREFIX.test(trailingText)) {
+            return null;
+        }
+        return {
+            qNum: parseInt(gluedMatch[1], 10),
+            questionText: trailingText,
+        };
+    }
+
+    const spacedMatch = lineText.match(/^\s*(\d{1,3})\s+(.+)$/);
+    if (spacedMatch) {
+        const trailingText = spacedMatch[2].trim();
+        if (!trailingText || PLAIN_NUMBER_QUESTION_DISQUALIFIER.test(trailingText)) {
+            return null;
+        }
+        if (!PLAIN_NUMBER_QUESTION_HINT.test(trailingText) && trailingText.length < 12) {
+            return null;
+        }
+        return {
+            qNum: parseInt(spacedMatch[1], 10),
+            questionText: trailingText,
+        };
+    }
+
+    return null;
+};
+
+const detectFirstQuestionPage = (lines, parserProfile) => {
+    const questionLineIndex = lines.findIndex(line => {
+        const parsed = parseQuestionStartText(line.text, parserProfile.questionPattern);
+        if (!parsed) return false;
+        return parsed.qNum === 1 && line.text.length >= parserProfile.minQuestionLineLength;
+    });
+
+    if (questionLineIndex === -1) return false;
+
+    if (parserProfile.name !== 'ivr') return true;
+
+    const tailLines = lines.slice(questionLineIndex);
+    const optionCount = tailLines.filter(line => parserProfile.optionPattern.test(line.text)).length;
+    return optionCount >= 1;
+};
 
 // 画像の境界とテキスト要素のリストからレジェンドを抽出する関数
 // limits: { leftLimit, rightLimit, topLimit, bottomLimit } を受け取り、探索範囲を制限する
-const extractLegendForImage = (rect, textItems, limits = {}, allPageTextItems = []) => {
+const extractLegendForImage = (rect, textItems, limits = {}, allPageTextItems = [], parserProfile = null) => {
     const origMinX = rect.x;
     const origMinY = rect.y;
     const origMaxX = rect.x + rect.w;
     const origMaxY = rect.y + rect.h;
 
     const imageWidth = origMaxX - origMinX;
+    const preferTopLegend = parserProfile?.name === 'nuclear';
 
     // X軸の探索マージン (左右)
     const xMargin = Math.max(15, Math.min(50, imageWidth * 0.1));
@@ -408,7 +1209,7 @@ const extractLegendForImage = (rect, textItems, limits = {}, allPageTextItems = 
     }
 
     // Y軸の探索マージン (上下)
-    const searchMarginY = 150;
+    const searchMarginY = parserProfile?.name === 'nuclear' ? 70 : 150;
     const yTolerance = 5;
 
     // Y軸方向の探索限界のクランプ
@@ -421,6 +1222,45 @@ const extractLegendForImage = (rect, textItems, limits = {}, allPageTextItems = 
     if (limits.topLimit !== undefined) {
         searchMinYLimit = Math.min(searchMinYLimit, limits.topLimit);
     }
+
+    const collectLegendLines = (items, direction = 'down') => {
+        if (items.length === 0) return { lines: [], used: [] };
+
+        const sortedItems = [...items].sort((a, b) => direction === 'down' ? b.y - a.y : a.y - b.y);
+        let currentY = sortedItems[0].y;
+        let cumulativeHeight = 0;
+        const lines = [];
+        const used = [];
+
+        while (currentY && cumulativeHeight < 80) {
+            const lineItems = items.filter(item => Math.abs(item.y - currentY) <= yTolerance);
+            if (lineItems.length === 0) break;
+
+            lineItems.sort((a, b) => a.x - b.x);
+            const lineText = lineItems.map(t => t.text).join(' ').trim();
+            if (lineText && isValidLegendText(lineText, lineItems[0], allPageTextItems)) {
+                lines.push(lineText);
+                lineItems.forEach(item => used.push(item));
+            }
+
+            const nextCandidates = items.filter(item => (
+                direction === 'down'
+                    ? item.y < (currentY - yTolerance)
+                    : item.y > (currentY + yTolerance)
+            ));
+
+            if (nextCandidates.length === 0) break;
+
+            nextCandidates.sort((a, b) => direction === 'down' ? b.y - a.y : a.y - b.y);
+            const nextY = nextCandidates[0].y;
+            const gap = Math.abs(currentY - nextY);
+            if (gap > 25) break;
+            cumulativeHeight += gap;
+            currentY = nextY;
+        }
+
+        return { lines, used };
+    };
 
     // --- 1. メインタイトルの探索 ---
     let mainTitle = '';
@@ -435,131 +1275,80 @@ const extractLegendForImage = (rect, textItems, limits = {}, allPageTextItems = 
         return yMatch && xMatch;
     });
 
-    let belowLines = [];
-    if (textBelow.length > 0) {
-        // 画像に最も近いY座標を見つける
-        textBelow.sort((a, b) => b.y - a.y);
-        let currentY = textBelow[0].y;
-        let cumulativeHeight = 0;
-        
-        while (currentY && cumulativeHeight < 80) {
-            const lineItems = textBelow.filter(item => Math.abs(item.y - currentY) <= yTolerance);
-            if (lineItems.length === 0) break;
-            
-            lineItems.sort((a, b) => a.x - b.x);
-            const lineText = lineItems.map(t => t.text).join(' ').trim();
-            if (lineText && isValidLegendText(lineText, lineItems[0], allPageTextItems)) {
-                belowLines.push(lineText);
-                lineItems.forEach(item => usedItems.push(item));
-            }
-            
-            // 次の行を探す (現在の行より下にあるもの)
-            const nextCandidates = textBelow.filter(item => item.y < (currentY - yTolerance));
-            if (nextCandidates.length > 0) {
-                nextCandidates.sort((a, b) => b.y - a.y); // 次に最も高い（近い）Y座標
-                const nextY = nextCandidates[0].y;
-                if (currentY - nextY <= 25) { // 通常の行間範囲内
-                    cumulativeHeight += (currentY - nextY);
-                    currentY = nextY;
-                } else {
-                    break;
-                }
-            } else {
-                break;
-            }
-        }
-    }
+    const belowResult = collectLegendLines(textBelow, 'down');
+    const belowLines = preferTopLegend ? [] : belowResult.lines;
 
-    // (b) 画像直上の探索 (直下で見つからない場合のみ)
+    // (b) 画像直上の探索
     let aboveLines = [];
-    if (belowLines.length === 0) {
-        const textAbove = textItems.filter(item => {
-            const tyCenter = item.y + item.height / 2;
-            const txCenter = item.x + item.width / 2;
-            const yMatch = tyCenter > (origMaxY - 10) && tyCenter <= searchMinYLimit;
-            const xMatch = txCenter >= searchMinX && txCenter <= searchMaxX;
-            return yMatch && xMatch;
-        });
-
-        if (textAbove.length > 0) {
-            textAbove.sort((a, b) => a.y - b.y);
-            let currentY = textAbove[0].y;
-            let cumulativeHeight = 0;
-
-            while (currentY && cumulativeHeight < 80) {
-                const lineItems = textAbove.filter(item => Math.abs(item.y - currentY) <= yTolerance);
-                if (lineItems.length === 0) break;
-
-                lineItems.sort((a, b) => a.x - b.x);
-                const lineText = lineItems.map(t => t.text).join(' ').trim();
-                if (lineText && isValidLegendText(lineText, lineItems[0], allPageTextItems)) {
-                    aboveLines.push(lineText);
-                    lineItems.forEach(item => usedItems.push(item));
-                }
-
-                // 次の行を探す (現在の行より上にあるもの)
-                const nextCandidates = textAbove.filter(item => item.y > (currentY + yTolerance));
-                if (nextCandidates.length > 0) {
-                    nextCandidates.sort((a, b) => a.y - b.y);
-                    const nextY = nextCandidates[0].y;
-                    if (nextY - currentY <= 25) {
-                        cumulativeHeight += (nextY - currentY);
-                        currentY = nextY;
-                    } else {
-                        break;
-                    }
-                } else {
-                    break;
-                }
-            }
-        }
-    }
+    const textAbove = textItems.filter(item => {
+        const tyCenter = item.y + item.height / 2;
+        const txCenter = item.x + item.width / 2;
+        const yMatch = tyCenter > (origMaxY - 10) && tyCenter <= searchMinYLimit;
+        const xMatch = txCenter >= searchMinX && txCenter <= searchMaxX;
+        return yMatch && xMatch;
+    });
+    const aboveResult = collectLegendLines(textAbove, 'up');
+    aboveLines = aboveResult.lines;
 
     // 複数行を結合してメインタイトルを作成
-    if (belowLines.length > 0) {
+    if (preferTopLegend && aboveLines.length > 0) {
+        mainTitle = aboveLines.join(' ');
+        aboveResult.used.forEach(item => usedItems.push(item));
+    } else if (!preferTopLegend && belowLines.length > 0) {
         mainTitle = belowLines.join(' ');
+        belowResult.used.forEach(item => usedItems.push(item));
     } else if (aboveLines.length > 0) {
         mainTitle = aboveLines.join(' ');
+        aboveResult.used.forEach(item => usedItems.push(item));
     }
 
-    // (c) 画像右側の探索 (上下で見つからない場合のみ)
-    if (!mainTitle) {
-        const sideMarginX = Math.max(40, Math.min(120, imageWidth * 0.25));
-        const textRight = textItems.filter(item => {
+    const pickSideLegend = (side = 'right') => {
+        const sideMarginX = Math.max(50, Math.min(150, imageWidth * 0.35));
+        const candidates = textItems.filter(item => {
             const txCenter = item.x + item.width / 2;
             const tyCenter = item.y + item.height / 2;
-            const xMatch = txCenter >= origMaxX && txCenter <= (origMaxX + sideMarginX);
-            const yMatch = tyCenter >= (origMinY - 10) && tyCenter <= (origMaxY + 10);
+            const xMatch = side === 'right'
+                ? txCenter >= origMaxX && txCenter <= (origMaxX + sideMarginX)
+                : txCenter <= origMinX && txCenter >= (origMinX - sideMarginX);
+            const yMatch = tyCenter >= (origMinY - 20) && tyCenter <= (origMaxY + 20);
             return xMatch && yMatch;
         });
 
-        if (textRight.length > 0) {
-            const rightLinesMap = new Map();
-            textRight.forEach(item => {
-                const lineKey = Math.round(item.y / 3) * 3;
-                const existing = rightLinesMap.get(lineKey) || [];
-                existing.push(item);
-                rightLinesMap.set(lineKey, existing);
+        if (candidates.length === 0) return null;
+
+        const linesMap = new Map();
+        candidates.forEach(item => {
+            const lineKey = Math.round(item.y / 3) * 3;
+            const existing = linesMap.get(lineKey) || [];
+            existing.push(item);
+            linesMap.set(lineKey, existing);
+        });
+
+        const lines = Array.from(linesMap.values())
+            .map(lineItems => {
+                const sorted = [...lineItems].sort((a, b) => a.x - b.x);
+                const lineText = sorted.map(t => t.text).join(' ').trim();
+                return { lineItems: sorted, lineText };
+            })
+            .filter(({ lineText, lineItems }) => lineText && isValidLegendText(lineText, lineItems[0], allPageTextItems))
+            .sort((a, b) => {
+                const aOrientation = IMAGE_ORIENTATION_LABEL_PATTERN.test(a.lineText) ? 1 : 0;
+                const bOrientation = IMAGE_ORIENTATION_LABEL_PATTERN.test(b.lineText) ? 1 : 0;
+                if (aOrientation !== bOrientation) return bOrientation - aOrientation;
+                return a.lineItems[0].y - b.lineItems[0].y;
             });
 
-            const rightLines = Array.from(rightLinesMap.values())
-                .map(lineItems => {
-                    const sorted = [...lineItems].sort((a, b) => a.x - b.x);
-                    const lineText = sorted.map(t => t.text).join(' ').trim();
-                    return { lineItems: sorted, lineText };
-                })
-                .filter(({ lineText, lineItems }) => lineText && isValidLegendText(lineText, lineItems[0], allPageTextItems))
-                .sort((a, b) => {
-                    const aOrientation = IMAGE_ORIENTATION_LABEL_PATTERN.test(a.lineText) ? 1 : 0;
-                    const bOrientation = IMAGE_ORIENTATION_LABEL_PATTERN.test(b.lineText) ? 1 : 0;
-                    if (aOrientation !== bOrientation) return bOrientation - aOrientation;
-                    return a.lineItems[0].y - b.lineItems[0].y;
-                });
+        return lines[0] || null;
+    };
 
-            if (rightLines.length > 0) {
-                mainTitle = rightLines[0].lineText;
-                rightLines[0].lineItems.forEach(item => usedItems.push(item));
-            }
+    if (!mainTitle) {
+        const preferredOrder = preferTopLegend ? ['left', 'right'] : ['right', 'left'];
+        for (const side of preferredOrder) {
+            const picked = pickSideLegend(side);
+            if (!picked) continue;
+            mainTitle = picked.lineText;
+            picked.lineItems.forEach(item => usedItems.push(item));
+            break;
         }
     }
 
@@ -570,8 +1359,10 @@ const extractLegendForImage = (rect, textItems, limits = {}, allPageTextItems = 
     const usedWords = mainTitle ? mainTitle.split(/\s+/) : [];
     
     // (a) 画像の外側近傍 (上下20px, 左右40pxに制限し、隣接画像との干渉限界 limits でX座標を制限)
-    const marginY = 20;
-    const marginX = Math.max(40, Math.min(120, imageWidth * 0.25));
+    const marginY = parserProfile?.name === 'nuclear' ? 12 : 20;
+    const marginX = parserProfile?.name === 'nuclear'
+        ? Math.max(24, Math.min(72, imageWidth * 0.15))
+        : Math.max(40, Math.min(120, imageWidth * 0.25));
     
     let descMinX = origMinX - marginX;
     let descMaxX = origMaxX + marginX;
@@ -619,6 +1410,10 @@ const extractLegendForImage = (rect, textItems, limits = {}, allPageTextItems = 
                                 /^(?:右|左|前|後|上|下|側面|正面|前面|後面|造影|シネ|遅延|早期|矢状|横断|冠状|エコー|シンチ|図|表|画像|負荷|安静|運動|ストレス|レスト)(?:時|像)?\d*$/i.test(text) ||
                                 /^(?:anterior|posterior|lateral|coronal|sagittal|transverse|axial|min|hour|hr|sec|iv|pre|post|delay|early|Right|Left|L|R|A|P|H|F|sup|inf)\d*$/i.test(text);
 
+            if (NO_QUESTION_LABEL_PATTERN.test(text)) {
+                return;
+            }
+
             if (isLabelLike && !usedWords.includes(text) && !mainTitle.includes(text)) {
                 if (isOrientationLabel) {
                     orientationDescriptors.push(text);
@@ -664,6 +1459,7 @@ export default function AdminPage() {
     const [successMsg, setSuccessMsg] = useState('');
     const [examId, setExamId] = useState('');
     const [examName, setExamName] = useState('');
+    const [previewImageModal, setPreviewImageModal] = useState(null);
     const [importMode, setImportMode] = useState('new'); // 'new' or 'existing'
     const [examCategory, setExamCategory] = useState('1'); // '1': 放射線科, '2': 放射線診断, '3': 核医学, '4': IVR
     const [activeTab, setActiveTab] = useState('import'); // 'import', 'manage'
@@ -681,6 +1477,19 @@ export default function AdminPage() {
     useEffect(() => {
         loadLocalExams();
     }, []);
+
+    useEffect(() => {
+        if (!previewImageModal) return undefined;
+
+        const handleKeyDown = (event) => {
+            if (event.key === 'Escape') {
+                setPreviewImageModal(null);
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [previewImageModal]);
 
     const handleImageChange = (questionIndex, file) => {
         if (!file) return;
@@ -907,12 +1716,6 @@ export default function AdminPage() {
         const file = e.target.files[0];
         if (!file) return;
 
-        if (examCategory === '3') {
-            alert('核医学専門医試験向けの取り込みシステムは現在開発中のため、まだ実行できません。');
-            e.target.value = null; // Reset file input
-            return;
-        }
-
         setIsParsingPdf(true);
         setErrorMsg('');
         setSuccessMsg('');
@@ -941,8 +1744,8 @@ export default function AdminPage() {
             // A. PDFから「年度」および「最初の問題開始ページ」をスキャン・同定
             // -------------------------------------------------------------
             let detectedYear = new Date().getFullYear();
-            let firstQuestionPage = 1;
-            let foundFirstPage = false;
+            let firstQuestionPage = parserProfile.fixedFirstQuestionPage || 1;
+            let foundFirstPage = Boolean(parserProfile.fixedFirstQuestionPage);
 
             const questionPattern = parserProfile.questionPattern;
             const quizStartHeaderPattern = /(?:第\s*\d+\s*回[\s　]*[^\n]*(?:試験問題|筆記|試験)|放射線科専門医認定試験|核医学専門医試験|筆記試験)/i;
@@ -1059,30 +1862,7 @@ export default function AdminPage() {
                 }
             };
 
-            const parseQuestionStart = (lineText) => {
-                const standardMatch = lineText.match(questionPattern);
-                if (standardMatch) {
-                    const qNum = parseInt(standardMatch[1] || standardMatch[2], 10);
-                    return {
-                        qNum,
-                        questionText: lineText.substring(standardMatch[0].length).trim(),
-                    };
-                }
-
-                const gluedMatch = lineText.match(/^\s*(\d{1,3})(?=[A-Za-z(（［【])/);
-                if (gluedMatch) {
-                    const trailingText = lineText.substring(gluedMatch[0].length).trim();
-                    if (GLUED_QUESTION_UNIT_PREFIX.test(trailingText)) {
-                        return null;
-                    }
-                    return {
-                        qNum: parseInt(gluedMatch[1]),
-                        questionText: trailingText,
-                    };
-                }
-
-                return null;
-            };
+            const parseQuestionStart = (lineText) => parseQuestionStartText(lineText, questionPattern);
 
             const buildLineText = (line) => {
                 if (line.length === 0) return '';
@@ -1117,6 +1897,110 @@ export default function AdminPage() {
                     }
                     return text;
                 }).join('');
+            };
+
+            const populateQuestionOptionsAndText = (questionList) => {
+                questionList.forEach(q => {
+                    let optionsStarted = false;
+                    let lastOptionKey = '';
+                    const cleanQuestionLines = [];
+                    q.options = {};
+                    q.finalUsedLines = [];
+
+                    q.rawTextLines.forEach((lineStr, idx) => {
+                        const originalLine = q.usedLines[idx];
+                        const trimmed = String(lineStr || '').trim();
+                        if (!trimmed) return;
+
+                        const match = trimmed.match(optionPattern);
+                        if (match) {
+                            optionsStarted = true;
+                            const optKey = canonicalizeOptionKey(trimmed[0][0]);
+                            const optText = trimmed.substring(match[0].length).trim();
+                            q.options[optKey] = optText;
+                            lastOptionKey = optKey;
+                            if (originalLine) q.finalUsedLines.push(originalLine);
+                            return;
+                        }
+
+                        if (optionsStarted) {
+                            const isFooter = FOOTER_PAGE_PATTERN.test(trimmed);
+                            const isLegendLike = /(CT|MRI|像|写真|図|シンチ|造影|エコー|DWI|FLAIR|PET)/i.test(trimmed);
+
+                            if (isFooter || isLegendLike || lastOptionKey === 'e') {
+                                return;
+                            }
+
+                            if (lastOptionKey) {
+                                q.options[lastOptionKey] += ` ${trimmed}`;
+                                if (originalLine) q.finalUsedLines.push(originalLine);
+                            }
+                            return;
+                        }
+
+                        cleanQuestionLines.push(lineStr);
+                        if (originalLine) q.finalUsedLines.push(originalLine);
+                    });
+
+                    q.question = cleanQuestionLines.join('\n').trim();
+                });
+            };
+
+            const buildFallbackQuestionsFromSimpleLines = () => {
+                const fallbackQuestions = [];
+                let fallbackCurrentQuestion = null;
+
+                rawPagesTextData.forEach((page) => {
+                    const pageLines = buildTextLineEntriesFromItems(page.textItems);
+                    pageLines.forEach(({ items, text, y }) => {
+                        let lineText = buildInlineTextFromItems(items) || text;
+                        lineText = stripFooterSuffix(String(lineText || '').trim());
+
+                        if (!lineText) return;
+                        if (FOOTER_PAGE_PATTERN.test(lineText)) return;
+
+                        const parsedStart = parseQuestionStart(lineText);
+                        if (parsedStart) {
+                            const qNum = parsedStart.qNum;
+                            const isSequential = !fallbackCurrentQuestion || qNum > fallbackCurrentQuestion.questionNumber;
+                            if (qNum >= 1 && qNum <= parserProfile.maxQuestionNumber && isSequential) {
+                                if (fallbackCurrentQuestion) {
+                                    fallbackQuestions.push(fallbackCurrentQuestion);
+                                }
+                                fallbackCurrentQuestion = {
+                                    id: qNum,
+                                    questionNumber: qNum,
+                                    rawQuestionNumber: qNum,
+                                    question: parsedStart.questionText,
+                                    options: {},
+                                    images: [],
+                                    rawTextLines: [parsedStart.questionText],
+                                    pageImages: [],
+                                    startPage: page.pageNum,
+                                    anchorY: y,
+                                    usedLines: [items]
+                                };
+                                return;
+                            }
+                        }
+
+                        if (!fallbackCurrentQuestion) return;
+                        fallbackCurrentQuestion.rawTextLines.push(lineText);
+                        fallbackCurrentQuestion.question += `\n${lineText}`;
+                        fallbackCurrentQuestion.usedLines.push(items);
+                    });
+                });
+
+                if (fallbackCurrentQuestion) {
+                    fallbackQuestions.push(fallbackCurrentQuestion);
+                }
+
+                populateQuestionOptionsAndText(fallbackQuestions);
+                const qualifiedFallbackQuestions = fallbackQuestions.filter(q => getFilledOptionCount(q.options) >= parserProfile.minOptionCount);
+                if (qualifiedFallbackQuestions.length > 0) {
+                    return qualifiedFallbackQuestions;
+                }
+                return fallbackQuestions.filter(q => String(q.question || '').trim().length > 0);
             };
 
             let ivrQuestionNumberOffset = 0;
@@ -1225,7 +2109,7 @@ export default function AdminPage() {
                          // 2. 行の長さが5文字以上
                          // 3. 問題番号が昇順であること (前のアクティブな問題番号より大きい)
                          const isSequential = !currentQuestion || qNum > currentQuestion.questionNumber;
-                         if (qNum >= 1 && qNum <= 150 && lineText.length >= parserProfile.minQuestionLineLength && isSequential) {
+                         if (qNum >= 1 && qNum <= parserProfile.maxQuestionNumber && lineText.length >= parserProfile.minQuestionLineLength && isSequential) {
                              if (currentQuestion) {
                                  parsedQuestionsList.push(currentQuestion);
                              }
@@ -1263,60 +2147,23 @@ export default function AdminPage() {
 
             // 選択肢の簡易抽出
             const optionPattern = parserProfile.optionPattern;
-
-             parsedQuestionsList.forEach(q => {
-                 let optionsStarted = false;
-                 let lastOptionKey = '';
-                 const cleanQuestionLines = [];
-                 q.options = {};
-                 q.finalUsedLines = [];
-
-                 q.rawTextLines.forEach((lineStr, idx) => {
-                    const originalLine = q.usedLines[idx];
-                    const trimmed = lineStr.trim();
-                    const match = trimmed.match(optionPattern);
-                    if (match) {
-                        optionsStarted = true;
-                        const optKey = canonicalizeOptionKey(trimmed[0][0]);
-                        const optText = trimmed.substring(match[0].length).trim();
-                        q.options[optKey] = optText;
-                        lastOptionKey = optKey;
-                        if (originalLine) q.finalUsedLines.push(originalLine);
-                    } else {
-                        if (optionsStarted) {
-                            // すでに選択肢の抽出が始まっている状態で、選択肢パターンにマッチしない行が来た場合
-                            // これは選択肢の後に配置されている画像凡例やページ番号などのゴミ行
-                            // フッター（ページ番号）や画像凡例と思われる行、またはすでに最後の選択肢eが出た後の行は除外する
-                            const isFooter = FOOTER_PAGE_PATTERN.test(trimmed);
-                            const isLegendLike = /(CT|MRI|像|写真|図|シンチ|造影|エコー|DWI|FLAIR|PET)/i.test(trimmed);
-                            
-                            if (isFooter || isLegendLike || lastOptionKey === 'e') {
-                                // 無視（追加しない）
-                                return;
-                            }
-                            
-                            // まだ 'e' に達していない通常の文言であれば、直前の選択肢の複数行テキストとしてマージ
-                             // まだ 'e' に達していない通常の文言であれば、直前の選択肢の複数行テキストとしてマージ
-                             if (lastOptionKey) {
-                                 q.options[lastOptionKey] += ' ' + trimmed;
-                                 if (originalLine) q.finalUsedLines.push(originalLine);
-                             }
-                         } else {
-                             // まだ選択肢が始まっていない場合は、純粋な問題文の行
-                             cleanQuestionLines.push(lineStr);
-                             if (originalLine) q.finalUsedLines.push(originalLine);
-                         }
-                     }
-                 });
-
-                q.question = cleanQuestionLines.join('\n').trim();
-            });
+            populateQuestionOptionsAndText(parsedQuestionsList);
 
             // 選択肢が3つ未満の問題（シラバスや説明文など、誤検出されたもの）を除外
-            parsedQuestionsList = parsedQuestionsList.filter(q => {
+            const optionQualifiedQuestions = parsedQuestionsList.filter(q => {
                 const optCount = getFilledOptionCount(q.options);
                 return optCount >= parserProfile.minOptionCount;
              });
+
+            if (optionQualifiedQuestions.length > 0) {
+                parsedQuestionsList = optionQualifiedQuestions;
+            } else {
+                parsedQuestionsList = parsedQuestionsList.filter(q => String(q.question || '').trim().length > 0);
+            }
+
+            if (parsedQuestionsList.length === 0) {
+                parsedQuestionsList = buildFallbackQuestionsFromSimpleLines();
+            }
 
              // 2.3 確定した問題文と選択肢のテキスト要素キーを Set に登録
              const assignedTextKeys = new Set();
@@ -1405,6 +2252,174 @@ export default function AdminPage() {
                  const mergedImageRects = mergeNestedImageRects(rawImageRects);
 
                   if (mergedImageRects.length > 0) {
+                      if (parserProfile.name === 'nuclear') {
+                          const nuclearGroups = buildNuclearSectionImageGroups(textItems, mergedImageRects, parserProfile);
+                          if (nuclearGroups.length > 0) {
+                              const scale = 1.5;
+                              const viewport = page.getViewport({ scale });
+                              const pageCanvas = document.createElement('canvas');
+                              pageCanvas.width = viewport.width;
+                              pageCanvas.height = viewport.height;
+                              const canvasCtx = pageCanvas.getContext('2d');
+
+                              await page.render({
+                                  canvasContext: canvasCtx,
+                                  viewport
+                              }).promise;
+
+                              nuclearGroups.forEach((group, idx) => {
+                                  const rect = group.rect;
+                                  let origMinX = rect.x;
+                                  let origMinY = rect.y;
+                                  let origMaxX = rect.x + rect.w;
+                                  let origMaxY = rect.y + rect.h;
+                                  const headerItems = group.headerItems || [];
+                                  const headerItemKeys = buildTextItemKeySet(headerItems);
+                                  const currentGroupContainedTextKeys = new Set();
+
+                                  if (headerItems.length > 0) {
+                                      const headerLowerEdgeY = Math.min(...headerItems.map(item => item.y - Math.max(2, (item.height || 0) * 0.8)));
+                                      if (headerLowerEdgeY > origMinY + 20) {
+                                          origMaxY = Math.min(origMaxY, headerLowerEdgeY - 4);
+                                      }
+                                  }
+
+                                  textItems.forEach(item => {
+                                      const txCenter = item.x + item.width / 2;
+                                      const tyCenter = item.y + item.height / 2;
+                                      if (txCenter >= origMinX && txCenter <= origMaxX && tyCenter >= origMinY && tyCenter <= origMaxY) {
+                                          currentGroupContainedTextKeys.add(buildTextItemKey(item));
+                                      }
+                                  });
+
+                                  const nuclearAvailableTextItems = filteredTextItems.filter(item => {
+                                      const key = buildTextItemKey(item);
+                                      return !currentGroupContainedTextKeys.has(key) && !headerItemKeys.has(key);
+                                  });
+
+                                  const legendProbe = extractLegendForImage(
+                                      rect,
+                                      nuclearAvailableTextItems,
+                                      {},
+                                      textItems,
+                                      parserProfile
+                                  );
+                                  const baseLegend = cleanLegendPrefix(group.legend || '');
+                                  const extractedLegend = cleanLegendPrefix(legendProbe.legendStr || '');
+                                  let finalLegend = baseLegend || extractedLegend;
+                                  if (parserProfile.name === 'nuclear' && !baseLegend) {
+                                      finalLegend = '';
+                                  }
+
+                                  let includedSideLegend = false;
+                                  const detectedSideItems = legendProbe.usedItems?.filter(item => {
+                                      const centerX = item.x + item.width / 2;
+                                      return (centerX < rect.x || centerX > (rect.x + rect.w)) && !headerItemKeys.has(buildTextItemKey(item));
+                                  }) || [];
+                                  const sideItems = [
+                                      ...detectedSideItems,
+                                      ...collectNuclearSideLabelItems(rect, filteredTextItems, headerItemKeys)
+                                  ].filter((item, itemIndex, array) => (
+                                      array.findIndex(candidate => buildTextItemKey(candidate) === buildTextItemKey(item)) === itemIndex
+                                  ));
+
+                                  if (sideItems.length > 0) {
+                                      const labelMinX = Math.min(...sideItems.map(item => item.x));
+                                      const labelMinY = Math.min(...sideItems.map(item => item.y));
+                                      const labelMaxX = Math.max(...sideItems.map(item => item.x + item.width));
+                                      const labelMaxY = Math.max(...sideItems.map(item => item.y + item.height));
+                                      origMinX = Math.min(origMinX, labelMinX - 6);
+                                      origMinY = Math.min(origMinY, labelMinY - 6);
+                                      origMaxX = Math.max(origMaxX, labelMaxX + 6);
+                                      origMaxY = Math.max(origMaxY, labelMaxY + 6);
+                                      includedSideLegend = true;
+                                  }
+
+                                  if (includedSideLegend && !baseLegend) {
+                                      finalLegend = '';
+                                  }
+
+                                  const rawPt1 = viewport.convertToViewportPoint(origMinX, origMinY);
+                                  const rawPt2 = viewport.convertToViewportPoint(origMaxX, origMaxY);
+                                  const rawRegion = {
+                                      x: Math.min(rawPt1[0], rawPt2[0]),
+                                      y: Math.min(rawPt1[1], rawPt2[1]),
+                                      w: Math.abs(rawPt1[0] - rawPt2[0]),
+                                      h: Math.abs(rawPt1[1] - rawPt2[1])
+                                  };
+                                  const inkBounds = findInkBoundsInCanvasRegion(pageCanvas, rawRegion);
+
+                                  let cropX = inkBounds ? inkBounds.x : rawRegion.x;
+                                  let cropY = inkBounds ? inkBounds.y : rawRegion.y;
+                                  let cropW = inkBounds ? inkBounds.w : rawRegion.w;
+                                  let cropH = inkBounds ? inkBounds.h : rawRegion.h;
+
+                                  if (includedSideLegend && sideItems.length > 0) {
+                                      const sideMinX = Math.min(...sideItems.map(item => item.x));
+                                      const sideMinY = Math.min(...sideItems.map(item => item.y));
+                                      const sideMaxX = Math.max(...sideItems.map(item => item.x + item.width));
+                                      const sideMaxY = Math.max(...sideItems.map(item => item.y + item.height));
+                                      const sidePt1 = viewport.convertToViewportPoint(sideMinX - 6, sideMinY - 6);
+                                      const sidePt2 = viewport.convertToViewportPoint(sideMaxX + 6, sideMaxY + 6);
+                                      const sideX = Math.min(sidePt1[0], sidePt2[0]);
+                                      const sideY = Math.min(sidePt1[1], sidePt2[1]);
+                                      const sideW = Math.abs(sidePt1[0] - sidePt2[0]);
+                                      const sideH = Math.abs(sidePt1[1] - sidePt2[1]);
+                                      const cropMaxX = Math.max(cropX + cropW, sideX + sideW);
+                                      const cropMaxY = Math.max(cropY + cropH, sideY + sideH);
+                                      cropX = Math.min(cropX, sideX);
+                                      cropY = Math.min(cropY, sideY);
+                                      cropW = cropMaxX - cropX;
+                                      cropH = cropMaxY - cropY;
+                                  }
+
+                                  const safeX = Math.max(0, Math.min(cropX, pageCanvas.width));
+                                  const safeY = Math.max(0, Math.min(cropY, pageCanvas.height));
+                                  const safeW = Math.max(1, Math.min(cropW, pageCanvas.width - safeX));
+                                  const safeH = Math.max(1, Math.min(cropH, pageCanvas.height - safeY));
+
+                                  const cropCanvas = document.createElement('canvas');
+                                  cropCanvas.width = safeW;
+                                  cropCanvas.height = safeH;
+                                  const cropCtx = cropCanvas.getContext('2d');
+                                  cropCtx.drawImage(pageCanvas, safeX, safeY, safeW, safeH, 0, 0, safeW, safeH);
+
+                                  const cropPdfPoint1 = viewport.convertToPdfPoint(safeX, safeY);
+                                  const cropPdfPoint2 = viewport.convertToPdfPoint(safeX + safeW, safeY + safeH);
+                                  origMinX = Math.min(cropPdfPoint1[0], cropPdfPoint2[0]);
+                                  origMinY = Math.min(cropPdfPoint1[1], cropPdfPoint2[1]);
+                                  currentGroupContainedTextKeys.forEach(key => imageContainedTextKeys.add(key));
+
+                                  imageCounter++;
+
+                                  const imgObj = {
+                                      path: cropCanvas.toDataURL('image/png'),
+                                      x: origMinX,
+                                      y: origMinY,
+                                      legend: finalLegend || `図${idx + 1}`,
+                                      detectedLegend: finalLegend || null,
+                                      page: pageNum,
+                                      matchedQNum: group.matchedQNum
+                                  };
+
+                                  pageImages.push(imgObj);
+                                  allExtractedImagesPool.push(imgObj);
+                              });
+
+                              pageImages.sort((a, b) => {
+                                  if (Math.abs(a.y - b.y) > 20) return b.y - a.y;
+                                  return a.x - b.x;
+                              });
+
+                              pageImages.forEach((img, idx) => {
+                                  const cleaned = cleanLegendPrefix(img.detectedLegend);
+                                  img.legend = cleaned || `図${idx + 1}`;
+                              });
+
+                              continue;
+                          }
+                      }
+
                       const combinedCrops = [];
                       
                       // Sort images: Y desc, X asc
@@ -1412,11 +2427,18 @@ export default function AdminPage() {
                           if (Math.abs(b.y - a.y) > 20) return b.y - a.y;
                           return a.x - b.x;
                       });
+                      const preMatchedRects = sortedRects.map(rect => ({
+                          ...rect,
+                          matchedQNum: detectImageMatchedQuestionNumber(rect, textItems, parserProfile)
+                      }));
+                      const effectiveRects = parserProfile.name === 'nuclear'
+                          ? mergeNuclearImageRects(preMatchedRects)
+                          : preMatchedRects;
 
                       const usedLegendTextKeys = new Set();
 
                           const pageImageContainedTextKeys = new Set();
-                          sortedRects.forEach(rect => {
+                          effectiveRects.forEach(rect => {
                              const origMinX = rect.x - 2;
                              const origMinY = rect.y - 2;
                              const origMaxX = rect.x + rect.w + 2;
@@ -1431,7 +2453,7 @@ export default function AdminPage() {
                              });
                           });
 
-                          sortedRects.forEach(rect => {
+                          effectiveRects.forEach(rect => {
                          const origMinX = rect.x;
                          const origMinY = rect.y;
                          const origMaxX = rect.x + rect.w;
@@ -1447,18 +2469,13 @@ export default function AdminPage() {
                          });
 
                          const containedText = containedTexts.map(t => t.text).join(' ');
-                         
-                         let matchedQNum = null;
-                         const labelMatch = containedText.match(/(?:問|問題)\s*(?:番号)?\s*(\d+)/i);
-                         if (labelMatch) {
-                             matchedQNum = parseInt(labelMatch[1]);
-                         }
+                         const matchedQNum = rect.matchedQNum ?? detectImageMatchedQuestionNumber(rect, textItems, parserProfile);
 
                           // Find adjacent limits
                           let leftLimit = undefined;
                           let rightLimit = undefined;
 
-                          sortedRects.forEach(other => {
+                          effectiveRects.forEach(other => {
                               if (other === rect) return;
                               const otherMinX = other.x;
                               const otherMaxX = other.x + other.w;
@@ -1752,6 +2769,10 @@ export default function AdminPage() {
                      .sort((a, b) => b.y - a.y); // Y座標降順 (PDFのY軸は下から上なので、大きい方が上)
 
                  if (pageImgs.length > 0 && qs.length > 0) {
+                     if (parserProfile.imageAssignmentStrategy === 'label-only') {
+                         return;
+                     }
+
                      if (parserProfile.imageAssignmentStrategy === 'nearest-preceding-question') {
                          pageImgs.forEach(img => {
                              const precedingQuestions = qs.filter(q => q.anchorY >= img.y - 5);
@@ -1791,96 +2812,98 @@ export default function AdminPage() {
              const figureCuePattern = /(?:図|画像|写真|シェーマ|模式図|図に示|画像を示|写真を示|造影を示|先端形状)/;
              const renderedPageCache = new Map();
 
-             for (const [pageNumStr, pageQuestions] of Object.entries(questionsByPage)) {
-                 const pageNum = parseInt(pageNumStr, 10);
-                 const fallbackTargets = pageQuestions
-                     .filter(q => q.pageImages.length === 0 && figureCuePattern.test(q.question))
-                     .sort((a, b) => b.anchorY - a.anchorY);
+             if (parserProfile.imageAssignmentStrategy !== 'label-only') {
+                 for (const [pageNumStr, pageQuestions] of Object.entries(questionsByPage)) {
+                     const pageNum = parseInt(pageNumStr, 10);
+                     const fallbackTargets = pageQuestions
+                         .filter(q => q.pageImages.length === 0 && figureCuePattern.test(q.question))
+                         .sort((a, b) => b.anchorY - a.anchorY);
 
-                 if (fallbackTargets.length === 0) continue;
+                     if (fallbackTargets.length === 0) continue;
 
-                 let rendered = renderedPageCache.get(pageNum);
-                 if (!rendered) {
-                     const page = await pdf.getPage(pageNum);
-                     const scale = 1.5;
-                     const viewport = page.getViewport({ scale });
-                     const pageCanvas = document.createElement('canvas');
-                     pageCanvas.width = viewport.width;
-                     pageCanvas.height = viewport.height;
-                     const canvasCtx = pageCanvas.getContext('2d');
+                     let rendered = renderedPageCache.get(pageNum);
+                     if (!rendered) {
+                         const page = await pdf.getPage(pageNum);
+                         const scale = 1.5;
+                         const viewport = page.getViewport({ scale });
+                         const pageCanvas = document.createElement('canvas');
+                         pageCanvas.width = viewport.width;
+                         pageCanvas.height = viewport.height;
+                         const canvasCtx = pageCanvas.getContext('2d');
 
-                     await page.render({
-                         canvasContext: canvasCtx,
-                         viewport
-                     }).promise;
+                         await page.render({
+                             canvasContext: canvasCtx,
+                             viewport
+                         }).promise;
 
-                     rendered = { page, viewport, pageCanvas };
-                     renderedPageCache.set(pageNum, rendered);
-                 }
+                         rendered = { page, viewport, pageCanvas };
+                         renderedPageCache.set(pageNum, rendered);
+                     }
 
-                 const { page, viewport, pageCanvas } = rendered;
-                 const sortedPageQuestions = [...pageQuestions].sort((a, b) => b.anchorY - a.anchorY);
-                 const pageWidthPdf = page.view?.[2] || page.getViewport({ scale: 1 }).width;
-                 const scanLeftPdfX = pageWidthPdf * 0.08;
-                 const scanRightPdfX = pageWidthPdf * 0.92;
+                     const { page, viewport, pageCanvas } = rendered;
+                     const sortedPageQuestions = [...pageQuestions].sort((a, b) => b.anchorY - a.anchorY);
+                     const pageWidthPdf = page.view?.[2] || page.getViewport({ scale: 1 }).width;
+                     const scanLeftPdfX = pageWidthPdf * 0.08;
+                     const scanRightPdfX = pageWidthPdf * 0.92;
 
-                 fallbackTargets.forEach(q => {
-                     const sourceLines = q.finalUsedLines?.length ? q.finalUsedLines : q.usedLines;
-                     const allLineItems = sourceLines.flat();
-                     if (allLineItems.length === 0) return;
+                     fallbackTargets.forEach(q => {
+                         const sourceLines = q.finalUsedLines?.length ? q.finalUsedLines : q.usedLines;
+                         const allLineItems = sourceLines.flat();
+                         if (allLineItems.length === 0) return;
 
-                     const questionBottomY = Math.min(...allLineItems.map(item => item.y));
-                     const currentIndex = sortedPageQuestions.findIndex(candidate => candidate === q);
-                     const nextQuestion = currentIndex >= 0 ? sortedPageQuestions[currentIndex + 1] : null;
-                     const scanTopPdfY = questionBottomY - 6;
-                     const footerExclusionY = parserProfile.footerMinY + 28;
-                     const scanBottomPdfY = nextQuestion
-                         ? Math.max(footerExclusionY, nextQuestion.anchorY + 10)
-                         : footerExclusionY;
+                         const questionBottomY = Math.min(...allLineItems.map(item => item.y));
+                         const currentIndex = sortedPageQuestions.findIndex(candidate => candidate === q);
+                         const nextQuestion = currentIndex >= 0 ? sortedPageQuestions[currentIndex + 1] : null;
+                         const scanTopPdfY = questionBottomY - 6;
+                         const footerExclusionY = parserProfile.footerMinY + 28;
+                         const scanBottomPdfY = nextQuestion
+                             ? Math.max(footerExclusionY, nextQuestion.anchorY + 10)
+                             : footerExclusionY;
 
-                     if (scanTopPdfY <= scanBottomPdfY + 12) return;
+                         if (scanTopPdfY <= scanBottomPdfY + 12) return;
 
-                     const pointA = viewport.convertToViewportPoint(scanLeftPdfX, scanTopPdfY);
-                     const pointB = viewport.convertToViewportPoint(scanRightPdfX, scanBottomPdfY);
-                     const scanRegion = {
-                         x: Math.min(pointA[0], pointB[0]),
-                         y: Math.min(pointA[1], pointB[1]),
-                         w: Math.abs(pointB[0] - pointA[0]),
-                         h: Math.abs(pointB[1] - pointA[1])
-                     };
+                         const pointA = viewport.convertToViewportPoint(scanLeftPdfX, scanTopPdfY);
+                         const pointB = viewport.convertToViewportPoint(scanRightPdfX, scanBottomPdfY);
+                         const scanRegion = {
+                             x: Math.min(pointA[0], pointB[0]),
+                             y: Math.min(pointA[1], pointB[1]),
+                             w: Math.abs(pointB[0] - pointA[0]),
+                             h: Math.abs(pointB[1] - pointA[1])
+                         };
 
-                     const inkBounds = findInkBoundsInCanvasRegion(pageCanvas, scanRegion);
-                     if (!inkBounds) return;
+                         const inkBounds = findInkBoundsInCanvasRegion(pageCanvas, scanRegion);
+                         if (!inkBounds) return;
 
-                     const padding = 6;
-                     const cropX = Math.max(0, inkBounds.x - padding);
-                     const cropY = Math.max(0, inkBounds.y - padding);
-                     const cropW = Math.min(pageCanvas.width - cropX, inkBounds.w + padding * 2);
-                     const cropH = Math.min(pageCanvas.height - cropY, inkBounds.h + padding * 2);
+                         const padding = 6;
+                         const cropX = Math.max(0, inkBounds.x - padding);
+                         const cropY = Math.max(0, inkBounds.y - padding);
+                         const cropW = Math.min(pageCanvas.width - cropX, inkBounds.w + padding * 2);
+                         const cropH = Math.min(pageCanvas.height - cropY, inkBounds.h + padding * 2);
 
-                     if (cropW < 20 || cropH < 20) return;
+                         if (cropW < 20 || cropH < 20) return;
 
-                     const cropCanvas = document.createElement('canvas');
-                     cropCanvas.width = cropW;
-                     cropCanvas.height = cropH;
-                     const cropCtx = cropCanvas.getContext('2d');
-                     cropCtx.drawImage(pageCanvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+                         const cropCanvas = document.createElement('canvas');
+                         cropCanvas.width = cropW;
+                         cropCanvas.height = cropH;
+                         const cropCtx = cropCanvas.getContext('2d');
+                         cropCtx.drawImage(pageCanvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
 
-                     const pdfPoint1 = viewport.convertToPdfPoint(cropX, cropY);
-                     const pdfPoint2 = viewport.convertToPdfPoint(cropX + cropW, cropY + cropH);
-                     const minPdfX = Math.min(pdfPoint1[0], pdfPoint2[0]);
-                     const minPdfY = Math.min(pdfPoint1[1], pdfPoint2[1]);
+                         const pdfPoint1 = viewport.convertToPdfPoint(cropX, cropY);
+                         const pdfPoint2 = viewport.convertToPdfPoint(cropX + cropW, cropY + cropH);
+                         const minPdfX = Math.min(pdfPoint1[0], pdfPoint2[0]);
+                         const minPdfY = Math.min(pdfPoint1[1], pdfPoint2[1]);
 
-                     q.pageImages.push({
-                         path: cropCanvas.toDataURL('image/png'),
-                         x: minPdfX,
-                         y: minPdfY,
-                         legend: `図${q.pageImages.length + 1}`,
-                         detectedLegend: null,
-                         page: pageNum,
-                         matchedQNum: q.questionNumber
+                         q.pageImages.push({
+                             path: cropCanvas.toDataURL('image/png'),
+                             x: minPdfX,
+                             y: minPdfY,
+                             legend: `図${q.pageImages.length + 1}`,
+                             detectedLegend: null,
+                             page: pageNum,
+                             matchedQNum: q.questionNumber
+                         });
                      });
-                 });
+                 }
              }
 
              parsedQuestionsList.forEach(q => {
@@ -2058,6 +3081,7 @@ export default function AdminPage() {
 
 
     return (
+        <>
         <div style={{
             maxWidth: '1200px',
             margin: '0 auto',
@@ -2198,11 +3222,6 @@ export default function AdminPage() {
                                                 </label>
                                             ))}
                                         </div>
-                                        {examCategory === '3' && (
-                                            <div style={{ marginTop: '0.75rem', fontSize: '0.85rem', color: '#e53e3e', fontWeight: 'bold' }}>
-                                                ※核医学専門医試験向けの取り込みシステムは現在開発中のため、パースを実行できません。
-                                            </div>
-                                        )}
                                     </div>
 
                                     <div style={{
@@ -2569,10 +3588,25 @@ export default function AdminPage() {
                                                                 borderRadius: '0.25rem',
                                                                 fontSize: '0.75rem'
                                                             }}>
-                                                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', overflow: 'hidden' }}>
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => setPreviewImageModal({ path: img.path, legend: img.legend })}
+                                                                    style={{
+                                                                        display: 'flex',
+                                                                        alignItems: 'center',
+                                                                        gap: '0.4rem',
+                                                                        overflow: 'hidden',
+                                                                        flex: 1,
+                                                                        background: 'transparent',
+                                                                        border: 'none',
+                                                                        padding: 0,
+                                                                        textAlign: 'left',
+                                                                        cursor: 'zoom-in'
+                                                                    }}
+                                                                >
                                                                     <img src={img.path} alt={img.legend} style={{ width: '30px', height: '30px', objectFit: 'cover', borderRadius: '2px' }} />
                                                                     <span style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap', maxWidth: '160px' }}>{img.legend}</span>
-                                                                </div>
+                                                                </button>
                                                                 <button 
                                                                     onClick={() => handleRemoveImage(qIdx, imgIdx)}
                                                                     style={{
@@ -2943,5 +3977,65 @@ export default function AdminPage() {
             )}
 
         </div>
+        {previewImageModal && (
+            <div
+                onClick={() => setPreviewImageModal(null)}
+                style={{
+                    position: 'fixed',
+                    inset: 0,
+                    background: 'rgba(15, 23, 42, 0.82)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    padding: '2rem',
+                    zIndex: 2000
+                }}
+            >
+                <div
+                    onClick={(e) => e.stopPropagation()}
+                    style={{
+                        maxWidth: 'min(96vw, 1200px)',
+                        maxHeight: '90vh',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '0.75rem'
+                    }}
+                >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: '#fff', gap: '1rem' }}>
+                        <div style={{ fontWeight: 'bold', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {previewImageModal.legend || '画像プレビュー'}
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => setPreviewImageModal(null)}
+                            style={{
+                                background: 'rgba(255,255,255,0.12)',
+                                color: '#fff',
+                                border: '1px solid rgba(255,255,255,0.18)',
+                                borderRadius: '0.375rem',
+                                padding: '0.4rem 0.75rem',
+                                cursor: 'pointer',
+                                fontWeight: 'bold'
+                            }}
+                        >
+                            閉じる
+                        </button>
+                    </div>
+                    <img
+                        src={previewImageModal.path}
+                        alt={previewImageModal.legend || '拡大画像'}
+                        style={{
+                            maxWidth: '100%',
+                            maxHeight: 'calc(90vh - 3rem)',
+                            objectFit: 'contain',
+                            borderRadius: '0.5rem',
+                            background: '#fff',
+                            boxShadow: '0 12px 40px rgba(0,0,0,0.35)'
+                        }}
+                    />
+                </div>
+            </div>
+        )}
+        </>
     );
 }
