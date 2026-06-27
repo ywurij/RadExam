@@ -141,6 +141,10 @@ export const getGenres = (examId) => {
     return LOCAL_METADATA[examId]?.genres || [];
 };
 
+export const getExamName = (examId) => {
+    return LOCAL_METADATA[examId]?.name || EXAM_NAMES[examId] || examId;
+};
+
 export const getQuestionsByYear = async (examId, yearFilter) => {
     const data = await getExamData(examId);
     if (!yearFilter || yearFilter === 'all') return data;

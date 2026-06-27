@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { getGlobalQuestionId, searchQuestions } from '@/lib/data';
+import { getExamName, getGlobalQuestionId, searchQuestions } from '@/lib/data';
 import styles from './search.module.scss';
 
 const SEARCH_HISTORY_KEY = 'radexam_search_history';
@@ -25,10 +25,20 @@ export default function SearchPage() {
     const router = useRouter();
     const [query, setQuery] = useState('');
     const [results, setResults] = useState([]);
+    const [filterExam, setFilterExam] = useState('all');
     const [filterYear, setFilterYear] = useState('all');
     const [sortOrder, setSortOrder] = useState('relevance');
     const [searchHistory, setSearchHistory] = useState(loadSearchHistory);
     const [isHistoryVisible, setIsHistoryVisible] = useState(false);
+    const [hoveredQuestionId, setHoveredQuestionId] = useState(null);
+    const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
+
+    const stripHtml = (value) => String(value || '').replace(/<[^>]*>?/gm, '').trim();
+    const formatQuestionNumber = (question) => question.questionNumber || question.id;
+    const truncateText = (value, maxLength = 80) => {
+        const normalized = stripHtml(value);
+        return normalized.length > maxLength ? `${normalized.substring(0, maxLength)}...` : normalized;
+    };
 
     const persistSearchHistory = (nextHistory) => {
         setSearchHistory(nextHistory);
@@ -75,10 +85,29 @@ export default function SearchPage() {
     };
 
     // Derived Logic
-    const availableYears = [...new Set(results.map(q => q.year))].sort((a, b) => b - a);
+    const availableExams = useMemo(() => (
+        [...new Map(results.map((q) => [q.examId, { id: q.examId, name: getExamName(q.examId) }])).values()]
+            .sort((a, b) => a.name.localeCompare(b.name, 'ja'))
+    ), [results]);
 
-    const displayResults = results
-        .filter(q => filterYear === 'all' || q.year.toString() === filterYear)
+    const effectiveFilterExam = filterExam === 'all' || availableExams.some((exam) => exam.id === filterExam)
+        ? filterExam
+        : 'all';
+
+    const examFilteredResults = useMemo(() => (
+        results.filter((q) => effectiveFilterExam === 'all' || q.examId === effectiveFilterExam)
+    ), [results, effectiveFilterExam]);
+
+    const availableYears = useMemo(() => (
+        [...new Set(examFilteredResults.map((q) => q.year))].sort((a, b) => b - a)
+    ), [examFilteredResults]);
+
+    const effectiveFilterYear = filterYear === 'all' || availableYears.some((year) => year.toString() === filterYear)
+        ? filterYear
+        : 'all';
+
+    const displayResults = [...examFilteredResults]
+        .filter(q => effectiveFilterYear === 'all' || q.year.toString() === effectiveFilterYear)
         .sort((a, b) => {
             if (sortOrder === 'newest') return b.year - a.year || (parseInt(a.questionNumber || 0) - parseInt(b.questionNumber || 0));
             // ID sort: year desc, then question number asc (or just ID string asc)
@@ -86,6 +115,10 @@ export default function SearchPage() {
             // Relevance (default) - rely on original Fuse order
             return 0;
         });
+
+    const hoveredQuestion = useMemo(() => (
+        displayResults.find((q) => getGlobalQuestionId(q.examId, q.id) === hoveredQuestionId) || null
+    ), [hoveredQuestionId, displayResults]);
 
     return (
         <div className={styles.container}>
@@ -143,9 +176,26 @@ export default function SearchPage() {
                     </div>
 
                     <div className={styles.controlGroup}>
+                        <label>試験名:</label>
+                        <select
+                            value={effectiveFilterExam}
+                            onChange={(e) => {
+                                setFilterExam(e.target.value);
+                                setFilterYear('all');
+                            }}
+                            className={styles.select}
+                        >
+                            <option value="all">全て</option>
+                            {availableExams.map((exam) => (
+                                <option key={exam.id} value={exam.id}>{exam.name}</option>
+                            ))}
+                        </select>
+                    </div>
+
+                    <div className={styles.controlGroup}>
                         <label>年度:</label>
                         <select
-                            value={filterYear}
+                            value={effectiveFilterYear}
                             onChange={(e) => setFilterYear(e.target.value)}
                             className={styles.select}
                         >
@@ -158,15 +208,23 @@ export default function SearchPage() {
                 </div>
             )}
 
-            <div className={styles.results}>
+            <div
+                className={styles.results}
+                onMouseMove={(e) => setMousePos({ x: e.clientX, y: e.clientY })}
+            >
                 {displayResults.map(q => (
                     <div
                         key={getGlobalQuestionId(q.examId, q.id)}
                         className={styles.resultItem}
+                        onMouseEnter={(e) => {
+                            setHoveredQuestionId(getGlobalQuestionId(q.examId, q.id));
+                            setMousePos({ x: e.clientX, y: e.clientY });
+                        }}
+                        onMouseLeave={() => setHoveredQuestionId(null)}
                         onClick={() => router.push(`/quiz?mode=search&exam=${q.examId}&id=${getGlobalQuestionId(q.examId, q.id)}`)}
                     >
-                        <span className={styles.badge}>{q.year} - {q.genre}</span>
-                        <p className={styles.questionPreview}>{q.question.replace(/<[^>]*>?/gm, '').substring(0, 80)}...</p>
+                        <span className={styles.badge}>[{getExamName(q.examId)}-{q.year}-{formatQuestionNumber(q)}]</span>
+                        <p className={styles.questionPreview}>{truncateText(q.question)}</p>
                     </div>
                 ))}
                 {query.length > 1 && displayResults.length === 0 && (
@@ -175,6 +233,27 @@ export default function SearchPage() {
                     </div>
                 )}
             </div>
+
+            {hoveredQuestion && (
+                <div
+                    className={styles.tooltip}
+                    style={{ top: mousePos.y + 20, left: Math.min(mousePos.x, window.innerWidth - 360) }}
+                >
+                    <div className={styles.tooltipContent}>
+                        <div className={styles.tooltipBadge}>
+                            [{getExamName(hoveredQuestion.examId)}-{hoveredQuestion.year}-{formatQuestionNumber(hoveredQuestion)}]
+                        </div>
+                        <p className={styles.fullQuestion}>{stripHtml(hoveredQuestion.question)}</p>
+                        <ul className={styles.optionsList}>
+                            {Object.entries(hoveredQuestion.options || {}).map(([key, value]) => (
+                                <li key={key}>
+                                    <b>{key}</b>: {stripHtml(value)}
+                                </li>
+                            ))}
+                        </ul>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
