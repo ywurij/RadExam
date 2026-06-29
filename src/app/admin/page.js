@@ -810,7 +810,282 @@ const buildNuclearSectionImageGroups = (textItems, imageRects, parserProfile) =>
     return groups;
 };
 
-const findInkBoundsInCanvasRegion = (canvas, region, threshold = 245) => {
+const NUCLEAR_FIGURE_TOKEN_ONLY_PATTERN = /^図\s*(?:[0-9０-９]+|[A-Za-z])$/i;
+const NUCLEAR_FIGURE_WITH_CAPTION_PATTERN = /^図\s*(?:[0-9０-９]+|[A-Za-z]).*/i;
+const NUCLEAR_LETTER_CAPTION_PATTERN = /^(?:[A-Ea-e])[：:].+$/;
+const NUCLEAR_SECTION_PREFIX_PATTERN = /^(?:No\.?|NO\.?)\s*[0-9０-９]{1,3}(?:\s*[-ー−‐–―]\s*[0-9０-９A-Za-z]+)?\s*/i;
+
+const getTextItemRect = (item) => {
+    const width = Math.max(1, item.width || 0);
+    const height = Math.max(1, item.height || 12);
+    return {
+        x: item.x,
+        y: item.y,
+        w: width,
+        h: height
+    };
+};
+
+const isValidRect = (rect) => rect && Number.isFinite(rect.x) && Number.isFinite(rect.y) && rect.w > 0 && rect.h > 0;
+
+const unionRectList = (rects) => {
+    const validRects = rects.filter(isValidRect);
+    if (validRects.length === 0) return null;
+
+    const minX = Math.min(...validRects.map(rect => rect.x));
+    const minY = Math.min(...validRects.map(rect => rect.y));
+    const maxX = Math.max(...validRects.map(rect => rect.x + rect.w));
+    const maxY = Math.max(...validRects.map(rect => rect.y + rect.h));
+
+    return {
+        x: minX,
+        y: minY,
+        w: maxX - minX,
+        h: maxY - minY
+    };
+};
+
+const expandRect = (rect, paddingX = 0, paddingY = paddingX) => ({
+    x: rect.x - paddingX,
+    y: rect.y - paddingY,
+    w: rect.w + paddingX * 2,
+    h: rect.h + paddingY * 2
+});
+
+const getRectCenter = (rect) => ({
+    x: rect.x + rect.w / 2,
+    y: rect.y + rect.h / 2
+});
+
+const isNuclearFigureAnchorStart = (text) => {
+    const trimmed = String(text || '').trim();
+    if (!trimmed) return false;
+    return NUCLEAR_FIGURE_TOKEN_ONLY_PATTERN.test(trimmed)
+        || NUCLEAR_LETTER_CAPTION_PATTERN.test(trimmed);
+};
+
+const extractNuclearSectionLegend = (text) => {
+    const trimmed = String(text || '').replace(NUCLEAR_SECTION_PREFIX_PATTERN, '').trim();
+    if (!trimmed) return '';
+
+    const figureMatch = trimmed.match(/図\s*(?:[0-9０-９]+|[A-Za-z])/i);
+    if (figureMatch) {
+        return cleanLegendPrefix(figureMatch[0]);
+    }
+
+    const letterCaptionMatch = trimmed.match(/(?:[A-Ea-e])[：:].{0,20}/);
+    if (letterCaptionMatch) {
+        return cleanLegendPrefix(letterCaptionMatch[0]);
+    }
+
+    return '';
+};
+
+const buildNuclearFigureAnchors = (sectionLines) => {
+    const anchors = [];
+
+    sectionLines.forEach(line => {
+        const items = line.items || [];
+        if (items.length === 0) return;
+
+        for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
+            const item = items[itemIndex];
+            const itemText = item.text.trim();
+            if (!isNuclearFigureAnchorStart(itemText)) continue;
+
+            const anchorItems = [item];
+
+            if (!NUCLEAR_LETTER_CAPTION_PATTERN.test(itemText)) {
+                for (let nextIndex = itemIndex + 1; nextIndex < items.length; nextIndex++) {
+                    const nextItem = items[nextIndex];
+                    const nextText = nextItem.text.trim();
+                    if (!nextText) continue;
+                    if (NO_QUESTION_LABEL_PATTERN.test(nextText)) break;
+                    if (isNuclearFigureAnchorStart(nextText)) break;
+                    anchorItems.push(nextItem);
+                }
+            }
+
+            const rawText = buildInlineTextFromItems(anchorItems) || anchorItems.map(entry => entry.text).join(' ').trim();
+            anchors.push({
+                y: line.y,
+                x: item.x,
+                rawText,
+                text: cleanLegendPrefix(stripLeadingQuestionLabel(rawText)),
+                items: anchorItems
+            });
+        }
+    });
+
+    return anchors
+        .filter(anchor => anchor.text || anchor.rawText)
+        .filter((anchor, index, array) => {
+            const normalized = `${Math.round(anchor.x)}_${Math.round(anchor.y)}_${anchor.rawText}`;
+            return array.findIndex(candidate => `${Math.round(candidate.x)}_${Math.round(candidate.y)}_${candidate.rawText}` === normalized) === index;
+        })
+        .sort((a, b) => {
+            if (Math.abs(b.y - a.y) > 10) return b.y - a.y;
+            return a.x - b.x;
+        });
+};
+
+const buildNuclearAnchorSubsections = (anchors, sectionTopY, sectionBottomY) => {
+    const rows = [];
+
+    anchors.forEach(anchor => {
+        const existingRow = rows.find(row => Math.abs(row.y - anchor.y) <= 10);
+        if (existingRow) {
+            existingRow.anchors.push(anchor);
+        } else {
+            rows.push({ y: anchor.y, anchors: [anchor] });
+        }
+    });
+
+    rows.sort((a, b) => b.y - a.y);
+
+    const subsections = [];
+    rows.forEach((row, rowIndex) => {
+        const nextRow = rows[rowIndex + 1] || null;
+        row.anchors.sort((a, b) => a.x - b.x);
+
+        row.anchors.forEach((anchor, anchorIndex) => {
+            const leftX = anchorIndex === 0
+                ? -Infinity
+                : (row.anchors[anchorIndex - 1].x + anchor.x) / 2;
+            const rightX = anchorIndex === row.anchors.length - 1
+                ? Infinity
+                : (anchor.x + row.anchors[anchorIndex + 1].x) / 2;
+
+            subsections.push({
+                anchor,
+                topY: anchor.y + 24,
+                bottomY: nextRow ? nextRow.y + 16 : sectionBottomY,
+                leftX,
+                rightX
+            });
+        });
+    });
+
+    return subsections.filter(subsection => subsection.topY > subsection.bottomY);
+};
+
+const buildNuclearSemanticGroups = (textItems, imageRects, parserProfile) => {
+    const lines = buildTextLineEntriesFromItems(textItems);
+    const sectionStarts = lines
+        .map(line => ({
+            ...line,
+            questionNumber: extractQuestionNumberFromText(line.text, [parserProfile.imageLabelPattern]),
+            sectionLegend: extractNuclearSectionLegend(buildInlineTextFromItems(line.items || []) || line.text || '')
+        }))
+        .filter(line => line.questionNumber !== null)
+        .sort((a, b) => b.y - a.y);
+
+    if (sectionStarts.length === 0 || imageRects.length === 0) {
+        return [];
+    }
+
+    const groups = [];
+
+    sectionStarts.forEach((sectionStart, index) => {
+        const nextSection = sectionStarts[index + 1] || null;
+        const sectionTopY = sectionStart.y + 20;
+        const sectionBottomY = nextSection ? nextSection.y + 18 : parserProfile.footerMinY;
+
+        const sectionRects = imageRects.filter(rect => {
+            const center = getRectCenter(rect);
+            return center.y < sectionTopY && center.y > sectionBottomY;
+        });
+
+        if (sectionRects.length === 0) {
+            return;
+        }
+
+        const sectionTextItems = textItems.filter(item => {
+            const centerY = item.y + item.height / 2;
+            const trimmed = item.text.trim();
+            if (FOOTER_PAGE_PATTERN.test(trimmed)) return false;
+            return centerY < sectionTopY && centerY > sectionBottomY;
+        });
+
+        const sectionLines = lines.filter(line => line.y <= sectionTopY && line.y > sectionBottomY);
+        const figureAnchors = buildNuclearFigureAnchors(sectionLines);
+
+        let sectionGroups = [];
+        if (figureAnchors.length >= 2 && sectionRects.length >= 2) {
+            const subsections = buildNuclearAnchorSubsections(figureAnchors, sectionTopY, sectionBottomY);
+            const assignedRectIndexes = new Set();
+            const candidateGroups = subsections.map(subsection => {
+                const rects = sectionRects.filter((rect, rectIndex) => {
+                    const center = getRectCenter(rect);
+                    const isInside = center.y < subsection.topY
+                        && center.y > subsection.bottomY
+                        && center.x >= subsection.leftX
+                        && center.x < subsection.rightX;
+                    if (isInside) {
+                        assignedRectIndexes.add(rectIndex);
+                    }
+                    return isInside;
+                });
+
+                if (rects.length === 0) return null;
+
+                const items = sectionTextItems.filter(item => {
+                    const centerX = item.x + item.width / 2;
+                    const centerY = item.y + item.height / 2;
+                    return centerY < subsection.topY
+                        && centerY > subsection.bottomY
+                        && centerX >= subsection.leftX
+                        && centerX < subsection.rightX;
+                });
+
+                return {
+                    matchedQNum: sectionStart.questionNumber,
+                    legend: cleanLegendPrefix(subsection.anchor.text || subsection.anchor.rawText || sectionStart.sectionLegend || ''),
+                    imageRects: rects,
+                    textItems: items
+                };
+            }).filter(Boolean);
+
+            if (candidateGroups.length >= 2 && assignedRectIndexes.size === sectionRects.length) {
+                sectionGroups = candidateGroups;
+            }
+        }
+
+        if (sectionGroups.length === 0) {
+            sectionGroups = [{
+                matchedQNum: sectionStart.questionNumber,
+                legend: cleanLegendPrefix(sectionStart.sectionLegend || ''),
+                imageRects: sectionRects,
+                textItems: sectionTextItems
+            }];
+        }
+
+        sectionGroups.forEach(group => {
+            const contentBounds = unionRectList([
+                ...group.imageRects,
+                ...group.textItems.map(item => getTextItemRect(item))
+            ]);
+
+            if (!contentBounds) return;
+
+            groups.push({
+                ...group,
+                bounds: expandRect(contentBounds, 8, 8)
+            });
+        });
+    });
+
+    return groups;
+};
+
+const findInkBoundsInCanvasRegion = (canvas, region, options = {}) => {
+    const {
+        threshold = 245,
+        strategy = 'largest',
+        minDarkPixelCount = 80,
+        minComponentWidth = 20,
+        minComponentHeight = 20
+    } = options;
     const x = Math.max(0, Math.floor(region.x));
     const y = Math.max(0, Math.floor(region.y));
     const w = Math.max(1, Math.min(canvas.width - x, Math.ceil(region.w)));
@@ -839,6 +1114,7 @@ const findInkBoundsInCanvasRegion = (canvas, region, threshold = 245) => {
 
     const visited = new Uint8Array(w * h);
     let bestComponent = null;
+    const significantComponents = [];
     const neighbors = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 
     for (let py = 0; py < h; py++) {
@@ -879,32 +1155,61 @@ const findInkBoundsInCanvasRegion = (canvas, region, threshold = 245) => {
 
             const componentWidth = componentMaxX - componentMinX + 1;
             const componentHeight = componentMaxY - componentMinY + 1;
-            if (componentDarkPixelCount < 80 || componentWidth < 20 || componentHeight < 20) {
+            if (
+                componentDarkPixelCount < minDarkPixelCount
+                || componentWidth < minComponentWidth
+                || componentHeight < minComponentHeight
+            ) {
                 continue;
             }
 
+            const component = {
+                minX: componentMinX,
+                minY: componentMinY,
+                maxX: componentMaxX,
+                maxY: componentMaxY,
+                darkPixelCount: componentDarkPixelCount
+            };
+
+            significantComponents.push(component);
+
             if (!bestComponent || componentDarkPixelCount > bestComponent.darkPixelCount) {
-                bestComponent = {
-                    minX: componentMinX,
-                    minY: componentMinY,
-                    maxX: componentMaxX,
-                    maxY: componentMaxY,
-                    darkPixelCount: componentDarkPixelCount
-                };
+                bestComponent = component;
             }
         }
     }
 
-    if (!bestComponent) {
+    if (significantComponents.length === 0) {
         return null;
     }
 
+    const targetComponent = strategy === 'union'
+        ? significantComponents.reduce((acc, component) => {
+            if (!acc) {
+                return {
+                    minX: component.minX,
+                    minY: component.minY,
+                    maxX: component.maxX,
+                    maxY: component.maxY,
+                    darkPixelCount: component.darkPixelCount
+                };
+            }
+
+            acc.minX = Math.min(acc.minX, component.minX);
+            acc.minY = Math.min(acc.minY, component.minY);
+            acc.maxX = Math.max(acc.maxX, component.maxX);
+            acc.maxY = Math.max(acc.maxY, component.maxY);
+            acc.darkPixelCount += component.darkPixelCount;
+            return acc;
+        }, null)
+        : bestComponent;
+
     const bounds = {
-        x: x + bestComponent.minX,
-        y: y + bestComponent.minY,
-        w: bestComponent.maxX - bestComponent.minX + 1,
-        h: bestComponent.maxY - bestComponent.minY + 1,
-        darkPixelCount: bestComponent.darkPixelCount
+        x: x + targetComponent.minX,
+        y: y + targetComponent.minY,
+        w: targetComponent.maxX - targetComponent.minX + 1,
+        h: targetComponent.maxY - targetComponent.minY + 1,
+        darkPixelCount: targetComponent.darkPixelCount
     };
 
     if (bounds.w < 20 || bounds.h < 20) {
@@ -1575,6 +1880,7 @@ export default function AdminPage() {
                     images: Array.isArray(q.images) ? q.images.map((img, imgIdx) => ({
                         path: img.path || 'image_placeholder',
                         legend: img.legend || `図${imgIdx + 1}`,
+                        storageKey: img.storageKey || '',
                     })) : [],
                 };
             });
@@ -2272,9 +2578,9 @@ export default function AdminPage() {
                  const pageImages = [];
                  const mergedImageRects = mergeNestedImageRects(rawImageRects);
 
-                  if (mergedImageRects.length > 0) {
+                 if (mergedImageRects.length > 0) {
                       if (parserProfile.name === 'nuclear') {
-                          const nuclearGroups = buildNuclearSectionImageGroups(textItems, mergedImageRects, parserProfile);
+                          const nuclearGroups = buildNuclearSemanticGroups(filteredTextItems, mergedImageRects, parserProfile);
                           if (nuclearGroups.length > 0) {
                               const scale = 1.5;
                               const viewport = page.getViewport({ scale });
@@ -2289,110 +2595,27 @@ export default function AdminPage() {
                               }).promise;
 
                               nuclearGroups.forEach((group, idx) => {
-                                  const rect = group.rect;
-                                  let origMinX = rect.x;
-                                  let origMinY = rect.y;
-                                  let origMaxX = rect.x + rect.w;
-                                  let origMaxY = rect.y + rect.h;
-                                  const headerItems = group.headerItems || [];
-                                  const headerItemKeys = buildTextItemKeySet(headerItems);
-                                  const currentGroupContainedTextKeys = new Set();
-
-                                  if (headerItems.length > 0) {
-                                      const headerLowerEdgeY = Math.min(...headerItems.map(item => item.y - Math.max(2, (item.height || 0) * 0.8)));
-                                      if (headerLowerEdgeY > origMinY + 20) {
-                                          origMaxY = Math.min(origMaxY, headerLowerEdgeY - 4);
-                                      }
-                                  }
-
-                                  textItems.forEach(item => {
-                                      const txCenter = item.x + item.width / 2;
-                                      const tyCenter = item.y + item.height / 2;
-                                      if (txCenter >= origMinX && txCenter <= origMaxX && tyCenter >= origMinY && tyCenter <= origMaxY) {
-                                          currentGroupContainedTextKeys.add(buildTextItemKey(item));
-                                      }
-                                  });
-
-                                  const nuclearAvailableTextItems = filteredTextItems.filter(item => {
-                                      const key = buildTextItemKey(item);
-                                      return !currentGroupContainedTextKeys.has(key) && !headerItemKeys.has(key);
-                                  });
-
-                                  const legendProbe = extractLegendForImage(
-                                      rect,
-                                      nuclearAvailableTextItems,
-                                      {},
-                                      textItems,
-                                      parserProfile
-                                  );
-                                  const baseLegend = cleanLegendPrefix(group.legend || '');
-                                  const extractedLegend = cleanLegendPrefix(legendProbe.legendStr || '');
-                                  let finalLegend = baseLegend || extractedLegend;
-                                  if (parserProfile.name === 'nuclear' && !baseLegend) {
-                                      finalLegend = '';
-                                  }
-
-                                  let includedSideLegend = false;
-                                  const detectedSideItems = legendProbe.usedItems?.filter(item => {
-                                      const centerX = item.x + item.width / 2;
-                                      return (centerX < rect.x || centerX > (rect.x + rect.w)) && !headerItemKeys.has(buildTextItemKey(item));
-                                  }) || [];
-                                  const sideItems = [
-                                      ...detectedSideItems,
-                                      ...collectNuclearSideLabelItems(rect, filteredTextItems, headerItemKeys)
-                                  ].filter((item, itemIndex, array) => (
-                                      array.findIndex(candidate => buildTextItemKey(candidate) === buildTextItemKey(item)) === itemIndex
-                                  ));
-
-                                  if (sideItems.length > 0) {
-                                      const labelMinX = Math.min(...sideItems.map(item => item.x));
-                                      const labelMinY = Math.min(...sideItems.map(item => item.y));
-                                      const labelMaxX = Math.max(...sideItems.map(item => item.x + item.width));
-                                      const labelMaxY = Math.max(...sideItems.map(item => item.y + item.height));
-                                      origMinX = Math.min(origMinX, labelMinX - 6);
-                                      origMinY = Math.min(origMinY, labelMinY - 6);
-                                      origMaxX = Math.max(origMaxX, labelMaxX + 6);
-                                      origMaxY = Math.max(origMaxY, labelMaxY + 6);
-                                      includedSideLegend = true;
-                                  }
-
-                                  if (includedSideLegend && !baseLegend) {
-                                      finalLegend = '';
-                                  }
-
-                                  const rawPt1 = viewport.convertToViewportPoint(origMinX, origMinY);
-                                  const rawPt2 = viewport.convertToViewportPoint(origMaxX, origMaxY);
+                                  const currentGroupContainedTextKeys = buildTextItemKeySet(group.textItems || []);
+                                  const bounds = group.bounds;
+                                  const rawPt1 = viewport.convertToViewportPoint(bounds.x, bounds.y);
+                                  const rawPt2 = viewport.convertToViewportPoint(bounds.x + bounds.w, bounds.y + bounds.h);
                                   const rawRegion = {
                                       x: Math.min(rawPt1[0], rawPt2[0]),
                                       y: Math.min(rawPt1[1], rawPt2[1]),
                                       w: Math.abs(rawPt1[0] - rawPt2[0]),
                                       h: Math.abs(rawPt1[1] - rawPt2[1])
                                   };
-                                  const inkBounds = findInkBoundsInCanvasRegion(pageCanvas, rawRegion);
+                                  const inkBounds = findInkBoundsInCanvasRegion(pageCanvas, rawRegion, {
+                                      strategy: 'union',
+                                      minDarkPixelCount: 24,
+                                      minComponentWidth: 8,
+                                      minComponentHeight: 8
+                                  });
 
                                   let cropX = inkBounds ? inkBounds.x : rawRegion.x;
                                   let cropY = inkBounds ? inkBounds.y : rawRegion.y;
                                   let cropW = inkBounds ? inkBounds.w : rawRegion.w;
                                   let cropH = inkBounds ? inkBounds.h : rawRegion.h;
-
-                                  if (includedSideLegend && sideItems.length > 0) {
-                                      const sideMinX = Math.min(...sideItems.map(item => item.x));
-                                      const sideMinY = Math.min(...sideItems.map(item => item.y));
-                                      const sideMaxX = Math.max(...sideItems.map(item => item.x + item.width));
-                                      const sideMaxY = Math.max(...sideItems.map(item => item.y + item.height));
-                                      const sidePt1 = viewport.convertToViewportPoint(sideMinX - 6, sideMinY - 6);
-                                      const sidePt2 = viewport.convertToViewportPoint(sideMaxX + 6, sideMaxY + 6);
-                                      const sideX = Math.min(sidePt1[0], sidePt2[0]);
-                                      const sideY = Math.min(sidePt1[1], sidePt2[1]);
-                                      const sideW = Math.abs(sidePt1[0] - sidePt2[0]);
-                                      const sideH = Math.abs(sidePt1[1] - sidePt2[1]);
-                                      const cropMaxX = Math.max(cropX + cropW, sideX + sideW);
-                                      const cropMaxY = Math.max(cropY + cropH, sideY + sideH);
-                                      cropX = Math.min(cropX, sideX);
-                                      cropY = Math.min(cropY, sideY);
-                                      cropW = cropMaxX - cropX;
-                                      cropH = cropMaxY - cropY;
-                                  }
 
                                   const safeX = Math.max(0, Math.min(cropX, pageCanvas.width));
                                   const safeY = Math.max(0, Math.min(cropY, pageCanvas.height));
@@ -2407,18 +2630,19 @@ export default function AdminPage() {
 
                                   const cropPdfPoint1 = viewport.convertToPdfPoint(safeX, safeY);
                                   const cropPdfPoint2 = viewport.convertToPdfPoint(safeX + safeW, safeY + safeH);
-                                  origMinX = Math.min(cropPdfPoint1[0], cropPdfPoint2[0]);
-                                  origMinY = Math.min(cropPdfPoint1[1], cropPdfPoint2[1]);
+                                  const origMinX = Math.min(cropPdfPoint1[0], cropPdfPoint2[0]);
+                                  const origMinY = Math.min(cropPdfPoint1[1], cropPdfPoint2[1]);
                                   currentGroupContainedTextKeys.forEach(key => imageContainedTextKeys.add(key));
 
                                   imageCounter++;
+                                  const detectedLegend = cleanLegendPrefix(group.legend || '');
 
                                   const imgObj = {
                                       path: cropCanvas.toDataURL('image/png'),
                                       x: origMinX,
                                       y: origMinY,
-                                      legend: finalLegend || `図${idx + 1}`,
-                                      detectedLegend: finalLegend || null,
+                                      legend: detectedLegend || `図${idx + 1}`,
+                                      detectedLegend: detectedLegend || null,
                                       page: pageNum,
                                       matchedQNum: group.matchedQNum
                                   };

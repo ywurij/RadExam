@@ -16,6 +16,45 @@ const progressStore = localforage.createInstance({
     description: 'ユーザーの演習進捗、お気に入り、ノートを保存するストア'
 });
 
+// 画像データを問題JSONから分離して保存するためのストア
+const imageStore = localforage.createInstance({
+    name: 'RadTestLocal',
+    storeName: 'exam_images',
+    description: 'ローカル試験画像を保存するストア'
+});
+
+const LOCAL_IMAGE_PREFIX = 'local-image://';
+
+const isDataUrl = (value) => typeof value === 'string' && value.startsWith('data:');
+const isLocalImageRef = (value) => typeof value === 'string' && value.startsWith(LOCAL_IMAGE_PREFIX);
+const buildLocalImageRef = (key) => `${LOCAL_IMAGE_PREFIX}${key}`;
+const extractLocalImageKey = (value) => isLocalImageRef(value) ? value.slice(LOCAL_IMAGE_PREFIX.length) : '';
+const buildExamImageKeyPrefix = (examId) => `${examId}::`;
+const buildExamImageKey = (examId, questionId, imageIndex) => {
+    const suffix = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+    return `${buildExamImageKeyPrefix(examId)}${questionId}::${imageIndex}::${suffix}`;
+};
+
+const dataUrlToBlob = async (dataUrl) => {
+    const response = await fetch(dataUrl);
+    return response.blob();
+};
+
+const blobToDataUrl = (blob) => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+        if (typeof reader.result === 'string') {
+            resolve(reader.result);
+            return;
+        }
+        reject(new Error('Failed to convert blob to data URL.'));
+    };
+    reader.onerror = () => reject(reader.error || new Error('Failed to read blob.'));
+    reader.readAsDataURL(blob);
+});
+
 const normalizeQuestionId = (question) => {
     if (!question || typeof question !== 'object') return question;
 
@@ -36,6 +75,115 @@ const normalizeQuestionId = (question) => {
         ...question,
         id: `${year}${String(questionNumber).padStart(3, '0')}`,
         questionNumber,
+    };
+};
+
+const normalizeStoredImage = async (examId, questionId, image, imageIndex) => {
+    const source = image && typeof image === 'object' ? image : {};
+    const legend = source.legend || `図${imageIndex + 1}`;
+    const storageKey = source.storageKey || extractLocalImageKey(source.path);
+    const originalPath = typeof source.path === 'string' ? source.path : '';
+
+    if (storageKey) {
+        return {
+            path: buildLocalImageRef(storageKey),
+            legend,
+            storageKey
+        };
+    }
+
+    if (isDataUrl(originalPath)) {
+        const imageKey = buildExamImageKey(examId, questionId, imageIndex);
+        const blob = await dataUrlToBlob(originalPath);
+        await imageStore.setItem(imageKey, blob);
+        return {
+            path: buildLocalImageRef(imageKey),
+            legend,
+            storageKey: imageKey
+        };
+    }
+
+    return {
+        path: originalPath,
+        legend,
+        storageKey: ''
+    };
+};
+
+const prepareQuestionsForStorage = async (examId, questions) => {
+    const usedImageKeys = new Set();
+
+    const preparedQuestions = await Promise.all(
+        questions.map(async (question) => {
+            const normalizedQuestion = normalizeQuestionId(question);
+            const images = Array.isArray(normalizedQuestion.images) ? normalizedQuestion.images : [];
+
+            const preparedImages = await Promise.all(
+                images.map((image, imageIndex) => normalizeStoredImage(examId, normalizedQuestion.id, image, imageIndex))
+            );
+
+            preparedImages.forEach((image) => {
+                if (image.storageKey) {
+                    usedImageKeys.add(image.storageKey);
+                }
+            });
+
+            return {
+                ...normalizedQuestion,
+                images: preparedImages.map(({ path, legend }) => ({ path, legend }))
+            };
+        })
+    );
+
+    return { preparedQuestions, usedImageKeys };
+};
+
+const cleanupOrphanExamImages = async (examId, usedImageKeys) => {
+    const prefix = buildExamImageKeyPrefix(examId);
+    const deleteTargets = [];
+
+    await imageStore.iterate((_value, key) => {
+        if (key.startsWith(prefix) && !usedImageKeys.has(key)) {
+            deleteTargets.push(key);
+        }
+    });
+
+    await Promise.all(deleteTargets.map((key) => imageStore.removeItem(key)));
+};
+
+const hydrateQuestionImages = async (question) => {
+    const images = Array.isArray(question.images) ? question.images : [];
+
+    const hydratedImages = await Promise.all(images.map(async (image, imageIndex) => {
+        const source = image && typeof image === 'object' ? image : {};
+        const storageKey = extractLocalImageKey(source.path);
+        if (!storageKey) {
+            return {
+                path: source.path || '',
+                legend: source.legend || `図${imageIndex + 1}`
+            };
+        }
+
+        const blob = await imageStore.getItem(storageKey);
+        if (!blob) {
+            return {
+                path: '',
+                legend: source.legend || `図${imageIndex + 1}`,
+                storageKey
+            };
+        }
+
+        const path = await blobToDataUrl(blob);
+        return {
+            path,
+            legend: source.legend || `図${imageIndex + 1}`,
+            storageKey
+        };
+    }));
+
+    return {
+        ...question,
+        images: hydratedImages
     };
 };
 
@@ -76,13 +224,16 @@ export const saveLocalExam = async (examId, name, questions, isMerge = false) =>
     }
     
     // ユニークな年度とジャンルを抽出してメタデータとして保存
-    const years = [...new Set(finalQuestions.map(q => q.year).filter(Boolean))].map(Number).sort((a, b) => b - a);
-    const genres = [...new Set(finalQuestions.map(q => q.genre).filter(Boolean))].sort();
+    const { preparedQuestions, usedImageKeys } = await prepareQuestionsForStorage(examId, finalQuestions);
+    await cleanupOrphanExamImages(examId, usedImageKeys);
+
+    const years = [...new Set(preparedQuestions.map(q => q.year).filter(Boolean))].map(Number).sort((a, b) => b - a);
+    const genres = [...new Set(preparedQuestions.map(q => q.genre).filter(Boolean))].sort();
     
     const examData = {
         id: examId,
         name: finalName,
-        questions: finalQuestions,
+        questions: preparedQuestions,
         years: years,
         genres: genres,
         updatedAt: new Date().toISOString()
@@ -99,7 +250,8 @@ export const saveLocalExam = async (examId, name, questions, isMerge = false) =>
 export const getLocalExam = async (examId) => {
     try {
         const examData = await examsStore.getItem(examId);
-        return examData ? examData.questions : [];
+        if (!examData || !Array.isArray(examData.questions)) return [];
+        return Promise.all(examData.questions.map((question) => hydrateQuestionImages(question)));
     } catch (e) {
         console.error(`Failed to get local exam: ${examId}`, e);
         return [];
@@ -134,6 +286,7 @@ export const getAllLocalExams = async () => {
  */
 export const deleteLocalExam = async (examId) => {
     await examsStore.removeItem(examId);
+    await cleanupOrphanExamImages(examId, new Set());
 };
 
 /**
@@ -170,12 +323,15 @@ export const updateLocalQuestion = async (examId, questionId, updates) => {
         throw new Error('編集対象の問題が見つかりません。');
     }
 
-    const years = [...new Set(nextQuestions.map(q => q.year).filter(Boolean))].map(Number).sort((a, b) => b - a);
-    const genres = [...new Set(nextQuestions.map(q => q.genre).filter(Boolean))].sort();
+    const { preparedQuestions, usedImageKeys } = await prepareQuestionsForStorage(examId, nextQuestions);
+    await cleanupOrphanExamImages(examId, usedImageKeys);
+
+    const years = [...new Set(preparedQuestions.map(q => q.year).filter(Boolean))].map(Number).sort((a, b) => b - a);
+    const genres = [...new Set(preparedQuestions.map(q => q.genre).filter(Boolean))].sort();
 
     await examsStore.setItem(examId, {
         ...examData,
-        questions: nextQuestions,
+        questions: preparedQuestions,
         years,
         genres,
         updatedAt: new Date().toISOString(),
@@ -232,10 +388,11 @@ export const getLocalProgress = async () => {
  */
 export const exportAllLocalData = async () => {
     const backup = {
-        version: 1,
+        version: 2,
         timestamp: Date.now(),
         exams: {},
-        progress: {}
+        progress: {},
+        images: {}
     };
 
     // 試験データをエクスポート用に追加
@@ -246,6 +403,10 @@ export const exportAllLocalData = async () => {
     // 進捗データをエクスポート用に追加
     await progressStore.iterate((value, key) => {
         backup.progress[key] = value;
+    });
+
+    await imageStore.iterate((value, key) => {
+        backup.images[key] = value;
     });
 
     return backup;
@@ -265,7 +426,7 @@ export const importLocalData = async (jsonData, strategy = 'overwrite') => {
         throw new Error("Unsupported import strategy");
     }
 
-    const { exams, progress } = jsonData;
+    const { exams, progress, images } = jsonData;
 
     // 1. 試験データのインポート
     if (exams && typeof exams === 'object') {
@@ -280,6 +441,14 @@ export const importLocalData = async (jsonData, strategy = 'overwrite') => {
         await progressStore.clear();
         for (const [key, value] of Object.entries(progress)) {
             await progressStore.setItem(key, value);
+        }
+    }
+
+    // 3. 画像データのインポート
+    await imageStore.clear();
+    if (images && typeof images === 'object') {
+        for (const [key, value] of Object.entries(images)) {
+            await imageStore.setItem(key, value);
         }
     }
 };
