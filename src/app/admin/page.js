@@ -107,6 +107,23 @@ const convertLegendMarkupToUnicode = (text) => String(text || '')
             .join('')
     ));
 
+const normalizeFullWidthDigits = (text) => String(text || '')
+    .replace(/[０-９]/g, char => String.fromCharCode(char.charCodeAt(0) - 0xFEE0));
+
+const extractFigureNumber = (text) => {
+    const normalized = normalizeFullWidthDigits(convertLegendMarkupToUnicode(text)).trim();
+    const match = normalized.match(/(?:図|画像|Fig\.?)\s*([0-9]+)/i);
+    if (!match) return null;
+
+    const parsed = Number.parseInt(match[1], 10);
+    return Number.isFinite(parsed) ? parsed : null;
+};
+
+const buildFigureLegend = (text) => {
+    const figureNumber = extractFigureNumber(text);
+    return figureNumber !== null ? `図${figureNumber}` : '';
+};
+
 const cleanLegendPrefix = (text) => {
     if (!text) return '';
     let cleaned = convertLegendMarkupToUnicode(text).trim();
@@ -136,6 +153,115 @@ const cleanLegendPrefix = (text) => {
     }
     
     return cleaned;
+};
+
+const compareImportedImages = (a, b) => {
+    if (a.page !== b.page) return a.page - b.page;
+
+    const aFigureNumber = Number.isFinite(a.figureNumber) ? a.figureNumber : null;
+    const bFigureNumber = Number.isFinite(b.figureNumber) ? b.figureNumber : null;
+    if (
+        a.matchedQNum !== null
+        && b.matchedQNum !== null
+        && a.matchedQNum === b.matchedQNum
+        && aFigureNumber !== null
+        && bFigureNumber !== null
+        && aFigureNumber !== bFigureNumber
+    ) {
+        return aFigureNumber - bFigureNumber;
+    }
+
+    if (Math.abs(a.y - b.y) > 20) return b.y - a.y;
+    return a.x - b.x;
+};
+
+const resolveImportedImageLegend = (img, idx) => {
+    const explicitFigureLegend = img.figureLabel || buildFigureLegend(img.detectedLegendRaw || img.detectedLegend || '');
+    if (explicitFigureLegend) {
+        return explicitFigureLegend;
+    }
+
+    const cleaned = cleanLegendPrefix(img.detectedLegend);
+    return cleaned || `図${idx + 1}`;
+};
+
+const buildViewportFigureAnchors = (anchors, viewport) => (
+    anchors
+        .filter(anchor => Number.isFinite(anchor.figureNumber))
+        .map(anchor => {
+            const [vx, vy] = viewport.convertToViewportPoint(anchor.x, anchor.y);
+            return {
+                ...anchor,
+                viewportX: vx,
+                viewportY: vy
+            };
+        })
+);
+
+const assignFigureAnchorsToNuclearImages = (images, anchors, viewport) => {
+    const viewportAnchors = buildViewportFigureAnchors(anchors, viewport);
+    const imagesWithBounds = images.filter(image => image.viewportBounds);
+
+    if (viewportAnchors.length === 0 || imagesWithBounds.length === 0) {
+        return;
+    }
+
+    const candidatePairs = [];
+    imagesWithBounds.forEach((image, imageIndex) => {
+        const bounds = image.viewportBounds;
+        const cropLeft = bounds.x;
+        const cropRight = bounds.x + bounds.w;
+        const cropTop = bounds.y;
+        const cropCenterX = bounds.x + (bounds.w / 2);
+
+        viewportAnchors.forEach((anchor, anchorIndex) => {
+            const horizontalSlack = 48;
+            const horizontalOverflow = anchor.viewportX < cropLeft - horizontalSlack
+                ? (cropLeft - horizontalSlack) - anchor.viewportX
+                : anchor.viewportX > cropRight + horizontalSlack
+                    ? anchor.viewportX - (cropRight + horizontalSlack)
+                    : 0;
+            const verticalGap = cropTop - anchor.viewportY;
+            const maxGap = Math.max(bounds.h * 0.35, 140);
+            const minGap = -36;
+
+            if (verticalGap < minGap || verticalGap > maxGap) {
+                return;
+            }
+
+            const score = (horizontalOverflow * 8)
+                + Math.abs(cropCenterX - anchor.viewportX)
+                + Math.abs(verticalGap - 18);
+
+            candidatePairs.push({
+                imageIndex,
+                anchorIndex,
+                score
+            });
+        });
+    });
+
+    candidatePairs.sort((a, b) => a.score - b.score);
+
+    const usedImages = new Set();
+    const usedAnchors = new Set();
+
+    candidatePairs.forEach(({ imageIndex, anchorIndex }) => {
+        if (usedImages.has(imageIndex) || usedAnchors.has(anchorIndex)) {
+            return;
+        }
+
+        const image = imagesWithBounds[imageIndex];
+        const anchor = viewportAnchors[anchorIndex];
+
+        image.figureNumber = anchor.figureNumber;
+        image.figureLabel = anchor.figureLabel || buildFigureLegend(anchor.rawText || '');
+        image.detectedLegendRaw = anchor.rawText || image.detectedLegendRaw || '';
+        image.detectedLegend = cleanLegendPrefix(anchor.rawText || image.detectedLegend || '');
+
+        usedImages.add(imageIndex);
+        usedAnchors.add(anchorIndex);
+    });
 };
 
 const buildQuestionId = (year, questionNumber) => {
@@ -912,6 +1038,8 @@ const buildNuclearFigureAnchors = (sectionLines) => {
                 x: item.x,
                 rawText,
                 text: cleanLegendPrefix(stripLeadingQuestionLabel(rawText)),
+                figureNumber: extractFigureNumber(rawText),
+                figureLabel: buildFigureLegend(rawText),
                 items: anchorItems
             });
         }
@@ -1041,6 +1169,9 @@ const buildNuclearSemanticGroups = (textItems, imageRects, parserProfile) => {
                 return {
                     matchedQNum: sectionStart.questionNumber,
                     legend: cleanLegendPrefix(subsection.anchor.text || subsection.anchor.rawText || sectionStart.sectionLegend || ''),
+                    legendRaw: subsection.anchor.rawText || '',
+                    figureNumber: subsection.anchor.figureNumber,
+                    figureLabel: subsection.anchor.figureLabel || '',
                     imageRects: rects,
                     textItems: items
                 };
@@ -1055,6 +1186,9 @@ const buildNuclearSemanticGroups = (textItems, imageRects, parserProfile) => {
             sectionGroups = [{
                 matchedQNum: sectionStart.questionNumber,
                 legend: cleanLegendPrefix(sectionStart.sectionLegend || ''),
+                legendRaw: sectionStart.sectionLegend || '',
+                figureNumber: extractFigureNumber(sectionStart.sectionLegend || ''),
+                figureLabel: buildFigureLegend(sectionStart.sectionLegend || ''),
                 imageRects: sectionRects,
                 textItems: sectionTextItems
             }];
@@ -2584,6 +2718,7 @@ export default function AdminPage() {
                           if (nuclearGroups.length > 0) {
                               const scale = 1.5;
                               const viewport = page.getViewport({ scale });
+                              const pageFigureAnchors = buildNuclearFigureAnchors(buildTextLineEntriesFromItems(filteredTextItems));
                               const pageCanvas = document.createElement('canvas');
                               pageCanvas.width = viewport.width;
                               pageCanvas.height = viewport.height;
@@ -2641,8 +2776,12 @@ export default function AdminPage() {
                                       path: cropCanvas.toDataURL('image/png'),
                                       x: origMinX,
                                       y: origMinY,
-                                      legend: detectedLegend || `図${idx + 1}`,
+                                      legend: group.figureLabel || detectedLegend || `図${idx + 1}`,
                                       detectedLegend: detectedLegend || null,
+                                      detectedLegendRaw: group.legendRaw || '',
+                                      figureNumber: group.figureNumber ?? extractFigureNumber(group.legendRaw || group.legend || ''),
+                                      figureLabel: group.figureLabel || buildFigureLegend(group.legendRaw || group.legend || ''),
+                                      viewportBounds: { x: safeX, y: safeY, w: safeW, h: safeH },
                                       page: pageNum,
                                       matchedQNum: group.matchedQNum
                                   };
@@ -2651,14 +2790,12 @@ export default function AdminPage() {
                                   allExtractedImagesPool.push(imgObj);
                               });
 
-                              pageImages.sort((a, b) => {
-                                  if (Math.abs(a.y - b.y) > 20) return b.y - a.y;
-                                  return a.x - b.x;
-                              });
+                              assignFigureAnchorsToNuclearImages(pageImages, pageFigureAnchors, viewport);
+                              pageImages.sort(compareImportedImages);
 
                               pageImages.forEach((img, idx) => {
-                                  const cleaned = cleanLegendPrefix(img.detectedLegend);
-                                  img.legend = cleaned || `図${idx + 1}`;
+                                  img.legend = resolveImportedImageLegend(img, idx);
+                                  delete img.viewportBounds;
                               });
 
                               continue;
@@ -3042,14 +3179,9 @@ export default function AdminPage() {
 
              // 各問題ごとに紐づいた画像を位置順（ページ順 -> Y座標降順 -> X座標昇順）にソートし、legendを再設定
              parsedQuestionsList.forEach(q => {
-                 q.pageImages.sort((a, b) => {
-                     if (a.page !== b.page) return a.page - b.page;
-                     if (Math.abs(a.y - b.y) > 20) return b.y - a.y;
-                     return a.x - b.x;
-                 });
+                 q.pageImages.sort(compareImportedImages);
                  q.pageImages.forEach((img, idx) => {
-                     const cleaned = cleanLegendPrefix(img.detectedLegend);
-                     img.legend = cleaned || `図${idx + 1}`;
+                     img.legend = resolveImportedImageLegend(img, idx);
                  });
              });
 
@@ -3152,14 +3284,9 @@ export default function AdminPage() {
              }
 
              parsedQuestionsList.forEach(q => {
-                 q.pageImages.sort((a, b) => {
-                     if (a.page !== b.page) return a.page - b.page;
-                     if (Math.abs(a.y - b.y) > 20) return b.y - a.y;
-                     return a.x - b.x;
-                 });
+                 q.pageImages.sort(compareImportedImages);
                  q.pageImages.forEach((img, idx) => {
-                     const cleaned = cleanLegendPrefix(img.detectedLegend);
-                     img.legend = cleaned || `図${idx + 1}`;
+                     img.legend = resolveImportedImageLegend(img, idx);
                  });
              });
 
