@@ -6,6 +6,11 @@ import { useRouter } from 'next/navigation';
 
 import { initializeLocalExams, getExamTypes } from '@/lib/data';
 import { saveLocalExam, deleteLocalExam, exportAllLocalData, importLocalData, getLocalExam } from '@/lib/localDb';
+import {
+    buildNuclearVlmPageRequest,
+    convertNuclearVlmResultToGroups,
+    requestNuclearVlmGrouping
+} from '@/lib/nuclearVlmClient';
 
 const FOOTER_DASH_CLASS = 'ー―－\\-−–—';
 const FOOTER_PAGE_PATTERN = new RegExp(`^[${FOOTER_DASH_CLASS}]?\\s*[0-9０-９]+\\s*[${FOOTER_DASH_CLASS}]?$`);
@@ -2704,6 +2709,12 @@ export default function AdminPage() {
     const [editingExamName, setEditingExamName] = useState('');
     const [editingQuestions, setEditingQuestions] = useState([]);
     const [editingYearFilter, setEditingYearFilter] = useState('all');
+    const [nuclearVlmEnabled, setNuclearVlmEnabled] = useState(true);
+    const [nuclearVlmStatus, setNuclearVlmStatus] = useState({
+        state: 'unchecked',
+        model: 'qwen3-vl:2b-instruct',
+        message: '未確認'
+    });
 
     const loadLocalExams = async () => {
         await initializeLocalExams();
@@ -2727,6 +2738,29 @@ export default function AdminPage() {
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, [previewImageModal]);
+
+    const checkNuclearVlmStatus = async () => {
+        setNuclearVlmStatus(prev => ({ ...prev, state: 'checking', message: 'Ollamaを確認中...' }));
+        try {
+            const response = await fetch('/api/nuclear-vlm', { cache: 'no-store' });
+            const payload = await response.json();
+            const nextStatus = {
+                state: payload.available ? 'ready' : 'unavailable',
+                model: payload.model || 'qwen3-vl:2b-instruct',
+                message: payload.message || 'VLMの状態を確認できませんでした。'
+            };
+            setNuclearVlmStatus(nextStatus);
+            return payload;
+        } catch (error) {
+            const nextStatus = {
+                state: 'unavailable',
+                model: 'qwen3-vl:2b-instruct',
+                message: `VLM接続確認に失敗しました: ${error.message}`
+            };
+            setNuclearVlmStatus(nextStatus);
+            return { available: false, ...nextStatus };
+        }
+    };
 
     const handleImageChange = (questionIndex, file) => {
         if (!file) return;
@@ -2961,6 +2995,17 @@ export default function AdminPage() {
 
         try {
             const parserProfile = getPdfParserProfile(examCategory);
+            let nuclearVlmReady = false;
+            let nuclearVlmPageCount = 0;
+            let nuclearVlmFailureCount = 0;
+            let nuclearRuleFallbackPageCount = 0;
+
+            if (parserProfile.name === 'nuclear' && nuclearVlmEnabled) {
+                setPdfProgress({ current: 0, total: 0, status: 'ローカルVLMの接続とモデルを確認中...' });
+                const status = await checkNuclearVlmStatus();
+                nuclearVlmReady = Boolean(status.available);
+            }
+
             // pdfjs-dist の ESM モジュールを動的インポート
             const pdfjsLib = await import('pdfjs-dist/build/pdf.mjs');
             pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
@@ -3437,7 +3482,6 @@ export default function AdminPage() {
                  const opList = await page.getOperatorList();
                  const { fnArray, argsArray } = opList;
                  const rawImageRects = [];
-                 const seenImgKeys = new Set();
                  
                  let transformStack = [];
                  let currentTransform = [1, 0, 0, 1, 0, 0];
@@ -3464,12 +3508,6 @@ export default function AdminPage() {
                              b1 * e2 + d1 * f2 + f1
                          ];
                      } else if (fn === pdfjsLib.OPS.paintImageXObject || fn === pdfjsLib.OPS.paintInlineImageXObject) {
-                         const imgKey = args ? args[0] : null;
-                         if (imgKey) {
-                             if (seenImgKeys.has(imgKey)) continue;
-                             seenImgKeys.add(imgKey);
-                         }
-                         
                          const imgX = currentTransform[4];
                          const imgY = currentTransform[5];
                          const imgW = Math.abs(currentTransform[0]);
@@ -3503,13 +3541,60 @@ export default function AdminPage() {
                           viewport
                       }).promise;
 
-                      const nuclearGroups = buildNuclearVisualGroups(
-                          filteredTextItems,
-                          parserProfile,
-                          pageCanvas,
-                          viewport,
-                          mergedImageRects
-                      );
+                      let nuclearGroups = [];
+
+                      if (nuclearVlmReady && mergedImageRects.length > 0) {
+                          const questionOwners = buildNuclearQuestionOwners(filteredTextItems, parserProfile);
+                          const pageRequest = buildNuclearVlmPageRequest({
+                              pageNumber: pageNum,
+                              pageCanvas,
+                              viewport,
+                              imageRects: mergedImageRects,
+                              textLines: buildTextLineEntriesFromItems(filteredTextItems),
+                              questionOwners
+                          });
+
+                          if (pageRequest) {
+                              setPdfProgress(prev => ({
+                                  ...prev,
+                                  status: `ページ ${pageNum}/${totalPages} をQwen3-VLでグルーピング中...`
+                              }));
+                              try {
+                                  const vlmPayload = await requestNuclearVlmGrouping(pageRequest);
+                                  nuclearGroups = convertNuclearVlmResultToGroups(pageRequest, vlmPayload);
+                                  if (nuclearGroups.length > 0) {
+                                      nuclearVlmPageCount += 1;
+                                  } else {
+                                      nuclearVlmFailureCount += 1;
+                                      console.warn(`Nuclear VLM result rejected on page ${pageNum}: validation failed`);
+                                  }
+                              } catch (vlmError) {
+                                  nuclearVlmFailureCount += 1;
+                                  console.warn(`Nuclear VLM grouping failed on page ${pageNum}:`, vlmError);
+                                  if (nuclearVlmFailureCount >= 2) {
+                                      nuclearVlmReady = false;
+                                      setNuclearVlmStatus(prev => ({
+                                          ...prev,
+                                          state: 'degraded',
+                                          message: 'VLM判定が連続して失敗したため、残りは従来方式で処理します。'
+                                      }));
+                                  }
+                              }
+                          }
+                      }
+
+                      if (nuclearGroups.length === 0) {
+                          if (mergedImageRects.length > 0) {
+                              nuclearRuleFallbackPageCount += 1;
+                          }
+                          nuclearGroups = buildNuclearVisualGroups(
+                              filteredTextItems,
+                              parserProfile,
+                              pageCanvas,
+                              viewport,
+                              mergedImageRects
+                          );
+                      }
 
                       if (nuclearGroups.length > 0) {
                           nuclearGroups.forEach((group, idx) => {
@@ -4111,7 +4196,10 @@ export default function AdminPage() {
             setParsedQuestions(finalQuestions);
             setParsedYearInput(String(detectedYear));
             setImageMap(finalImageMap);
-            setSuccessMsg(`PDFの自動パースが完了しました！合計 ${finalQuestions.length} 問の問題と画像を登録しました。内容を確認して保存してください。`);
+            const vlmSummary = parserProfile.name === 'nuclear' && nuclearVlmEnabled
+                ? ` VLM採用: ${nuclearVlmPageCount}ページ、従来方式: ${nuclearRuleFallbackPageCount}ページ、VLM応答不採用: ${nuclearVlmFailureCount}ページ。`
+                : '';
+            setSuccessMsg(`PDFの自動パースが完了しました！合計 ${finalQuestions.length} 問の問題と画像を登録しました。${vlmSummary}内容を確認して保存してください。`);
         } catch (err) {
             console.error('PDF Import Error:', err);
             setErrorMsg(`PDFのインポートに失敗しました: ${err.message}`);
@@ -4381,6 +4469,54 @@ export default function AdminPage() {
                                             ))}
                                         </div>
                                     </div>
+
+                                    {examCategory === '3' && (
+                                        <div style={{
+                                            marginBottom: '1.5rem',
+                                            padding: '1rem',
+                                            background: '#fffaf0',
+                                            borderRadius: '0.375rem',
+                                            border: '1px solid #fbd38d'
+                                        }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
+                                                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: '700', color: '#7b341e', cursor: 'pointer' }}>
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={nuclearVlmEnabled}
+                                                        onChange={(event) => setNuclearVlmEnabled(event.target.checked)}
+                                                    />
+                                                    Qwen3-VLによる図グルーピングを使用
+                                                </label>
+                                                <button
+                                                    type="button"
+                                                    onClick={checkNuclearVlmStatus}
+                                                    disabled={nuclearVlmStatus.state === 'checking'}
+                                                    style={{
+                                                        padding: '0.45rem 0.8rem',
+                                                        border: '1px solid #dd6b20',
+                                                        borderRadius: '0.375rem',
+                                                        color: '#9c4221',
+                                                        background: '#fff',
+                                                        fontWeight: '700',
+                                                        cursor: nuclearVlmStatus.state === 'checking' ? 'wait' : 'pointer'
+                                                    }}
+                                                >
+                                                    接続確認
+                                                </button>
+                                            </div>
+                                            <p style={{
+                                                margin: '0.65rem 0 0',
+                                                color: nuclearVlmStatus.state === 'ready' ? '#276749' : '#744210',
+                                                fontSize: '0.82rem',
+                                                lineHeight: 1.5
+                                            }}>
+                                                モデル: {nuclearVlmStatus.model} / {nuclearVlmStatus.message}
+                                            </p>
+                                            <p style={{ margin: '0.35rem 0 0', color: '#975a16', fontSize: '0.78rem', lineHeight: 1.5 }}>
+                                                VLMが利用できない場合や応答検証に失敗したページは、従来のアルゴリズムで処理します。
+                                            </p>
+                                        </div>
+                                    )}
 
                                     <div style={{
                                         border: '2px dashed #cbd5e0',

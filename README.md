@@ -52,6 +52,24 @@ npm run dev
 ```
 ブラウザで `http://localhost:3000` にアクセスします。
 
+### 3. 核医学PDFのローカルVLMグルーピング（任意）
+
+核医学専門医試験PDFの図抽出では、ローカルのQwen3-VLを使って画像・レジェンド・設問アンカーの関係を判定できます。VLMが利用できない場合は従来のルールベース処理へ自動的に切り替わります。
+
+```bash
+# Ollamaをインストール後、使用する量子化モデルを取得
+ollama pull qwen3-vl:2b-instruct
+```
+
+Ollamaの標準接続先は `http://127.0.0.1:11434`、標準モデルは `qwen3-vl:2b-instruct` です。変更する場合は次の環境変数を設定します。
+
+```bash
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+NUCLEAR_VLM_MODEL=qwen3-vl:2b-instruct
+```
+
+管理画面で「核医学専門医試験」を選択し、「接続確認」でモデルの準備状態を確認できます。
+
 ---
 
 ## デプロイ (Vercel)
