@@ -1,6 +1,8 @@
 import {
     assignRectToQuestionAnchor,
+    buildNuclearStructuralGroups,
     getRectDistance,
+    getNuclearTextQuestionAnchorId,
     mergeNuclearImageFragments,
     resolveNuclearDisplayLegend
 } from './nuclearFigureGeometry.mjs';
@@ -8,6 +10,7 @@ import {
 const MIN_GROUP_CONFIDENCE = 0.45;
 const MAX_TEXT_OBJECTS = 120;
 const MAX_OBJECTS = 180;
+const MAX_VLM_OVERLAY_EDGE = 1024;
 
 const getItemKey = (item) => [
     Math.round((item.x || 0) * 10),
@@ -109,12 +112,13 @@ const normalizeViewportRect = (rect, canvas) => ([
 
 const drawObjectOverlay = (pageCanvas, objects) => {
     const overlayCanvas = document.createElement('canvas');
-    overlayCanvas.width = pageCanvas.width;
-    overlayCanvas.height = pageCanvas.height;
+    const scale = Math.min(1, MAX_VLM_OVERLAY_EDGE / Math.max(pageCanvas.width, pageCanvas.height));
+    overlayCanvas.width = Math.max(1, Math.round(pageCanvas.width * scale));
+    overlayCanvas.height = Math.max(1, Math.round(pageCanvas.height * scale));
     const context = overlayCanvas.getContext('2d');
-    context.drawImage(pageCanvas, 0, 0);
-    context.lineWidth = Math.max(2, Math.round(pageCanvas.width / 600));
-    context.font = `bold ${Math.max(14, Math.round(pageCanvas.width / 65))}px sans-serif`;
+    context.drawImage(pageCanvas, 0, 0, overlayCanvas.width, overlayCanvas.height);
+    context.lineWidth = Math.max(2, Math.round(overlayCanvas.width / 600));
+    context.font = `bold ${Math.max(14, Math.round(overlayCanvas.width / 65))}px sans-serif`;
     context.textBaseline = 'top';
 
     const colors = {
@@ -125,13 +129,18 @@ const drawObjectOverlay = (pageCanvas, objects) => {
 
     objects.forEach(object => {
         const color = colors[object.type];
-        const rect = object.viewportRect;
+        const rect = {
+            x: object.viewportRect.x * scale,
+            y: object.viewportRect.y * scale,
+            w: object.viewportRect.w * scale,
+            h: object.viewportRect.h * scale
+        };
         context.strokeStyle = color;
         context.setLineDash(object.type === 'text' ? [5, 3] : []);
         context.strokeRect(rect.x, rect.y, rect.w, rect.h);
 
         const labelWidth = context.measureText(object.id).width + 8;
-        const labelHeight = Math.max(18, Math.round(pageCanvas.width / 55));
+        const labelHeight = Math.max(18, Math.round(overlayCanvas.width / 55));
         const labelY = Math.max(0, rect.y - labelHeight);
         context.fillStyle = color;
         context.fillRect(rect.x, labelY, labelWidth, labelHeight);
@@ -140,7 +149,7 @@ const drawObjectOverlay = (pageCanvas, objects) => {
     });
     context.setLineDash([]);
 
-    return overlayCanvas.toDataURL('image/jpeg', 0.9);
+    return overlayCanvas.toDataURL('image/jpeg', 0.82);
 };
 
 export const buildNuclearVlmPageRequest = ({
@@ -236,17 +245,29 @@ export const buildNuclearVlmPageRequest = ({
             sourceById.set(id, { ...object, rect, items: line.items || [] });
         });
 
+    const structuralGrouping = buildNuclearStructuralGroups(objects, pageCanvas.height);
     const publicObjects = objects.map(({ viewportRect: _viewportRect, ...object }) => object);
     return {
         pageNumber,
         pageCanvasHeight: pageCanvas.height,
-        imageDataUrl: drawObjectOverlay(pageCanvas, objects),
+        imageDataUrl: structuralGrouping.complete ? '' : drawObjectOverlay(pageCanvas, objects),
         objects: publicObjects,
-        sourceById
+        sourceById,
+        structuralGroups: structuralGrouping.groups,
+        structuralGroupingComplete: structuralGrouping.complete
     };
 };
 
 export const requestNuclearVlmGrouping = async (pageRequest) => {
+    if (pageRequest.structuralGroupingComplete) {
+        return {
+            model: 'pdf-structural-anchors',
+            elapsedMs: 0,
+            deterministic: true,
+            result: { groups: pageRequest.structuralGroups }
+        };
+    }
+
     const response = await fetch('/api/nuclear-vlm', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -334,30 +355,6 @@ const getCaptionBelowScore = (textRect, imageRects) => {
     return bestScore;
 };
 
-const getTextQuestionAnchorId = (source, visualAnchors, pageHeight) => {
-    const textRect = source.viewportRect;
-    const textCenterY = textRect.y + textRect.h / 2;
-    const sameRowAnchor = visualAnchors
-        .filter(anchor => {
-            const anchorRect = anchor.viewportRect;
-            const anchorCenterY = anchorRect.y + anchorRect.h / 2;
-            const tolerance = Math.max(18, textRect.h, anchorRect.h);
-            return Math.abs(textCenterY - anchorCenterY) <= tolerance
-                && textRect.x >= anchorRect.x + anchorRect.w - 8;
-        })
-        .sort((first, second) => {
-            const firstGap = Math.abs(textRect.x - (first.viewportRect.x + first.viewportRect.w));
-            const secondGap = Math.abs(textRect.x - (second.viewportRect.x + second.viewportRect.w));
-            return firstGap - secondGap;
-        })[0];
-
-    return sameRowAnchor?.id || assignRectToQuestionAnchor(
-        textRect,
-        visualAnchors,
-        pageHeight
-    ).defaultAnchor?.id;
-};
-
 const attachLegendSources = (groupRecords, pageRequest) => {
     const visualAnchors = pageRequest.objects
         .filter(object => object.type === 'question_anchor')
@@ -385,7 +382,7 @@ const attachLegendSources = (groupRecords, pageRequest) => {
     ));
     const recordsWithFigureCaption = new Set();
     figureSources.forEach(source => {
-        const textAnchorId = getTextQuestionAnchorId(
+        const textAnchorId = getNuclearTextQuestionAnchorId(
             source,
             visualAnchors,
             pageRequest.pageCanvasHeight
@@ -414,7 +411,7 @@ const attachLegendSources = (groupRecords, pageRequest) => {
 
     textSources.forEach(source => {
         if (assignedTextIds.has(source.id)) return;
-        const textAnchorId = getTextQuestionAnchorId(
+        const textAnchorId = getNuclearTextQuestionAnchorId(
             source,
             visualAnchors,
             pageRequest.pageCanvasHeight
@@ -442,6 +439,34 @@ const attachLegendSources = (groupRecords, pageRequest) => {
     });
 };
 
+const applyStructuralGrouping = (groupRecords, pageRequest) => {
+    const structuralGroups = Array.isArray(pageRequest.structuralGroups)
+        ? pageRequest.structuralGroups
+        : [];
+    if (structuralGroups.length === 0) return groupRecords;
+
+    const structurallyAssignedIds = new Set(structuralGroups.flatMap(group => group.imageIds || []));
+    const remainingRecords = groupRecords
+        .map(record => ({
+            ...record,
+            imageSources: record.imageSources.filter(source => !structurallyAssignedIds.has(source.id))
+        }))
+        .filter(record => record.imageSources.length > 0);
+    const structuralRecords = structuralGroups.map(group => ({
+        groupId: group.groupId,
+        questionAnchorId: group.questionAnchorId,
+        imageSources: (group.imageIds || [])
+            .map(id => pageRequest.sourceById.get(id))
+            .filter(Boolean),
+        requestedLegendIds: Array.isArray(group.legendIds) ? group.legendIds : [],
+        confidence: 1,
+        usedVlm: false,
+        isStructural: true
+    })).filter(record => record.imageSources.length > 0);
+
+    return [...remainingRecords, ...structuralRecords];
+};
+
 export const convertNuclearVlmResultToGroups = (pageRequest, payload) => {
     const expectedImageIds = pageRequest.objects
         .filter(object => object.type === 'image')
@@ -450,8 +475,6 @@ export const convertNuclearVlmResultToGroups = (pageRequest, payload) => {
     const rawGroups = Array.isArray(payload?.result?.groups) ? payload.result.groups : [];
     const assignedImageIds = new Set();
     const groupRecords = [];
-    let vlmGroupCount = 0;
-    let fallbackGroupCount = 0;
 
     rawGroups.forEach(group => {
         const imageIds = (group?.imageIds || []).filter(id => (
@@ -465,7 +488,6 @@ export const convertNuclearVlmResultToGroups = (pageRequest, payload) => {
                 const imageSource = pageRequest.sourceById.get(imageId);
                 if (!imageSource) return;
                 assignedImageIds.add(imageId);
-                fallbackGroupCount += 1;
                 groupRecords.push({
                     groupId: `fallback-${imageId}`,
                     questionAnchorId: imageSource.defaultQuestionAnchorId,
@@ -482,14 +504,14 @@ export const convertNuclearVlmResultToGroups = (pageRequest, payload) => {
         const anchorSource = pageRequest.sourceById.get(group.questionAnchorId);
         if (!anchorSource?.owner || imageSources.length !== imageIds.length) return;
         imageIds.forEach(id => assignedImageIds.add(id));
-        vlmGroupCount += 1;
         groupRecords.push({
             groupId: group.groupId,
             questionAnchorId: group.questionAnchorId,
             imageSources,
             requestedLegendIds: Array.isArray(group.legendIds) ? group.legendIds : [],
             confidence: group.confidence,
-            usedVlm: true
+            usedVlm: !payload?.deterministic,
+            isStructural: Boolean(payload?.deterministic)
         });
     });
 
@@ -497,7 +519,6 @@ export const convertNuclearVlmResultToGroups = (pageRequest, payload) => {
         if (assignedImageIds.has(imageId)) return;
         const imageSource = pageRequest.sourceById.get(imageId);
         if (!imageSource) return;
-        fallbackGroupCount += 1;
         groupRecords.push({
             groupId: `fallback-${imageId}`,
             questionAnchorId: imageSource.defaultQuestionAnchorId,
@@ -508,9 +529,10 @@ export const convertNuclearVlmResultToGroups = (pageRequest, payload) => {
         });
     });
 
-    attachLegendSources(groupRecords, pageRequest);
+    const finalGroupRecords = applyStructuralGrouping(groupRecords, pageRequest);
+    attachLegendSources(finalGroupRecords, pageRequest);
 
-    const groups = groupRecords.map(record => {
+    const groups = finalGroupRecords.map(record => {
         const anchorSource = pageRequest.sourceById.get(record.questionAnchorId);
         if (!anchorSource?.owner) return null;
         const imageRects = record.imageSources.map(source => source.rect);
@@ -523,10 +545,12 @@ export const convertNuclearVlmResultToGroups = (pageRequest, payload) => {
         const legendRaw = legendSources.map(source => source.text).filter(Boolean).join(' ').trim();
         const displayLegendResolution = resolveNuclearDisplayLegend(legendSources);
         const displayLegend = displayLegendResolution.legend;
-        const keepContextInFigure = displayLegendResolution.sources.length === 0 && legendSources.length > 1;
+        const displayLegendSourceIds = new Set(displayLegendResolution.sources.map(source => source.id));
+        const contextualLegendSources = legendSources.filter(source => !displayLegendSourceIds.has(source.id));
+        const keepContextInFigure = contextualLegendSources.length > 0;
         const bounds = unionRects([
             ...imageRects,
-            ...(keepContextInFigure ? legendSources.map(source => source.rect) : [])
+            ...contextualLegendSources.map(source => source.rect)
         ]);
         if (!bounds) return null;
 
@@ -549,5 +573,11 @@ export const convertNuclearVlmResultToGroups = (pageRequest, payload) => {
         };
     }).filter(Boolean);
 
-    return { groups, vlmGroupCount, fallbackGroupCount };
+    return {
+        groups,
+        vlmGroupCount: finalGroupRecords.filter(record => record.usedVlm).length,
+        fallbackGroupCount: finalGroupRecords.filter(record => !record.usedVlm && !record.isStructural).length,
+        structuralGroupCount: finalGroupRecords.filter(record => record.isStructural).length,
+        structuralGroupingComplete: Boolean(pageRequest.structuralGroupingComplete)
+    };
 };

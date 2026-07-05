@@ -127,6 +127,159 @@ export const assignRectToQuestionAnchor = (viewportRect, visualAnchors, pageHeig
     return { defaultAnchor, candidateAnchorIds };
 };
 
+const STRUCTURAL_FIGURE_PATTERN = /^(?:図|画像|Fig\.?)\s*(?:[0-9０-９]+|[A-Za-z])(?:\s|$|[.:：．])/i;
+const SUBSECTION_ANCHOR_PATTERN = /^(?:No\.?|NO\.?)\s*[0-9０-９]{1,3}\s*[-ー−‐–―]\s*[0-9０-９A-Za-z]+/i;
+
+export const getNuclearTextQuestionAnchorId = (source, visualAnchors, pageHeight) => {
+    const textRect = source?.viewportRect;
+    if (!textRect) return null;
+
+    const textCenterY = textRect.y + textRect.h / 2;
+    const sameRowAnchor = visualAnchors
+        .filter(anchor => {
+            const anchorRect = anchor.viewportRect;
+            const anchorCenterY = anchorRect.y + anchorRect.h / 2;
+            const tolerance = Math.max(18, textRect.h, anchorRect.h);
+            return Math.abs(textCenterY - anchorCenterY) <= tolerance
+                && textRect.x >= anchorRect.x + anchorRect.w - 8;
+        })
+        .sort((first, second) => {
+            const firstGap = Math.abs(textRect.x - (first.viewportRect.x + first.viewportRect.w));
+            const secondGap = Math.abs(textRect.x - (second.viewportRect.x + second.viewportRect.w));
+            return firstGap - secondGap;
+        })[0];
+
+    return sameRowAnchor?.id || assignRectToQuestionAnchor(
+        textRect,
+        visualAnchors,
+        pageHeight
+    ).defaultAnchor?.id || null;
+};
+
+const buildStructuralFigureRows = sources => {
+    const rows = [];
+
+    [...sources]
+        .sort((first, second) => (
+            Math.abs(first.viewportRect.y - second.viewportRect.y) > 14
+                ? first.viewportRect.y - second.viewportRect.y
+                : first.viewportRect.x - second.viewportRect.x
+        ))
+        .forEach(source => {
+            const centerY = source.viewportRect.y + source.viewportRect.h / 2;
+            const row = rows.find(candidate => Math.abs(candidate.centerY - centerY) <= 14);
+            if (row) {
+                row.sources.push(source);
+                row.centerY = row.sources.reduce((sum, item) => (
+                    sum + item.viewportRect.y + item.viewportRect.h / 2
+                ), 0) / row.sources.length;
+                return;
+            }
+            rows.push({ centerY, sources: [source] });
+        });
+
+    return rows
+        .sort((first, second) => first.centerY - second.centerY)
+        .map(row => ({
+            ...row,
+            sources: row.sources.sort((first, second) => first.viewportRect.x - second.viewportRect.x)
+        }));
+};
+
+const assignImagesToFigureRows = (imageSources, figureSources) => {
+    const rows = buildStructuralFigureRows(figureSources);
+    const groups = new Map(figureSources.map(source => [source.id, []]));
+
+    for (const imageSource of imageSources) {
+        const imageRect = imageSource.viewportRect;
+        const centerX = imageRect.x + imageRect.w / 2;
+        const centerY = imageRect.y + imageRect.h / 2;
+        let rowIndex = -1;
+
+        rows.forEach((row, index) => {
+            if (centerY >= row.centerY - 12) rowIndex = index;
+        });
+        if (rowIndex < 0) return null;
+
+        const row = rows[rowIndex];
+        const nextRow = rows[rowIndex + 1];
+        if (nextRow && centerY >= nextRow.centerY - 12) return null;
+
+        const selectedSource = row.sources.reduce((best, source) => {
+            const sourceCenterX = source.viewportRect.x + source.viewportRect.w / 2;
+            const distance = Math.abs(centerX - sourceCenterX);
+            return !best || distance < best.distance ? { source, distance } : best;
+        }, null)?.source;
+        if (!selectedSource) return null;
+        groups.get(selectedSource.id)?.push(imageSource);
+    }
+
+    const populatedGroups = figureSources
+        .map(source => ({ source, images: groups.get(source.id) || [] }))
+        .filter(group => group.images.length > 0);
+    return populatedGroups.length > 0 ? populatedGroups : null;
+};
+
+// Strong PDF anchors are more reliable than VLM proximity for composite figures.
+// Only complete figure bands are emitted; ambiguous images remain available to VLM.
+export const buildNuclearStructuralGroups = (objects = [], pageHeight = 0) => {
+    const visualAnchors = objects
+        .filter(object => object.type === 'question_anchor' && object.viewportRect)
+        .sort((first, second) => first.viewportRect.y - second.viewportRect.y);
+    const imageSources = objects.filter(object => object.type === 'image' && object.viewportRect);
+    const figureSources = objects.filter(object => (
+        object.type === 'text'
+        && object.viewportRect
+        && STRUCTURAL_FIGURE_PATTERN.test(String(object.text || '').trim())
+    ));
+    const groups = [];
+    const assignedImageIds = new Set();
+
+    visualAnchors.forEach(anchor => {
+        const ownedImages = imageSources.filter(image => image.defaultQuestionAnchorId === anchor.id);
+        if (ownedImages.length === 0) return;
+
+        const ownedFigureSources = figureSources.filter(source => (
+            getNuclearTextQuestionAnchorId(source, visualAnchors, pageHeight) === anchor.id
+        ));
+        const figureBands = ownedFigureSources.length > 0
+            ? assignImagesToFigureRows(ownedImages, ownedFigureSources)
+            : null;
+
+        if (figureBands && figureBands.flatMap(group => group.images).length === ownedImages.length) {
+            figureBands.forEach((band, index) => {
+                band.images.forEach(image => assignedImageIds.add(image.id));
+                groups.push({
+                    groupId: `structural-${anchor.id}-figure-${index + 1}`,
+                    questionAnchorId: anchor.id,
+                    imageIds: band.images.map(image => image.id),
+                    legendIds: [band.source.id],
+                    mergeReason: band.images.length > 1 ? 'labeled_composite' : 'single_image',
+                    confidence: 1
+                });
+            });
+            return;
+        }
+
+        if (!SUBSECTION_ANCHOR_PATTERN.test(String(anchor.text || '').trim())) return;
+        ownedImages.forEach(image => assignedImageIds.add(image.id));
+        groups.push({
+            groupId: `structural-${anchor.id}-subsection`,
+            questionAnchorId: anchor.id,
+            imageIds: ownedImages.map(image => image.id),
+            legendIds: [],
+            mergeReason: ownedImages.length > 1 ? 'labeled_composite' : 'single_image',
+            confidence: 1
+        });
+    });
+
+    return {
+        groups,
+        complete: imageSources.length > 0 && assignedImageIds.size === imageSources.length,
+        assignedImageIds: [...assignedImageIds]
+    };
+};
+
 const normalizeCaptionText = text => String(text || '')
     .replace(/^[\s\[\]［］【】]*(?:No\.?|NO\.?)\s*[0-9０-９]{1,3}(?:\s*[-ー−‐–―]\s*[0-9０-９A-Za-z]+)?\s*/i, '')
     .replace(/^(?:図|画像|Fig\.?)\s*[0-9０-９]+[\s.:：．]*\s*/i, '')

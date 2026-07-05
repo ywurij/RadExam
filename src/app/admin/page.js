@@ -2917,6 +2917,7 @@ export default function AdminPage() {
             let nuclearVlmConsecutiveFailureCount = 0;
             let nuclearVlmPartialPageCount = 0;
             let nuclearRuleFallbackPageCount = 0;
+            let nuclearStructuralPageCount = 0;
 
             if (parserProfile.name === 'nuclear' && nuclearVlmEnabled) {
                 setPdfProgress({ current: 0, total: 0, status: 'ローカルVLMの接続とモデルを確認中...' });
@@ -3466,7 +3467,7 @@ export default function AdminPage() {
                           viewport.width / viewport.scale
                       );
 
-                      if (nuclearVlmReady && nuclearImageRects.length > 0) {
+                      if (nuclearImageRects.length > 0) {
                           const questionOwners = buildNuclearQuestionOwners(filteredTextItems, parserProfile);
                           const pageRequest = buildNuclearVlmPageRequest({
                               pageNumber: pageNum,
@@ -3477,10 +3478,12 @@ export default function AdminPage() {
                               questionOwners
                           });
 
-                          if (pageRequest) {
+                          if (pageRequest && (pageRequest.structuralGroupingComplete || nuclearVlmReady)) {
                               setPdfProgress(prev => ({
                                   ...prev,
-                                  status: `ページ ${pageNum}/${totalPages} をQwen3-VLでグルーピング中...`
+                                  status: pageRequest.structuralGroupingComplete
+                                      ? `ページ ${pageNum}/${totalPages} をPDF構造アンカーでグルーピング中...`
+                                      : `ページ ${pageNum}/${totalPages} をQwen3-VLでグルーピング中...`
                               }));
                               try {
                                   const vlmPayload = await requestNuclearVlmGrouping(pageRequest);
@@ -3490,6 +3493,9 @@ export default function AdminPage() {
                                   if (conversion.vlmGroupCount > 0) {
                                       nuclearVlmPageCount += 1;
                                   }
+                                  if (conversion.structuralGroupCount > 0) {
+                                      nuclearStructuralPageCount += 1;
+                                  }
                                   if (conversion.fallbackGroupCount > 0) {
                                       pageUsedRuleFallback = true;
                                       nuclearRuleFallbackPageCount += 1;
@@ -3497,7 +3503,7 @@ export default function AdminPage() {
                                           nuclearVlmPartialPageCount += 1;
                                       }
                                   }
-                                  if (conversion.vlmGroupCount === 0) {
+                                  if (conversion.vlmGroupCount === 0 && conversion.structuralGroupCount === 0) {
                                       nuclearVlmFailureCount += 1;
                                       console.warn(`Nuclear VLM result used only algorithmic groups on page ${pageNum}`);
                                   }
@@ -4158,7 +4164,7 @@ export default function AdminPage() {
             setParsedYearInput(String(detectedYear));
             setImageMap(finalImageMap);
             const vlmSummary = parserProfile.name === 'nuclear' && nuclearVlmEnabled
-                ? ` VLM採用: ${nuclearVlmPageCount}ページ（部分採用: ${nuclearVlmPartialPageCount}ページ）、従来方式併用: ${nuclearRuleFallbackPageCount}ページ、VLM応答不採用: ${nuclearVlmFailureCount}ページ。`
+                ? ` 構造アンカー採用: ${nuclearStructuralPageCount}ページ、VLM採用: ${nuclearVlmPageCount}ページ（部分採用: ${nuclearVlmPartialPageCount}ページ）、従来方式併用: ${nuclearRuleFallbackPageCount}ページ、VLM応答不採用: ${nuclearVlmFailureCount}ページ。`
                 : '';
             setSuccessMsg(`PDFの自動パースが完了しました！合計 ${finalQuestions.length} 問の問題と画像を登録しました。${vlmSummary}内容を確認して保存してください。`);
         } catch (err) {

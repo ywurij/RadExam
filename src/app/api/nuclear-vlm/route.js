@@ -394,6 +394,8 @@ Tasks:
 Grouping rules:
 - Do not group by distance alone. Use the visible layout, frames, alignment, labels, and whitespace.
 - Default to one registered figure per I* object. Merge multiple I* objects only when there is positive visual evidence that they are fragments of one figure, such as a shared outer frame, shared legend, internal panel labels, dividers, overlap, or a continuous composition.
+- No.XX-Y defines a strong subsection. When that subsection has no internal 図N anchors, multiple I* objects inside it may form one labeled composite.
+- 図N or 図A defines a strong figure band. Multiple I* objects between that label and the next figure label belong to that labeled composite unless another explicit label separates them.
 - A group represents one registered figure, not one question. A question with four independent I* objects should produce four groups with the same questionAnchorId. Producing exactly one group per question is usually incorrect.
 - Separate different clinical views or modalities into different groups when each I* is already a complete rectangular image, even when they are aligned or touching.
 - continuous_composition means image content visibly continues across object boundaries. It does not mean merely adjacent CT, PET, MRI, planar, or MIP views.

@@ -3,10 +3,18 @@ import assert from 'node:assert/strict';
 
 import {
     assignRectToQuestionAnchor,
+    buildNuclearStructuralGroups,
     buildNuclearDisplayLegend,
     mergeNuclearImageFragments,
     resolveNuclearDisplayLegend
 } from '../src/lib/nuclearFigureGeometry.mjs';
+
+const structuralObject = (id, type, x, y, w, h, extra = {}) => ({
+    id,
+    type,
+    viewportRect: { x, y, w, h },
+    ...extra
+});
 
 test('merges stacked wide strips from one rendered figure', () => {
     const strips = [
@@ -115,4 +123,56 @@ test('rejects appendix reference words after a figure token', () => {
     ];
 
     assert.equal(buildNuclearDisplayLegend(sources), '');
+});
+
+test('groups all images inside numbered question subsections', () => {
+    const objects = [
+        structuralObject('A1', 'question_anchor', 40, 30, 100, 24, { text: 'No. 50-1' }),
+        structuralObject('A2', 'question_anchor', 40, 520, 100, 24, { text: 'No. 50-2' }),
+        structuralObject('I1', 'image', 180, 80, 220, 360, { defaultQuestionAnchorId: 'A1' }),
+        structuralObject('I2', 'image', 420, 80, 220, 360, { defaultQuestionAnchorId: 'A1' }),
+        structuralObject('I3', 'image', 150, 580, 220, 260, { defaultQuestionAnchorId: 'A2' }),
+        structuralObject('I4', 'image', 390, 580, 220, 260, { defaultQuestionAnchorId: 'A2' })
+    ];
+
+    const result = buildNuclearStructuralGroups(objects, 900);
+
+    assert.equal(result.complete, true);
+    assert.deepEqual(result.groups.map(group => group.imageIds), [
+        ['I1', 'I2'],
+        ['I3', 'I4']
+    ]);
+});
+
+test('groups multiple image objects by explicit figure bands', () => {
+    const objects = [
+        structuralObject('A1', 'question_anchor', 40, 25, 75, 24, { text: 'No. 51' }),
+        structuralObject('T1', 'text', 45, 65, 45, 22, { text: '図1' }),
+        structuralObject('T2', 'text', 45, 410, 45, 22, { text: '図2' }),
+        structuralObject('I1', 'image', 60, 100, 260, 220, { defaultQuestionAnchorId: 'A1' }),
+        structuralObject('I2', 'image', 340, 100, 260, 220, { defaultQuestionAnchorId: 'A1' }),
+        structuralObject('I3', 'image', 60, 450, 260, 220, { defaultQuestionAnchorId: 'A1' }),
+        structuralObject('I4', 'image', 340, 450, 260, 220, { defaultQuestionAnchorId: 'A1' })
+    ];
+
+    const result = buildNuclearStructuralGroups(objects, 760);
+
+    assert.equal(result.complete, true);
+    assert.deepEqual(result.groups.map(group => ({ images: group.imageIds, legends: group.legendIds })), [
+        { images: ['I1', 'I2'], legends: ['T1'] },
+        { images: ['I3', 'I4'], legends: ['T2'] }
+    ]);
+});
+
+test('leaves unlabelled multi-image sections for VLM grouping', () => {
+    const objects = [
+        structuralObject('A1', 'question_anchor', 40, 25, 75, 24, { text: 'No. 56' }),
+        structuralObject('I1', 'image', 60, 100, 240, 220, { defaultQuestionAnchorId: 'A1' }),
+        structuralObject('I2', 'image', 320, 100, 240, 220, { defaultQuestionAnchorId: 'A1' })
+    ];
+
+    const result = buildNuclearStructuralGroups(objects, 760);
+
+    assert.equal(result.complete, false);
+    assert.deepEqual(result.groups, []);
 });
