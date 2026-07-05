@@ -17,6 +17,7 @@ const TEMPORAL_IMAGE_LABEL_PATTERN = /^(?:入院直後|初診時|来院時|治�
 const DEFAULT_IMAGE_QUESTION_LABEL_PATTERN = /(?:問|問題)\s*(?:番号)?\s*(\d{1,3})/i;
 const NO_QUESTION_LABEL_PATTERN = /^[\s\[\]［］【】]*(?:No\.?|NO\.?)\s*[0-9０-９]{1,3}[\s\[\]［］【】]*$/i;
 const FIGURE_HEADER_PATTERN = /図\s*[0-9０-９]+/;
+const INLINE_NO_QUESTION_PREFIX_PATTERN = /^[\s\[\]［］【】]*(?:No\.?|NO\.?)\s*[0-9０-９]{1,3}(?:\s*[-ー−‐–―]\s*[0-9０-９A-Za-z]+)?\s*/i;
 
 // レジェンドとして適切かどうかを判定する関数
 const isValidLegendText = (text, item = null, allPageTextItems = []) => {
@@ -128,7 +129,7 @@ const cleanLegendPrefix = (text) => {
     if (!text) return '';
     let cleaned = convertLegendMarkupToUnicode(text).trim();
 
-    cleaned = cleaned.replace(/^(?:No\.?|NO\.?)\s*[0-9０-９]{1,3}\s*/i, '');
+    cleaned = cleaned.replace(INLINE_NO_QUESTION_PREFIX_PATTERN, '');
     
     // 「図1」「図 1」「Fig. 1」「Fig1」「画像1」などのプレフィックスパターン
     // および、それに続くコロン、ドット、スペースなどを除去
@@ -469,7 +470,7 @@ const mergeDenseNuclearSectionRects = (rects) => {
 };
 
 const stripLeadingQuestionLabel = (text) => String(text || '')
-    .replace(/^[\s\[\]［］【】]*(?:No\.?|NO\.?)\s*[0-9０-９]{1,3}\s*/i, '')
+    .replace(INLINE_NO_QUESTION_PREFIX_PATTERN, '')
     .trim();
 
 const getRectCenterY = (rect) => rect.y + (rect.h / 2);
@@ -606,6 +607,47 @@ const buildNuclearChildAnchors = (sectionLines, sectionRects, questionNumber) =>
             return a.x - b.x;
         });
 };
+
+const buildNuclearTopCaptionAnchors = (sectionLines, sectionRects) => (
+    sectionLines
+        .map(line => {
+            const items = line.items || [];
+            if (items.length === 0) return null;
+
+            const captionText = stripLeadingQuestionLabel(buildInlineTextFromItems(items) || line.text);
+            if (!captionText) return null;
+            if (NO_QUESTION_LABEL_PATTERN.test(captionText)) return null;
+            if (FIGURE_HEADER_PATTERN.test(captionText)) return null;
+            if (captionText.length > 30) return null;
+            if (!isPotentialNuclearTopCaption(captionText)) return null;
+
+            const lineMinX = Math.min(...items.map(item => item.x));
+            const overlapsAnyRect = sectionRects.some(rect => {
+                if (!doesLineOverlapRect(line, rect, 24)) return false;
+                const topGap = line.y - (rect.y + rect.h);
+                return topGap >= 0 && topGap <= 42;
+            });
+
+            if (!overlapsAnyRect) return null;
+
+            return {
+                y: line.y,
+                x: lineMinX,
+                text: cleanLegendPrefix(captionText),
+                rawText: captionText,
+                items
+            };
+        })
+        .filter(Boolean)
+        .filter((anchor, index, array) => {
+            const normalized = `${Math.round(anchor.x)}_${Math.round(anchor.y)}_${anchor.rawText}`;
+            return array.findIndex(candidate => `${Math.round(candidate.x)}_${Math.round(candidate.y)}_${candidate.rawText}` === normalized) === index;
+        })
+        .sort((a, b) => {
+            if (Math.abs(b.y - a.y) > 8) return b.y - a.y;
+            return a.x - b.x;
+        })
+);
 
 const buildNuclearSubsections = (sectionStart, nextSection, sectionLines, sectionRects, parserProfile) => {
     const sectionTopY = sectionStart.y + 18;
@@ -941,17 +983,6 @@ const NUCLEAR_FIGURE_WITH_CAPTION_PATTERN = /^図\s*(?:[0-9０-９]+|[A-Za-z]).*
 const NUCLEAR_LETTER_CAPTION_PATTERN = /^(?:[A-Ea-e])[：:].+$/;
 const NUCLEAR_SECTION_PREFIX_PATTERN = /^(?:No\.?|NO\.?)\s*[0-9０-９]{1,3}(?:\s*[-ー−‐–―]\s*[0-9０-９A-Za-z]+)?\s*/i;
 
-const getTextItemRect = (item) => {
-    const width = Math.max(1, item.width || 0);
-    const height = Math.max(1, item.height || 12);
-    return {
-        x: item.x,
-        y: item.y,
-        w: width,
-        h: height
-    };
-};
-
 const isValidRect = (rect) => rect && Number.isFinite(rect.x) && Number.isFinite(rect.y) && rect.w > 0 && rect.h > 0;
 
 const unionRectList = (rects) => {
@@ -982,6 +1013,110 @@ const getRectCenter = (rect) => ({
     x: rect.x + rect.w / 2,
     y: rect.y + rect.h / 2
 });
+
+const buildTextBlockRect = (block) => ({
+    x: block.minX,
+    y: block.minY,
+    w: block.maxX - block.minX,
+    h: block.maxY - block.minY
+});
+
+const doesRectOverlap = (a, b) => (
+    a.x < (b.x + b.w)
+    && (a.x + a.w) > b.x
+    && a.y < (b.y + b.h)
+    && (a.y + a.h) > b.y
+);
+
+const isNuclearContextLikeText = (text) => (
+    isPotentialNuclearTopCaption(text)
+    || isNuclearSideLabelText(text)
+    || IMAGE_ORIENTATION_LABEL_PATTERN.test(text)
+    || TEMPORAL_IMAGE_LABEL_PATTERN.test(text)
+);
+
+const isNuclearTextBlockNearAnyImageRect = (blockRect, imageRects) => (
+    imageRects.some(rect => {
+        const horizontalGap = getRectGap(blockRect.x, blockRect.x + blockRect.w, rect.x, rect.x + rect.w);
+        const verticalGap = getRectGap(blockRect.y, blockRect.y + blockRect.h, rect.y, rect.y + rect.h);
+        const xOverlap = Math.min(blockRect.x + blockRect.w, rect.x + rect.w) - Math.max(blockRect.x, rect.x);
+        const yOverlap = Math.min(blockRect.y + blockRect.h, rect.y + rect.h) - Math.max(blockRect.y, rect.y);
+
+        return doesRectOverlap(blockRect, rect)
+            || (xOverlap > 0 && verticalGap <= 48)
+            || (yOverlap > 0 && horizontalGap <= 48)
+            || (horizontalGap <= 24 && verticalGap <= 24);
+    })
+);
+
+const isAttachedNuclearTextBlock = (block, imageRects) => {
+    const text = String(block.text || '').trim();
+    if (!text) return false;
+
+    const blockRect = buildTextBlockRect(block);
+    const shortContextText = text.length <= 18 || isNuclearContextLikeText(text);
+    if (!shortContextText) return false;
+
+    return imageRects.some(rect => {
+        const horizontalGap = getRectGap(blockRect.x, blockRect.x + blockRect.w, rect.x, rect.x + rect.w);
+        const verticalGap = getRectGap(blockRect.y, blockRect.y + blockRect.h, rect.y, rect.y + rect.h);
+        const xOverlap = Math.min(blockRect.x + blockRect.w, rect.x + rect.w) - Math.max(blockRect.x, rect.x);
+        const yOverlap = Math.min(blockRect.y + blockRect.h, rect.y + rect.h) - Math.max(blockRect.y, rect.y);
+
+        const topOrBottomAttached = xOverlap >= Math.min(blockRect.w * 0.6, rect.w * 0.8) && verticalGap <= 28;
+        const sideAttached = yOverlap >= Math.min(blockRect.h * 0.6, rect.h * 0.2) && horizontalGap <= 24;
+
+        return topOrBottomAttached || sideAttached;
+    });
+};
+
+const buildNuclearContextBlocks = (textItems, imageRects, anchorItems = []) => {
+    if (!textItems || textItems.length === 0 || imageRects.length === 0) {
+        return [];
+    }
+
+    const sectionLines = buildTextLineEntriesFromItems(textItems);
+    const excludedTextKeys = new Set(buildTextItemKeySet(anchorItems));
+    const rawBlocks = buildNuclearLegendBlocks(sectionLines, imageRects, excludedTextKeys);
+
+    return rawBlocks
+        .map(block => {
+            const rect = buildTextBlockRect(block);
+            return {
+                ...block,
+                rect,
+                attached: isAttachedNuclearTextBlock(block, imageRects)
+            };
+        })
+        .filter(block => (
+            isNuclearTextBlockNearAnyImageRect(block.rect, imageRects)
+            || block.attached
+        ));
+};
+
+const resolveNuclearGroupCrop = (group) => {
+    const imageBounds = unionRectList(group.imageRects || []);
+    if (!imageBounds) {
+        return null;
+    }
+
+    const contextBlocks = buildNuclearContextBlocks(group.textItems || [], group.imageRects || [], group.anchorItems || []);
+    const detachedBlocks = contextBlocks.filter(block => !block.attached);
+    const includeContextRects = group.imageRects.length > 1
+        ? contextBlocks.map(block => block.rect)
+        : contextBlocks.filter(block => block.attached).map(block => block.rect);
+
+    const cropBounds = unionRectList([
+        ...group.imageRects,
+        ...includeContextRects
+    ]) || imageBounds;
+
+    return {
+        bounds: expandRect(cropBounds, 8, 8),
+        supplementalLegend: cleanLegendPrefix(detachedBlocks[0]?.text || ''),
+        contextBlocks
+    };
+};
 
 const isNuclearFigureAnchorStart = (text) => {
     const trimmed = String(text || '').trim();
@@ -1097,9 +1232,36 @@ const buildNuclearAnchorSubsections = (anchors, sectionTopY, sectionBottomY) => 
     return subsections.filter(subsection => subsection.topY > subsection.bottomY);
 };
 
-const buildNuclearSemanticGroups = (textItems, imageRects, parserProfile) => {
+const getTextItemRect = (item) => ({
+    x: item.x,
+    y: item.y,
+    w: Math.max(1, item.width || 0),
+    h: Math.max(1, item.height || 12)
+});
+
+const buildTextItemsBounds = (items = []) => unionRectList(items.map(getTextItemRect));
+
+const dedupeNuclearAnchors = (anchors = []) => (
+    anchors
+        .filter(Boolean)
+        .filter((anchor, index, array) => {
+            const normalized = `${Math.round(anchor.x)}_${Math.round(anchor.y)}_${anchor.rawText || anchor.text || ''}`;
+            return array.findIndex(candidate => `${Math.round(candidate.x)}_${Math.round(candidate.y)}_${candidate.rawText || candidate.text || ''}` === normalized) === index;
+        })
+        .sort((a, b) => {
+            if (Math.abs(b.y - a.y) > 10) return b.y - a.y;
+            return a.x - b.x;
+        })
+);
+
+const buildNuclearQuestionOwners = (textItems, parserProfile) => {
     const lines = buildTextLineEntriesFromItems(textItems);
-    const sectionStarts = lines
+    const pageMaxY = Math.max(
+        parserProfile.footerMinY + 400,
+        ...textItems.map(item => item.y + (item.height || 0))
+    );
+
+    const anchors = lines
         .map(line => ({
             ...line,
             questionNumber: extractQuestionNumberFromText(line.text, [parserProfile.imageLabelPattern]),
@@ -1108,117 +1270,536 @@ const buildNuclearSemanticGroups = (textItems, imageRects, parserProfile) => {
         .filter(line => line.questionNumber !== null)
         .sort((a, b) => b.y - a.y);
 
-    if (sectionStarts.length === 0 || imageRects.length === 0) {
-        return [];
+    return anchors.map((anchor, index) => {
+        const previous = anchors[index - 1] || null;
+        const next = anchors[index + 1] || null;
+        return {
+            ...anchor,
+            ownerKey: `${anchor.questionNumber}:${Math.round(anchor.y)}:${index}:${anchor.text || anchor.sectionLegend || ''}`,
+            ownerTopY: previous ? (previous.y + anchor.y) / 2 : pageMaxY,
+            ownerBottomY: next ? (anchor.y + next.y) / 2 : parserProfile.footerMinY
+        };
+    });
+};
+
+const scoreNuclearOwnerForRect = (rect, owner) => {
+    const rectTopY = rect.y + rect.h;
+    const rectBottomY = rect.y;
+    const centerY = getRectCenterY(rect);
+    const bandTopY = owner.ownerTopY + 24;
+    const bandBottomY = owner.ownerBottomY - 24;
+    const overlapHeight = Math.max(0, Math.min(rectTopY, bandTopY) - Math.max(rectBottomY, bandBottomY));
+    const overlapRatio = overlapHeight / Math.max(1, rect.h);
+
+    let score = overlapRatio * 900;
+    score -= Math.abs(owner.y - centerY) * 1.35;
+
+    if (centerY > owner.y + 42) {
+        score -= (centerY - (owner.y + 42)) * 5;
+    }
+    if (centerY < owner.ownerBottomY - 42) {
+        score -= ((owner.ownerBottomY - 42) - centerY) * 4;
+    }
+    if (centerY > owner.ownerTopY + 18) {
+        score -= (centerY - (owner.ownerTopY + 18)) * 6;
     }
 
-    const groups = [];
+    return score;
+};
 
-    sectionStarts.forEach((sectionStart, index) => {
-        const nextSection = sectionStarts[index + 1] || null;
-        const sectionTopY = sectionStart.y + 20;
-        const sectionBottomY = nextSection ? nextSection.y + 18 : parserProfile.footerMinY;
+const assignNuclearItemsToOwners = (items, owners, toRect) => {
+    if (owners.length === 0) return new Map();
 
-        const sectionRects = imageRects.filter(rect => {
-            const center = getRectCenter(rect);
-            return center.y < sectionTopY && center.y > sectionBottomY;
+    const grouped = new Map(owners.map(owner => [owner.ownerKey, []]));
+    items.forEach(item => {
+        const rect = toRect(item);
+        const bestOwner = owners.reduce((best, owner) => {
+            const score = scoreNuclearOwnerForRect(rect, owner);
+            if (!best || score > best.score) {
+                return { owner, score };
+            }
+            return best;
+        }, null)?.owner;
+
+        if (bestOwner) {
+            grouped.get(bestOwner.ownerKey)?.push(item);
+        }
+    });
+
+    return grouped;
+};
+
+const assignNuclearImageClustersToOwners = (rects, owners) => {
+    const pageClusters = buildNuclearImageRectClusters(rects);
+    const groupedClusters = assignNuclearItemsToOwners(pageClusters, owners, cluster => cluster.bounds);
+
+    return {
+        pageClusters,
+        groupedClusters
+    };
+};
+
+const shouldLinkNuclearFigureRects = (a, b) => {
+    const aMinX = a.x;
+    const aMaxX = a.x + a.w;
+    const aMinY = a.y;
+    const aMaxY = a.y + a.h;
+    const bMinX = b.x;
+    const bMaxX = b.x + b.w;
+    const bMinY = b.y;
+    const bMaxY = b.y + b.h;
+
+    const horizontalGap = getRectGap(aMinX, aMaxX, bMinX, bMaxX);
+    const verticalGap = getRectGap(aMinY, aMaxY, bMinY, bMaxY);
+    const xOverlap = Math.max(0, Math.min(aMaxX, bMaxX) - Math.max(aMinX, bMinX));
+    const yOverlap = Math.max(0, Math.min(aMaxY, bMaxY) - Math.max(aMinY, bMinY));
+    const minWidth = Math.min(a.w, b.w);
+    const minHeight = Math.min(a.h, b.h);
+
+    const touching = horizontalGap <= 4 && verticalGap <= 4;
+    const sameRowNear = yOverlap >= minHeight * 0.45 && horizontalGap <= 22;
+    const sameColumnNear = xOverlap >= minWidth * 0.45 && verticalGap <= 22;
+
+    return touching || sameRowNear || sameColumnNear;
+};
+
+const buildNuclearImageRectClusters = (rects) => {
+    if (rects.length === 0) return [];
+
+    const visited = new Set();
+    const clusters = [];
+
+    rects.forEach((rect, index) => {
+        if (visited.has(index)) return;
+        visited.add(index);
+
+        const stack = [index];
+        const clusterRects = [];
+
+        while (stack.length > 0) {
+            const currentIndex = stack.pop();
+            const currentRect = rects[currentIndex];
+            clusterRects.push(currentRect);
+
+            rects.forEach((candidate, candidateIndex) => {
+                if (visited.has(candidateIndex)) return;
+                if (!shouldLinkNuclearFigureRects(currentRect, candidate)) return;
+                visited.add(candidateIndex);
+                stack.push(candidateIndex);
+            });
+        }
+
+        const bounds = unionRects(clusterRects);
+        clusters.push({
+            imageRects: clusterRects,
+            bounds,
+            centerX: getRectCenterX(bounds),
+            centerY: getRectCenterY(bounds)
+        });
+    });
+
+    return clusters.sort((a, b) => {
+        if (Math.abs(b.centerY - a.centerY) > 20) return b.centerY - a.centerY;
+        return a.centerX - b.centerX;
+    });
+};
+
+const buildNuclearQuestionFigureAnchors = (questionLines, questionRects, _questionNumber) => {
+    const explicitFigureAnchors = buildNuclearFigureAnchors(questionLines);
+    if (explicitFigureAnchors.length > 0) {
+        return dedupeNuclearAnchors(explicitFigureAnchors);
+    }
+
+    const topCaptionAnchors = buildNuclearTopCaptionAnchors(questionLines, questionRects);
+    const rectClusters = buildNuclearImageRectClusters(questionRects);
+    const shouldUseTopCaptions = topCaptionAnchors.length === 2
+        && rectClusters.length === topCaptionAnchors.length;
+
+    return shouldUseTopCaptions
+        ? dedupeNuclearAnchors(topCaptionAnchors)
+        : [];
+};
+
+const pickNearestLegendBlock = (cluster, legendBlocks, usedLegendIndexes = new Set()) => {
+    let bestLegend = null;
+    let bestIndex = -1;
+    let bestScore = Infinity;
+
+    legendBlocks.forEach((block, index) => {
+        if (usedLegendIndexes.has(index)) return;
+        const dx = Math.abs(block.centerX - cluster.centerX);
+        const dy = Math.abs(block.centerY - cluster.centerY);
+        const score = dx + (dy * 0.9);
+        if (score < bestScore) {
+            bestScore = score;
+            bestLegend = block;
+            bestIndex = index;
+        }
+    });
+
+    return { legend: bestLegend, index: bestIndex };
+};
+
+const buildGroupsWithoutExplicitSeeds = (clusters, legendBlocks) => {
+    if (clusters.length === 0) return [];
+    if (clusters.length === 1) {
+        return [{ clusters, legendBlock: legendBlocks[0] || null, seed: null }];
+    }
+
+    if (legendBlocks.length === clusters.length) {
+        const usedLegendIndexes = new Set();
+        return clusters.map(cluster => {
+            const { legend, index } = pickNearestLegendBlock(cluster, legendBlocks, usedLegendIndexes);
+            if (index >= 0) usedLegendIndexes.add(index);
+            return {
+                clusters: [cluster],
+                legendBlock: legend,
+                seed: null
+            };
+        });
+    }
+
+    if (legendBlocks.length === 1) {
+        return [{ clusters, legendBlock: legendBlocks[0], seed: null }];
+    }
+
+    if (legendBlocks.length === 0 && clusters.length === 4) {
+        const sortedClusters = [...clusters].sort((a, b) => {
+            if (Math.abs(b.centerY - a.centerY) > 20) return b.centerY - a.centerY;
+            return a.centerX - b.centerX;
+        });
+        const rows = [];
+
+        sortedClusters.forEach(cluster => {
+            const matchingRow = rows.find(row => Math.abs(row.centerY - cluster.centerY) <= Math.max(48, cluster.bounds.h * 0.45));
+            if (matchingRow) {
+                matchingRow.clusters.push(cluster);
+                const bounds = unionRects(matchingRow.clusters.map(entry => entry.bounds));
+                matchingRow.bounds = bounds;
+                matchingRow.centerY = getRectCenterY(bounds);
+            } else {
+                rows.push({
+                    clusters: [cluster],
+                    bounds: cluster.bounds,
+                    centerY: cluster.centerY
+                });
+            }
         });
 
-        if (sectionRects.length === 0) {
+        if (rows.length === 2 && rows.every(row => row.clusters.length === 2)) {
+            const rowGap = Math.abs(rows[0].bounds.y - (rows[1].bounds.y + rows[1].bounds.h));
+            if (rowGap >= 28) {
+                return sortedClusters.map(cluster => ({
+                    clusters: [cluster],
+                    legendBlock: null,
+                    seed: null
+                }));
+            }
+        }
+    }
+
+    if (legendBlocks.length === 0 && clusters.length === 3) {
+        const sortedByHeight = [...clusters].sort((a, b) => b.bounds.h - a.bounds.h);
+        const tallCluster = sortedByHeight[0];
+        const otherClusters = sortedByHeight.slice(1).sort((a, b) => b.centerY - a.centerY);
+        if (otherClusters.length === 2) {
+            const stackedGap = Math.abs(otherClusters[0].bounds.y - (otherClusters[1].bounds.y + otherClusters[1].bounds.h));
+            const horizontalOverlap = Math.min(
+                otherClusters[0].bounds.x + otherClusters[0].bounds.w,
+                otherClusters[1].bounds.x + otherClusters[1].bounds.w
+            ) - Math.max(otherClusters[0].bounds.x, otherClusters[1].bounds.x);
+            const tallEnough = tallCluster.bounds.h >= Math.max(otherClusters[0].bounds.h, otherClusters[1].bounds.h) * 1.45;
+            const stackedEnough = horizontalOverlap >= Math.min(otherClusters[0].bounds.w, otherClusters[1].bounds.w) * 0.55;
+            if (tallEnough && stackedEnough && stackedGap <= 40) {
+                return [{ clusters, legendBlock: null, seed: null }];
+            }
+        }
+    }
+
+    const sortedClusters = [...clusters].sort((a, b) => {
+        if (Math.abs(b.centerY - a.centerY) > 20) return b.centerY - a.centerY;
+        return a.centerX - b.centerX;
+    });
+    const rows = [];
+
+    sortedClusters.forEach(cluster => {
+        const rowHeight = cluster.bounds.h;
+        const matchingRow = rows.find(row => (
+            Math.abs(row.centerY - cluster.centerY) <= Math.max(40, Math.min(row.height, rowHeight) * 0.7)
+        ));
+
+        if (matchingRow) {
+            matchingRow.clusters.push(cluster);
+            const bounds = unionRects(matchingRow.clusters.map(entry => entry.bounds));
+            matchingRow.centerY = getRectCenterY(bounds);
+            matchingRow.height = bounds.h;
+            matchingRow.bounds = bounds;
             return;
         }
 
-        const sectionTextItems = textItems.filter(item => {
-            const centerY = item.y + item.height / 2;
-            const trimmed = item.text.trim();
-            if (FOOTER_PAGE_PATTERN.test(trimmed)) return false;
-            return centerY < sectionTopY && centerY > sectionBottomY;
+        rows.push({
+            clusters: [cluster],
+            centerY: cluster.centerY,
+            height: cluster.bounds.h,
+            bounds: cluster.bounds
         });
+    });
 
-        const sectionLines = lines.filter(line => line.y <= sectionTopY && line.y > sectionBottomY);
-        const figureAnchors = buildNuclearFigureAnchors(sectionLines);
+    if (rows.length > 1) {
+        const usedLegendIndexes = new Set();
+        return rows.map(row => {
+            const pseudoCluster = {
+                centerX: getRectCenterX(row.bounds),
+                centerY: getRectCenterY(row.bounds)
+            };
+            const { legend, index } = pickNearestLegendBlock(pseudoCluster, legendBlocks, usedLegendIndexes);
+            if (index >= 0) usedLegendIndexes.add(index);
+            return {
+                clusters: row.clusters,
+                legendBlock: legend,
+                seed: null
+            };
+        });
+    }
 
-        let sectionGroups = [];
-        if (figureAnchors.length >= 2 && sectionRects.length >= 2) {
-            const subsections = buildNuclearAnchorSubsections(figureAnchors, sectionTopY, sectionBottomY);
-            const assignedRectIndexes = new Set();
-            const candidateGroups = subsections.map(subsection => {
-                const rects = sectionRects.filter((rect, rectIndex) => {
-                    const center = getRectCenter(rect);
-                    const isInside = center.y < subsection.topY
-                        && center.y > subsection.bottomY
-                        && center.x >= subsection.leftX
-                        && center.x < subsection.rightX;
-                    if (isInside) {
-                        assignedRectIndexes.add(rectIndex);
-                    }
-                    return isInside;
-                });
+    return [{ clusters, legendBlock: legendBlocks[0] || null, seed: null }];
+};
 
-                if (rects.length === 0) return null;
+const buildNuclearAnchorCells = (seeds, ownerTopY, ownerBottomY) => {
+    const rows = [];
 
-                const items = sectionTextItems.filter(item => {
-                    const centerX = item.x + item.width / 2;
-                    const centerY = item.y + item.height / 2;
-                    return centerY < subsection.topY
-                        && centerY > subsection.bottomY
-                        && centerX >= subsection.leftX
-                        && centerX < subsection.rightX;
-                });
-
-                return {
-                    matchedQNum: sectionStart.questionNumber,
-                    legend: cleanLegendPrefix(subsection.anchor.text || subsection.anchor.rawText || sectionStart.sectionLegend || ''),
-                    legendRaw: subsection.anchor.rawText || '',
-                    figureNumber: subsection.anchor.figureNumber,
-                    figureLabel: subsection.anchor.figureLabel || '',
-                    imageRects: rects,
-                    textItems: items
-                };
-            }).filter(Boolean);
-
-            if (candidateGroups.length >= 2 && assignedRectIndexes.size === sectionRects.length) {
-                sectionGroups = candidateGroups;
-            }
+    seeds.forEach(seed => {
+        const existingRow = rows.find(row => Math.abs(row.y - seed.y) <= 10);
+        if (existingRow) {
+            existingRow.anchors.push(seed);
+        } else {
+            rows.push({ y: seed.y, anchors: [seed] });
         }
+    });
 
-        if (sectionGroups.length === 0) {
-            sectionGroups = [{
-                matchedQNum: sectionStart.questionNumber,
-                legend: cleanLegendPrefix(sectionStart.sectionLegend || ''),
-                legendRaw: sectionStart.sectionLegend || '',
-                figureNumber: extractFigureNumber(sectionStart.sectionLegend || ''),
-                figureLabel: buildFigureLegend(sectionStart.sectionLegend || ''),
-                imageRects: sectionRects,
-                textItems: sectionTextItems
-            }];
-        }
+    rows.sort((a, b) => b.y - a.y);
 
-        sectionGroups.forEach(group => {
-            const contentBounds = unionRectList([
-                ...group.imageRects,
-                ...group.textItems.map(item => getTextItemRect(item))
-            ]);
+    const cells = [];
+    rows.forEach((row, rowIndex) => {
+        const previousRow = rows[rowIndex - 1] || null;
+        const nextRow = rows[rowIndex + 1] || null;
+        const topY = previousRow ? (previousRow.y + row.y) / 2 : ownerTopY;
+        const bottomY = nextRow ? (row.y + nextRow.y) / 2 : ownerBottomY;
 
-            if (!contentBounds) return;
+        row.anchors.sort((a, b) => a.x - b.x);
+        row.anchors.forEach((anchor, anchorIndex) => {
+            const previousAnchor = row.anchors[anchorIndex - 1] || null;
+            const nextAnchor = row.anchors[anchorIndex + 1] || null;
+            const leftX = previousAnchor ? (previousAnchor.x + anchor.x) / 2 : -Infinity;
+            const rightX = nextAnchor ? (anchor.x + nextAnchor.x) / 2 : Infinity;
 
-            groups.push({
-                ...group,
-                bounds: expandRect(contentBounds, 8, 8)
+            cells.push({
+                anchor,
+                topY,
+                bottomY,
+                leftX,
+                rightX
             });
         });
     });
 
-    return groups;
+    return cells;
 };
 
-const findInkBoundsInCanvasRegion = (canvas, region, options = {}) => {
+const buildGroupsWithSeeds = (clusters, seeds, ownerTopY, ownerBottomY) => {
+    if (clusters.length === 0) return [];
+    if (seeds.length === 0) return [];
+    if (seeds.length === 1) {
+        return [{ clusters, seed: seeds[0], legendBlock: null }];
+    }
+
+    const cells = buildNuclearAnchorCells(seeds, ownerTopY, ownerBottomY);
+    const groups = cells.map(cell => ({
+        clusters: [],
+        seed: cell.anchor,
+        cell,
+        legendBlock: null
+    }));
+
+    const assignedClusterIndexes = new Set();
+    clusters.forEach((cluster, index) => {
+        const matchedGroup = groups.find(group => (
+            cluster.centerY <= group.cell.topY
+            && cluster.centerY > group.cell.bottomY
+            && cluster.centerX >= group.cell.leftX
+            && cluster.centerX < group.cell.rightX
+        ));
+
+        if (matchedGroup) {
+            assignedClusterIndexes.add(index);
+            matchedGroup.clusters.push(cluster);
+            return;
+        }
+    });
+
+    clusters.forEach((cluster, index) => {
+        if (assignedClusterIndexes.has(index)) return;
+        groups.push({
+            clusters: [cluster],
+            seed: null,
+            legendBlock: null
+        });
+    });
+
+    return groups.filter(group => group.clusters.length > 0);
+};
+
+const buildGroupsWithSeedsFromRects = (rects, seeds, ownerTopY, ownerBottomY) => {
+    if (rects.length === 0 || seeds.length === 0) return [];
+    if (seeds.length === 1) {
+        return [{
+            clusters: buildNuclearImageRectClusters(rects),
+            seed: seeds[0],
+            legendBlock: null
+        }];
+    }
+
+    const cells = buildNuclearAnchorCells(seeds, ownerTopY, ownerBottomY);
+    const groups = cells.map(cell => ({
+        rects: [],
+        clusters: [],
+        seed: cell.anchor,
+        cell,
+        legendBlock: null
+    }));
+    const assignedRectIndexes = new Set();
+
+    rects.forEach((rect, index) => {
+        const centerY = getRectCenterY(rect);
+        const centerX = getRectCenterX(rect);
+        const matchedGroup = groups.find(group => (
+            centerY <= group.cell.topY
+            && centerY > group.cell.bottomY
+            && centerX >= group.cell.leftX
+            && centerX < group.cell.rightX
+        ));
+
+        if (!matchedGroup) return;
+        assignedRectIndexes.add(index);
+        matchedGroup.rects.push(rect);
+    });
+
+    groups.forEach(group => {
+        if (group.rects.length === 0) return;
+        group.clusters = buildNuclearImageRectClusters(group.rects);
+    });
+
+    const unassignedRects = rects.filter((_rect, index) => !assignedRectIndexes.has(index));
+    const unassignedGroups = buildNuclearImageRectClusters(unassignedRects).map(cluster => ({
+        clusters: [cluster],
+        seed: null,
+        legendBlock: null
+    }));
+
+    return [...groups, ...unassignedGroups]
+        .filter(group => group.clusters.length > 0)
+        .map(group => {
+            if (!('rects' in group)) return group;
+            const { rects: _rects, cell: _cell, ...rest } = group;
+            return rest;
+        });
+};
+
+const buildNuclearGroupFromClusters = (group, questionOwner, questionTextItems) => {
+    const imageRects = group.clusters.flatMap(cluster => cluster.imageRects);
+    const anchorItems = [
+        ...(questionOwner.items || []),
+        ...(group.seed?.items || [])
+    ];
+    const contextBlocks = buildNuclearContextBlocks(questionTextItems, imageRects, anchorItems);
+    const attachedRects = contextBlocks.filter(block => block.attached).map(block => block.rect);
+    const detachedBlock = group.legendBlock || contextBlocks.find(block => !block.attached) || null;
+    const bounds = unionRectList([...imageRects, ...attachedRects]);
+
+    if (!bounds) return null;
+
+    const contextTextItems = contextBlocks.flatMap(block => block.items || []);
+    const textItems = [
+        ...(group.seed?.items || []),
+        ...contextTextItems
+    ].filter((item, index, array) => {
+        const key = buildTextItemKey(item);
+        return array.findIndex(candidate => buildTextItemKey(candidate) === key) === index;
+    });
+
+    const legendRaw = group.seed?.rawText || detachedBlock?.text || questionOwner.sectionLegend || '';
+    const legend = cleanLegendPrefix(group.seed?.text || detachedBlock?.text || questionOwner.sectionLegend || '');
+
+    return {
+        matchedQNum: questionOwner.questionNumber,
+        legend,
+        legendRaw,
+        figureNumber: group.seed?.figureNumber ?? extractFigureNumber(legendRaw || legend),
+        figureLabel: group.seed?.figureLabel || buildFigureLegend(legendRaw || legend),
+        imageRects,
+        textItems,
+        bounds: expandRect(bounds, 8, 8),
+        ownerTopY: questionOwner.ownerTopY,
+        ownerBottomY: questionOwner.ownerBottomY
+    };
+};
+
+const buildNuclearSemanticGroups = (textItems, imageRects, parserProfile) => {
+    const questionOwners = buildNuclearQuestionOwners(textItems, parserProfile);
+    if (questionOwners.length === 0 || imageRects.length === 0) {
+        return [];
+    }
+
+    const rectsByQuestion = assignNuclearItemsToOwners(imageRects, questionOwners, rect => rect);
+    const textItemsByQuestion = assignNuclearItemsToOwners(
+        textItems.filter(item => !FOOTER_PAGE_PATTERN.test(item.text.trim())),
+        questionOwners,
+        getTextItemRect
+    );
+
+    return questionOwners.flatMap(questionOwner => {
+        const ownedImageRects = rectsByQuestion.get(questionOwner.ownerKey) || [];
+        if (ownedImageRects.length === 0) return [];
+
+        const ownedTextItems = textItemsByQuestion.get(questionOwner.ownerKey) || [];
+        const questionLines = buildTextLineEntriesFromItems(ownedTextItems);
+        const clusters = buildNuclearImageRectClusters(ownedImageRects);
+        const figureAnchors = buildNuclearQuestionFigureAnchors(questionLines, ownedImageRects, questionOwner.questionNumber);
+        const legendBlocks = buildNuclearLegendBlocks(
+            questionLines,
+            ownedImageRects,
+            new Set(buildTextItemKeySet([
+                ...(questionOwner.items || []),
+                ...figureAnchors.flatMap(anchor => anchor.items || [])
+            ]))
+        );
+
+        const rawGroups = figureAnchors.length > 0
+            ? buildGroupsWithSeedsFromRects(ownedImageRects, figureAnchors, questionOwner.ownerTopY, questionOwner.ownerBottomY)
+            : buildGroupsWithoutExplicitSeeds(clusters, legendBlocks);
+
+        return rawGroups
+            .map(group => {
+                const enrichedGroup = group.seed || group.legendBlock
+                    ? group
+                    : {
+                        ...group,
+                        legendBlock: pickNearestLegendBlock(group.clusters[0], legendBlocks).legend
+                    };
+                return buildNuclearGroupFromClusters(enrichedGroup, questionOwner, ownedTextItems);
+            })
+            .filter(Boolean);
+    });
+};
+
+const collectInkComponentsInCanvasRegion = (canvas, region, options = {}) => {
     const {
         threshold = 245,
-        strategy = 'largest',
         minDarkPixelCount = 80,
         minComponentWidth = 20,
-        minComponentHeight = 20
+        minComponentHeight = 20,
+        maxThinAspectRatio = 18,
+        maxThinMinorSize = 24
     } = options;
     const x = Math.max(0, Math.floor(region.x));
     const y = Math.max(0, Math.floor(region.y));
@@ -1247,7 +1828,6 @@ const findInkBoundsInCanvasRegion = (canvas, region, options = {}) => {
     }
 
     const visited = new Uint8Array(w * h);
-    let bestComponent = null;
     const significantComponents = [];
     const neighbors = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 
@@ -1296,22 +1876,29 @@ const findInkBoundsInCanvasRegion = (canvas, region, options = {}) => {
             ) {
                 continue;
             }
-
-            const component = {
-                minX: componentMinX,
-                minY: componentMinY,
-                maxX: componentMaxX,
-                maxY: componentMaxY,
-                darkPixelCount: componentDarkPixelCount
-            };
-
-            significantComponents.push(component);
-
-            if (!bestComponent || componentDarkPixelCount > bestComponent.darkPixelCount) {
-                bestComponent = component;
+            const aspectRatio = Math.max(componentWidth, componentHeight) / Math.max(1, Math.min(componentWidth, componentHeight));
+            if (aspectRatio >= maxThinAspectRatio && Math.min(componentWidth, componentHeight) <= maxThinMinorSize) {
+                continue;
             }
+
+            significantComponents.push({
+                x: x + componentMinX,
+                y: y + componentMinY,
+                w: componentWidth,
+                h: componentHeight,
+                darkPixelCount: componentDarkPixelCount
+            });
         }
     }
+
+    return significantComponents;
+};
+
+const findInkBoundsInCanvasRegion = (canvas, region, options = {}) => {
+    const {
+        strategy = 'largest'
+    } = options;
+    const significantComponents = collectInkComponentsInCanvasRegion(canvas, region, options);
 
     if (significantComponents.length === 0) {
         return null;
@@ -1321,36 +1908,226 @@ const findInkBoundsInCanvasRegion = (canvas, region, options = {}) => {
         ? significantComponents.reduce((acc, component) => {
             if (!acc) {
                 return {
-                    minX: component.minX,
-                    minY: component.minY,
-                    maxX: component.maxX,
-                    maxY: component.maxY,
+                    minX: component.x,
+                    minY: component.y,
+                    maxX: component.x + component.w - 1,
+                    maxY: component.y + component.h - 1,
                     darkPixelCount: component.darkPixelCount
                 };
             }
 
-            acc.minX = Math.min(acc.minX, component.minX);
-            acc.minY = Math.min(acc.minY, component.minY);
-            acc.maxX = Math.max(acc.maxX, component.maxX);
-            acc.maxY = Math.max(acc.maxY, component.maxY);
+            acc.minX = Math.min(acc.minX, component.x);
+            acc.minY = Math.min(acc.minY, component.y);
+            acc.maxX = Math.max(acc.maxX, component.x + component.w - 1);
+            acc.maxY = Math.max(acc.maxY, component.y + component.h - 1);
             acc.darkPixelCount += component.darkPixelCount;
             return acc;
         }, null)
-        : bestComponent;
+        : significantComponents.reduce((best, component) => (
+            !best || component.darkPixelCount > best.darkPixelCount ? component : best
+        ), null);
 
-    const bounds = {
-        x: x + targetComponent.minX,
-        y: y + targetComponent.minY,
-        w: targetComponent.maxX - targetComponent.minX + 1,
-        h: targetComponent.maxY - targetComponent.minY + 1,
-        darkPixelCount: targetComponent.darkPixelCount
-    };
+    const bounds = strategy === 'union'
+        ? {
+            x: targetComponent.minX,
+            y: targetComponent.minY,
+            w: targetComponent.maxX - targetComponent.minX + 1,
+            h: targetComponent.maxY - targetComponent.minY + 1,
+            darkPixelCount: targetComponent.darkPixelCount
+        }
+        : {
+            x: targetComponent.x,
+            y: targetComponent.y,
+            w: targetComponent.w,
+            h: targetComponent.h,
+            darkPixelCount: targetComponent.darkPixelCount
+        };
 
     if (bounds.w < 20 || bounds.h < 20) {
         return null;
     }
 
     return bounds;
+};
+
+const chooseConservativeCropRegion = (rawRegion, candidateRegion) => {
+    if (!candidateRegion) {
+        return rawRegion;
+    }
+
+    const rawArea = Math.max(1, rawRegion.w * rawRegion.h);
+    const candidateArea = Math.max(1, candidateRegion.w * candidateRegion.h);
+    const widthRatio = candidateRegion.w / Math.max(1, rawRegion.w);
+    const heightRatio = candidateRegion.h / Math.max(1, rawRegion.h);
+    const areaRatio = candidateArea / rawArea;
+
+    const leftTrimRatio = (candidateRegion.x - rawRegion.x) / Math.max(1, rawRegion.w);
+    const topTrimRatio = (candidateRegion.y - rawRegion.y) / Math.max(1, rawRegion.h);
+    const rightTrimRatio = ((rawRegion.x + rawRegion.w) - (candidateRegion.x + candidateRegion.w)) / Math.max(1, rawRegion.w);
+    const bottomTrimRatio = ((rawRegion.y + rawRegion.h) - (candidateRegion.y + candidateRegion.h)) / Math.max(1, rawRegion.h);
+
+    const isTooAggressive = (
+        widthRatio < 0.9
+        || heightRatio < 0.9
+        || areaRatio < 0.78
+        || leftTrimRatio > 0.12
+        || topTrimRatio > 0.12
+        || rightTrimRatio > 0.12
+        || bottomTrimRatio > 0.12
+    );
+
+    return isTooAggressive ? rawRegion : candidateRegion;
+};
+
+const convertPdfRectToViewportRect = (rect, viewport) => {
+    const pt1 = viewport.convertToViewportPoint(rect.x, rect.y);
+    const pt2 = viewport.convertToViewportPoint(rect.x + rect.w, rect.y + rect.h);
+    return {
+        x: Math.min(pt1[0], pt2[0]),
+        y: Math.min(pt1[1], pt2[1]),
+        w: Math.abs(pt1[0] - pt2[0]),
+        h: Math.abs(pt1[1] - pt2[1])
+    };
+};
+
+const convertViewportRectToPdfRect = (rect, viewport) => {
+    const pt1 = viewport.convertToPdfPoint(rect.x, rect.y);
+    const pt2 = viewport.convertToPdfPoint(rect.x + rect.w, rect.y + rect.h);
+    return {
+        x: Math.min(pt1[0], pt2[0]),
+        y: Math.min(pt1[1], pt2[1]),
+        w: Math.abs(pt1[0] - pt2[0]),
+        h: Math.abs(pt1[1] - pt2[1])
+    };
+};
+
+const cloneCanvas = (sourceCanvas) => {
+    const clone = document.createElement('canvas');
+    clone.width = sourceCanvas.width;
+    clone.height = sourceCanvas.height;
+    const ctx = clone.getContext('2d');
+    ctx.drawImage(sourceCanvas, 0, 0);
+    return clone;
+};
+
+const buildMaskedCanvasExcludingText = (pageCanvas, textItems, viewport) => {
+    const maskedCanvas = cloneCanvas(pageCanvas);
+    const ctx = maskedCanvas.getContext('2d');
+    ctx.fillStyle = '#FFFFFF';
+
+    textItems.forEach(item => {
+        const rect = convertPdfRectToViewportRect(getTextItemRect(item), viewport);
+        ctx.fillRect(
+            Math.floor(rect.x) - 1,
+            Math.floor(rect.y) - 1,
+            Math.ceil(rect.w) + 2,
+            Math.ceil(rect.h) + 2
+        );
+    });
+
+    return maskedCanvas;
+};
+
+const buildNuclearOwnerViewportRegion = (owner, viewport, canvasWidth) => {
+    const topPoint = viewport.convertToViewportPoint(0, owner.ownerTopY);
+    const bottomPoint = viewport.convertToViewportPoint(0, owner.ownerBottomY);
+    const minY = Math.max(0, Math.min(topPoint[1], bottomPoint[1]));
+    const maxY = Math.max(topPoint[1], bottomPoint[1]);
+
+    return {
+        x: 0,
+        y: minY,
+        w: canvasWidth,
+        h: Math.max(1, maxY - minY)
+    };
+};
+
+const buildNuclearVisualAtomsForOwner = (maskedCanvas, owner, viewport) => {
+    const ownerRegion = buildNuclearOwnerViewportRegion(owner, viewport, maskedCanvas.width);
+    const components = collectInkComponentsInCanvasRegion(maskedCanvas, ownerRegion, {
+        threshold: 245,
+        minDarkPixelCount: 48,
+        minComponentWidth: 14,
+        minComponentHeight: 14,
+        maxThinAspectRatio: 22,
+        maxThinMinorSize: 20
+    }).filter(component => component.w * component.h >= 500);
+
+    if (components.length === 0) {
+        return [];
+    }
+
+    return components
+        .map(component => convertViewportRectToPdfRect(component, viewport))
+        .filter(isValidRect)
+        .map(rect => ({
+            imageRects: [rect],
+            bounds: rect,
+            centerX: getRectCenterX(rect),
+            centerY: getRectCenterY(rect)
+        }))
+        .sort((a, b) => {
+            if (Math.abs(b.centerY - a.centerY) > 20) return b.centerY - a.centerY;
+            return a.centerX - b.centerX;
+        });
+};
+
+const buildNuclearVisualGroups = (textItems, parserProfile, pageCanvas, viewport, fallbackImageRects = []) => {
+    const questionOwners = buildNuclearQuestionOwners(textItems, parserProfile);
+    if (questionOwners.length === 0) {
+        return [];
+    }
+
+    const usableTextItems = textItems.filter(item => !FOOTER_PAGE_PATTERN.test(item.text.trim()));
+    const textItemsByQuestion = assignNuclearItemsToOwners(usableTextItems, questionOwners, getTextItemRect);
+    const { groupedClusters: fallbackClustersByQuestion } = assignNuclearImageClustersToOwners(fallbackImageRects, questionOwners);
+    const maskedCanvas = buildMaskedCanvasExcludingText(pageCanvas, usableTextItems, viewport);
+
+    return questionOwners.flatMap(questionOwner => {
+        const ownedTextItems = textItemsByQuestion.get(questionOwner.ownerKey) || [];
+        const fallbackClusters = fallbackClustersByQuestion.get(questionOwner.ownerKey) || [];
+        const fallbackRects = fallbackClusters.flatMap(cluster => cluster.imageRects || []);
+        const questionLines = buildTextLineEntriesFromItems(ownedTextItems);
+        const figureAnchors = buildNuclearQuestionFigureAnchors(questionLines, fallbackRects, questionOwner.questionNumber);
+        const visualAtoms = fallbackClusters.length === 0
+            ? buildNuclearVisualAtomsForOwner(maskedCanvas, questionOwner, viewport)
+            : [];
+        const clusters = fallbackClusters.length > 0 ? fallbackClusters : visualAtoms;
+
+        if (clusters.length === 0) {
+            return [];
+        }
+
+        const clusterBoundsRects = clusters.map(cluster => cluster.bounds);
+        const legendBlocks = buildNuclearLegendBlocks(
+            questionLines,
+            clusterBoundsRects,
+            new Set(buildTextItemKeySet([
+                ...(questionOwner.items || []),
+                ...figureAnchors.flatMap(anchor => anchor.items || [])
+            ]))
+        );
+
+        const rawGroups = figureAnchors.length > 0
+            ? (
+                fallbackRects.length > 0
+                    ? buildGroupsWithSeedsFromRects(fallbackRects, figureAnchors, questionOwner.ownerTopY, questionOwner.ownerBottomY)
+                    : buildGroupsWithSeeds(clusters, figureAnchors, questionOwner.ownerTopY, questionOwner.ownerBottomY)
+            )
+            : buildGroupsWithoutExplicitSeeds(clusters, legendBlocks);
+
+        return rawGroups
+            .map(group => {
+                const enrichedGroup = group.seed || group.legendBlock
+                    ? group
+                    : {
+                        ...group,
+                        legendBlock: pickNearestLegendBlock(group.clusters[0], legendBlocks).legend
+                    };
+                return buildNuclearGroupFromClusters(enrichedGroup, questionOwner, ownedTextItems);
+            })
+            .filter(Boolean);
+    });
 };
 
 const getPdfParserProfile = (examCategory) => {
@@ -2712,95 +3489,104 @@ export default function AdminPage() {
                  const pageImages = [];
                  const mergedImageRects = mergeNestedImageRects(rawImageRects);
 
-                 if (mergedImageRects.length > 0) {
-                      if (parserProfile.name === 'nuclear') {
-                          const nuclearGroups = buildNuclearSemanticGroups(filteredTextItems, mergedImageRects, parserProfile);
-                          if (nuclearGroups.length > 0) {
-                              const scale = 1.5;
-                              const viewport = page.getViewport({ scale });
-                              const pageFigureAnchors = buildNuclearFigureAnchors(buildTextLineEntriesFromItems(filteredTextItems));
-                              const pageCanvas = document.createElement('canvas');
-                              pageCanvas.width = viewport.width;
-                              pageCanvas.height = viewport.height;
-                              const canvasCtx = pageCanvas.getContext('2d');
+                 if (parserProfile.name === 'nuclear') {
+                      const scale = 1.5;
+                      const viewport = page.getViewport({ scale });
+                      const pageFigureAnchors = buildNuclearFigureAnchors(buildTextLineEntriesFromItems(filteredTextItems));
+                      const pageCanvas = document.createElement('canvas');
+                      pageCanvas.width = viewport.width;
+                      pageCanvas.height = viewport.height;
+                      const canvasCtx = pageCanvas.getContext('2d');
 
-                              await page.render({
-                                  canvasContext: canvasCtx,
-                                  viewport
-                              }).promise;
+                      await page.render({
+                          canvasContext: canvasCtx,
+                          viewport
+                      }).promise;
 
-                              nuclearGroups.forEach((group, idx) => {
-                                  const currentGroupContainedTextKeys = buildTextItemKeySet(group.textItems || []);
-                                  const bounds = group.bounds;
-                                  const rawPt1 = viewport.convertToViewportPoint(bounds.x, bounds.y);
-                                  const rawPt2 = viewport.convertToViewportPoint(bounds.x + bounds.w, bounds.y + bounds.h);
-                                  const rawRegion = {
-                                      x: Math.min(rawPt1[0], rawPt2[0]),
-                                      y: Math.min(rawPt1[1], rawPt2[1]),
-                                      w: Math.abs(rawPt1[0] - rawPt2[0]),
-                                      h: Math.abs(rawPt1[1] - rawPt2[1])
-                                  };
-                                  const inkBounds = findInkBoundsInCanvasRegion(pageCanvas, rawRegion, {
-                                      strategy: 'union',
-                                      minDarkPixelCount: 24,
-                                      minComponentWidth: 8,
-                                      minComponentHeight: 8
-                                  });
+                      const nuclearGroups = buildNuclearVisualGroups(
+                          filteredTextItems,
+                          parserProfile,
+                          pageCanvas,
+                          viewport,
+                          mergedImageRects
+                      );
 
-                                  let cropX = inkBounds ? inkBounds.x : rawRegion.x;
-                                  let cropY = inkBounds ? inkBounds.y : rawRegion.y;
-                                  let cropW = inkBounds ? inkBounds.w : rawRegion.w;
-                                  let cropH = inkBounds ? inkBounds.h : rawRegion.h;
-
-                                  const safeX = Math.max(0, Math.min(cropX, pageCanvas.width));
-                                  const safeY = Math.max(0, Math.min(cropY, pageCanvas.height));
-                                  const safeW = Math.max(1, Math.min(cropW, pageCanvas.width - safeX));
-                                  const safeH = Math.max(1, Math.min(cropH, pageCanvas.height - safeY));
-
-                                  const cropCanvas = document.createElement('canvas');
-                                  cropCanvas.width = safeW;
-                                  cropCanvas.height = safeH;
-                                  const cropCtx = cropCanvas.getContext('2d');
-                                  cropCtx.drawImage(pageCanvas, safeX, safeY, safeW, safeH, 0, 0, safeW, safeH);
-
-                                  const cropPdfPoint1 = viewport.convertToPdfPoint(safeX, safeY);
-                                  const cropPdfPoint2 = viewport.convertToPdfPoint(safeX + safeW, safeY + safeH);
-                                  const origMinX = Math.min(cropPdfPoint1[0], cropPdfPoint2[0]);
-                                  const origMinY = Math.min(cropPdfPoint1[1], cropPdfPoint2[1]);
-                                  currentGroupContainedTextKeys.forEach(key => imageContainedTextKeys.add(key));
-
-                                  imageCounter++;
-                                  const detectedLegend = cleanLegendPrefix(group.legend || '');
-
-                                  const imgObj = {
-                                      path: cropCanvas.toDataURL('image/png'),
-                                      x: origMinX,
-                                      y: origMinY,
-                                      legend: group.figureLabel || detectedLegend || `図${idx + 1}`,
-                                      detectedLegend: detectedLegend || null,
-                                      detectedLegendRaw: group.legendRaw || '',
-                                      figureNumber: group.figureNumber ?? extractFigureNumber(group.legendRaw || group.legend || ''),
-                                      figureLabel: group.figureLabel || buildFigureLegend(group.legendRaw || group.legend || ''),
-                                      viewportBounds: { x: safeX, y: safeY, w: safeW, h: safeH },
-                                      page: pageNum,
-                                      matchedQNum: group.matchedQNum
-                                  };
-
-                                  pageImages.push(imgObj);
-                                  allExtractedImagesPool.push(imgObj);
+                      if (nuclearGroups.length > 0) {
+                          nuclearGroups.forEach((group, idx) => {
+                              const currentGroupContainedTextKeys = buildTextItemKeySet(group.textItems || []);
+                              const bounds = group.bounds;
+                              const rawPt1 = viewport.convertToViewportPoint(bounds.x, bounds.y);
+                              const rawPt2 = viewport.convertToViewportPoint(bounds.x + bounds.w, bounds.y + bounds.h);
+                              const rawRegion = {
+                                  x: Math.min(rawPt1[0], rawPt2[0]),
+                                  y: Math.min(rawPt1[1], rawPt2[1]),
+                                  w: Math.abs(rawPt1[0] - rawPt2[0]),
+                                  h: Math.abs(rawPt1[1] - rawPt2[1])
+                              };
+                              const inkBounds = findInkBoundsInCanvasRegion(pageCanvas, rawRegion, {
+                                  strategy: 'union',
+                                  minDarkPixelCount: 24,
+                                  minComponentWidth: 8,
+                                  minComponentHeight: 8
                               });
+                              const chosenRegion = chooseConservativeCropRegion(rawRegion, inkBounds);
 
-                              assignFigureAnchorsToNuclearImages(pageImages, pageFigureAnchors, viewport);
-                              pageImages.sort(compareImportedImages);
+                              let cropX = chosenRegion.x;
+                              let cropY = chosenRegion.y;
+                              let cropW = chosenRegion.w;
+                              let cropH = chosenRegion.h;
 
-                              pageImages.forEach((img, idx) => {
-                                  img.legend = resolveImportedImageLegend(img, idx);
-                                  delete img.viewportBounds;
-                              });
+                              const safeX = Math.max(0, Math.min(cropX, pageCanvas.width));
+                              const safeY = Math.max(0, Math.min(cropY, pageCanvas.height));
+                              const safeW = Math.max(1, Math.min(cropW, pageCanvas.width - safeX));
+                              const safeH = Math.max(1, Math.min(cropH, pageCanvas.height - safeY));
 
-                              continue;
-                          }
+                              const cropCanvas = document.createElement('canvas');
+                              cropCanvas.width = safeW;
+                              cropCanvas.height = safeH;
+                              const cropCtx = cropCanvas.getContext('2d');
+                              cropCtx.drawImage(pageCanvas, safeX, safeY, safeW, safeH, 0, 0, safeW, safeH);
+
+                              const cropPdfPoint1 = viewport.convertToPdfPoint(safeX, safeY);
+                              const cropPdfPoint2 = viewport.convertToPdfPoint(safeX + safeW, safeY + safeH);
+                              const origMinX = Math.min(cropPdfPoint1[0], cropPdfPoint2[0]);
+                              const origMinY = Math.min(cropPdfPoint1[1], cropPdfPoint2[1]);
+                              currentGroupContainedTextKeys.forEach(key => imageContainedTextKeys.add(key));
+
+                              imageCounter++;
+                              const detectedLegend = cleanLegendPrefix(group.legend || '');
+
+                              const imgObj = {
+                                  path: cropCanvas.toDataURL('image/png'),
+                                  x: origMinX,
+                                  y: origMinY,
+                                  legend: group.figureLabel || detectedLegend || `図${idx + 1}`,
+                                  detectedLegend: detectedLegend || null,
+                                  detectedLegendRaw: group.legendRaw || '',
+                                  figureNumber: group.figureNumber ?? extractFigureNumber(group.legendRaw || group.legend || ''),
+                                  figureLabel: group.figureLabel || buildFigureLegend(group.legendRaw || group.legend || ''),
+                                  viewportBounds: { x: safeX, y: safeY, w: safeW, h: safeH },
+                                  page: pageNum,
+                                  matchedQNum: group.matchedQNum
+                              };
+
+                              pageImages.push(imgObj);
+                              allExtractedImagesPool.push(imgObj);
+                          });
+
+                          assignFigureAnchorsToNuclearImages(pageImages, pageFigureAnchors, viewport);
+                          pageImages.sort(compareImportedImages);
+
+                          pageImages.forEach((img, idx) => {
+                              img.legend = resolveImportedImageLegend(img, idx);
+                              delete img.viewportBounds;
+                          });
+
+                          continue;
                       }
+                 }
+
+                 if (mergedImageRects.length > 0) {
 
                       const combinedCrops = [];
                       
