@@ -11,6 +11,7 @@ import {
     convertNuclearVlmResultToGroups,
     requestNuclearVlmGrouping
 } from '@/lib/nuclearVlmClient';
+import { mergeNuclearImageFragments } from '@/lib/nuclearFigureGeometry.mjs';
 
 const FOOTER_DASH_CLASS = 'ー―－\\-−–—';
 const FOOTER_PAGE_PATTERN = new RegExp(`^[${FOOTER_DASH_CLASS}]?\\s*[0-9０-９]+\\s*[${FOOTER_DASH_CLASS}]?$`);
@@ -1276,13 +1277,12 @@ const buildNuclearQuestionOwners = (textItems, parserProfile) => {
         .sort((a, b) => b.y - a.y);
 
     return anchors.map((anchor, index) => {
-        const previous = anchors[index - 1] || null;
         const next = anchors[index + 1] || null;
         return {
             ...anchor,
             ownerKey: `${anchor.questionNumber}:${Math.round(anchor.y)}:${index}:${anchor.text || anchor.sectionLegend || ''}`,
-            ownerTopY: previous ? (previous.y + anchor.y) / 2 : pageMaxY,
-            ownerBottomY: next ? (anchor.y + next.y) / 2 : parserProfile.footerMinY
+            ownerTopY: Math.min(pageMaxY, anchor.y + 48),
+            ownerBottomY: next ? next.y + 24 : parserProfile.footerMinY
         };
     });
 };
@@ -1291,25 +1291,13 @@ const scoreNuclearOwnerForRect = (rect, owner) => {
     const rectTopY = rect.y + rect.h;
     const rectBottomY = rect.y;
     const centerY = getRectCenterY(rect);
-    const bandTopY = owner.ownerTopY + 24;
-    const bandBottomY = owner.ownerBottomY - 24;
+    const bandTopY = owner.ownerTopY;
+    const bandBottomY = owner.ownerBottomY;
     const overlapHeight = Math.max(0, Math.min(rectTopY, bandTopY) - Math.max(rectBottomY, bandBottomY));
     const overlapRatio = overlapHeight / Math.max(1, rect.h);
+    const clampedCenterY = Math.max(bandBottomY, Math.min(centerY, bandTopY));
 
-    let score = overlapRatio * 900;
-    score -= Math.abs(owner.y - centerY) * 1.35;
-
-    if (centerY > owner.y + 42) {
-        score -= (centerY - (owner.y + 42)) * 5;
-    }
-    if (centerY < owner.ownerBottomY - 42) {
-        score -= ((owner.ownerBottomY - 42) - centerY) * 4;
-    }
-    if (centerY > owner.ownerTopY + 18) {
-        score -= (centerY - (owner.ownerTopY + 18)) * 6;
-    }
-
-    return score;
+    return (overlapRatio * 1000) - (Math.abs(centerY - clampedCenterY) * 6);
 };
 
 const assignNuclearItemsToOwners = (items, owners, toRect) => {
@@ -1354,18 +1342,12 @@ const shouldLinkNuclearFigureRects = (a, b) => {
     const bMinY = b.y;
     const bMaxY = b.y + b.h;
 
-    const horizontalGap = getRectGap(aMinX, aMaxX, bMinX, bMaxX);
-    const verticalGap = getRectGap(aMinY, aMaxY, bMinY, bMaxY);
     const xOverlap = Math.max(0, Math.min(aMaxX, bMaxX) - Math.max(aMinX, bMinX));
     const yOverlap = Math.max(0, Math.min(aMaxY, bMaxY) - Math.max(aMinY, bMinY));
-    const minWidth = Math.min(a.w, b.w);
-    const minHeight = Math.min(a.h, b.h);
+    const intersectionArea = xOverlap * yOverlap;
+    const minimumArea = Math.min(a.w * a.h, b.w * b.h);
 
-    const touching = horizontalGap <= 4 && verticalGap <= 4;
-    const sameRowNear = yOverlap >= minHeight * 0.45 && horizontalGap <= 22;
-    const sameColumnNear = xOverlap >= minWidth * 0.45 && verticalGap <= 22;
-
-    return touching || sameRowNear || sameColumnNear;
+    return intersectionArea / Math.max(1, minimumArea) >= 0.65;
 };
 
 const buildNuclearImageRectClusters = (rects) => {
@@ -1451,123 +1433,19 @@ const buildGroupsWithoutExplicitSeeds = (clusters, legendBlocks) => {
         return [{ clusters, legendBlock: legendBlocks[0] || null, seed: null }];
     }
 
-    if (legendBlocks.length === clusters.length) {
-        const usedLegendIndexes = new Set();
-        return clusters.map(cluster => {
-            const { legend, index } = pickNearestLegendBlock(cluster, legendBlocks, usedLegendIndexes);
-            if (index >= 0) usedLegendIndexes.add(index);
-            return {
-                clusters: [cluster],
-                legendBlock: legend,
-                seed: null
-            };
-        });
-    }
-
-    if (legendBlocks.length === 1) {
-        return [{ clusters, legendBlock: legendBlocks[0], seed: null }];
-    }
-
-    if (legendBlocks.length === 0 && clusters.length === 4) {
-        const sortedClusters = [...clusters].sort((a, b) => {
-            if (Math.abs(b.centerY - a.centerY) > 20) return b.centerY - a.centerY;
-            return a.centerX - b.centerX;
-        });
-        const rows = [];
-
-        sortedClusters.forEach(cluster => {
-            const matchingRow = rows.find(row => Math.abs(row.centerY - cluster.centerY) <= Math.max(48, cluster.bounds.h * 0.45));
-            if (matchingRow) {
-                matchingRow.clusters.push(cluster);
-                const bounds = unionRects(matchingRow.clusters.map(entry => entry.bounds));
-                matchingRow.bounds = bounds;
-                matchingRow.centerY = getRectCenterY(bounds);
-            } else {
-                rows.push({
-                    clusters: [cluster],
-                    bounds: cluster.bounds,
-                    centerY: cluster.centerY
-                });
-            }
-        });
-
-        if (rows.length === 2 && rows.every(row => row.clusters.length === 2)) {
-            const rowGap = Math.abs(rows[0].bounds.y - (rows[1].bounds.y + rows[1].bounds.h));
-            if (rowGap >= 28) {
-                return sortedClusters.map(cluster => ({
-                    clusters: [cluster],
-                    legendBlock: null,
-                    seed: null
-                }));
-            }
-        }
-    }
-
-    if (legendBlocks.length === 0 && clusters.length === 3) {
-        const sortedByHeight = [...clusters].sort((a, b) => b.bounds.h - a.bounds.h);
-        const tallCluster = sortedByHeight[0];
-        const otherClusters = sortedByHeight.slice(1).sort((a, b) => b.centerY - a.centerY);
-        if (otherClusters.length === 2) {
-            const stackedGap = Math.abs(otherClusters[0].bounds.y - (otherClusters[1].bounds.y + otherClusters[1].bounds.h));
-            const horizontalOverlap = Math.min(
-                otherClusters[0].bounds.x + otherClusters[0].bounds.w,
-                otherClusters[1].bounds.x + otherClusters[1].bounds.w
-            ) - Math.max(otherClusters[0].bounds.x, otherClusters[1].bounds.x);
-            const tallEnough = tallCluster.bounds.h >= Math.max(otherClusters[0].bounds.h, otherClusters[1].bounds.h) * 1.45;
-            const stackedEnough = horizontalOverlap >= Math.min(otherClusters[0].bounds.w, otherClusters[1].bounds.w) * 0.55;
-            if (tallEnough && stackedEnough && stackedGap <= 40) {
-                return [{ clusters, legendBlock: null, seed: null }];
-            }
-        }
-    }
-
-    const sortedClusters = [...clusters].sort((a, b) => {
-        if (Math.abs(b.centerY - a.centerY) > 20) return b.centerY - a.centerY;
-        return a.centerX - b.centerX;
-    });
-    const rows = [];
-
-    sortedClusters.forEach(cluster => {
-        const rowHeight = cluster.bounds.h;
-        const matchingRow = rows.find(row => (
-            Math.abs(row.centerY - cluster.centerY) <= Math.max(40, Math.min(row.height, rowHeight) * 0.7)
-        ));
-
-        if (matchingRow) {
-            matchingRow.clusters.push(cluster);
-            const bounds = unionRects(matchingRow.clusters.map(entry => entry.bounds));
-            matchingRow.centerY = getRectCenterY(bounds);
-            matchingRow.height = bounds.h;
-            matchingRow.bounds = bounds;
-            return;
-        }
-
-        rows.push({
+    // Structural fragments have already been merged. Without explicit evidence,
+    // keep complete image rectangles independent instead of joining a nearby grid.
+    const usedLegendIndexes = new Set();
+    return clusters.map(cluster => {
+        const { legend, index } = pickNearestLegendBlock(cluster, legendBlocks, usedLegendIndexes);
+        if (index >= 0) usedLegendIndexes.add(index);
+        return {
             clusters: [cluster],
-            centerY: cluster.centerY,
-            height: cluster.bounds.h,
-            bounds: cluster.bounds
-        });
+            legendBlock: legend,
+            seed: null
+        };
     });
 
-    if (rows.length > 1) {
-        const usedLegendIndexes = new Set();
-        return rows.map(row => {
-            const pseudoCluster = {
-                centerX: getRectCenterX(row.bounds),
-                centerY: getRectCenterY(row.bounds)
-            };
-            const { legend, index } = pickNearestLegendBlock(pseudoCluster, legendBlocks, usedLegendIndexes);
-            if (index >= 0) usedLegendIndexes.add(index);
-            return {
-                clusters: row.clusters,
-                legendBlock: legend,
-                seed: null
-            };
-        });
-    }
-
-    return [{ clusters, legendBlock: legendBlocks[0] || null, seed: null }];
 };
 
 const buildNuclearAnchorCells = (seeds, ownerTopY, ownerBottomY) => {
@@ -1615,7 +1493,18 @@ const buildGroupsWithSeeds = (clusters, seeds, ownerTopY, ownerBottomY) => {
     if (clusters.length === 0) return [];
     if (seeds.length === 0) return [];
     if (seeds.length === 1) {
-        return [{ clusters, seed: seeds[0], legendBlock: null }];
+        if (clusters.length === 1) {
+            return [{ clusters, seed: seeds[0], legendBlock: null }];
+        }
+        const nearestCluster = [...clusters].sort((first, second) => (
+            Math.hypot(first.centerX - seeds[0].x, first.centerY - seeds[0].y)
+            - Math.hypot(second.centerX - seeds[0].x, second.centerY - seeds[0].y)
+        ))[0];
+        return clusters.map(cluster => ({
+            clusters: [cluster],
+            seed: cluster === nearestCluster ? seeds[0] : null,
+            legendBlock: null
+        }));
     }
 
     const cells = buildNuclearAnchorCells(seeds, ownerTopY, ownerBottomY);
@@ -1657,11 +1546,12 @@ const buildGroupsWithSeeds = (clusters, seeds, ownerTopY, ownerBottomY) => {
 const buildGroupsWithSeedsFromRects = (rects, seeds, ownerTopY, ownerBottomY) => {
     if (rects.length === 0 || seeds.length === 0) return [];
     if (seeds.length === 1) {
-        return [{
-            clusters: buildNuclearImageRectClusters(rects),
-            seed: seeds[0],
-            legendBlock: null
-        }];
+        return buildGroupsWithSeeds(
+            buildNuclearImageRectClusters(rects),
+            seeds,
+            ownerTopY,
+            ownerBottomY
+        );
     }
 
     const cells = buildNuclearAnchorCells(seeds, ownerTopY, ownerBottomY);
@@ -1718,8 +1608,13 @@ const buildNuclearGroupFromClusters = (group, questionOwner, questionTextItems) 
     ];
     const contextBlocks = buildNuclearContextBlocks(questionTextItems, imageRects, anchorItems);
     const attachedRects = contextBlocks.filter(block => block.attached).map(block => block.rect);
+    const seedRect = buildTextItemsBounds(group.seed?.items || []);
     const detachedBlock = group.legendBlock || contextBlocks.find(block => !block.attached) || null;
-    const bounds = unionRectList([...imageRects, ...attachedRects]);
+    const bounds = unionRectList([
+        ...imageRects,
+        ...attachedRects,
+        ...(seedRect ? [seedRect] : [])
+    ]);
 
     if (!bounds) return null;
 
@@ -1743,6 +1638,10 @@ const buildNuclearGroupFromClusters = (group, questionOwner, questionTextItems) 
         figureLabel: group.seed?.figureLabel || buildFigureLegend(legendRaw || legend),
         imageRects,
         textItems,
+        anchorItems: (questionOwner.items || []).filter(item => (
+            NO_QUESTION_LABEL_PATTERN.test(String(item.text || '').trim())
+            || INLINE_NO_QUESTION_PREFIX_PATTERN.test(String(item.text || '').trim())
+        )),
         bounds: expandRect(bounds, 8, 8),
         ownerTopY: questionOwner.ownerTopY,
         ownerBottomY: questionOwner.ownerBottomY
@@ -2998,6 +2897,8 @@ export default function AdminPage() {
             let nuclearVlmReady = false;
             let nuclearVlmPageCount = 0;
             let nuclearVlmFailureCount = 0;
+            let nuclearVlmConsecutiveFailureCount = 0;
+            let nuclearVlmPartialPageCount = 0;
             let nuclearRuleFallbackPageCount = 0;
 
             if (parserProfile.name === 'nuclear' && nuclearVlmEnabled) {
@@ -3542,14 +3443,19 @@ export default function AdminPage() {
                       }).promise;
 
                       let nuclearGroups = [];
+                      let pageUsedRuleFallback = false;
+                      const nuclearImageRects = mergeNuclearImageFragments(
+                          mergedImageRects,
+                          viewport.width / viewport.scale
+                      );
 
-                      if (nuclearVlmReady && mergedImageRects.length > 0) {
+                      if (nuclearVlmReady && nuclearImageRects.length > 0) {
                           const questionOwners = buildNuclearQuestionOwners(filteredTextItems, parserProfile);
                           const pageRequest = buildNuclearVlmPageRequest({
                               pageNumber: pageNum,
                               pageCanvas,
                               viewport,
-                              imageRects: mergedImageRects,
+                              imageRects: nuclearImageRects,
                               textLines: buildTextLineEntriesFromItems(filteredTextItems),
                               questionOwners
                           });
@@ -3561,17 +3467,28 @@ export default function AdminPage() {
                               }));
                               try {
                                   const vlmPayload = await requestNuclearVlmGrouping(pageRequest);
-                                  nuclearGroups = convertNuclearVlmResultToGroups(pageRequest, vlmPayload);
-                                  if (nuclearGroups.length > 0) {
+                                  const conversion = convertNuclearVlmResultToGroups(pageRequest, vlmPayload);
+                                  nuclearGroups = conversion.groups;
+                                  nuclearVlmConsecutiveFailureCount = 0;
+                                  if (conversion.vlmGroupCount > 0) {
                                       nuclearVlmPageCount += 1;
-                                  } else {
+                                  }
+                                  if (conversion.fallbackGroupCount > 0) {
+                                      pageUsedRuleFallback = true;
+                                      nuclearRuleFallbackPageCount += 1;
+                                      if (conversion.vlmGroupCount > 0) {
+                                          nuclearVlmPartialPageCount += 1;
+                                      }
+                                  }
+                                  if (conversion.vlmGroupCount === 0) {
                                       nuclearVlmFailureCount += 1;
-                                      console.warn(`Nuclear VLM result rejected on page ${pageNum}: validation failed`);
+                                      console.warn(`Nuclear VLM result used only algorithmic groups on page ${pageNum}`);
                                   }
                               } catch (vlmError) {
                                   nuclearVlmFailureCount += 1;
+                                  nuclearVlmConsecutiveFailureCount += 1;
                                   console.warn(`Nuclear VLM grouping failed on page ${pageNum}:`, vlmError);
-                                  if (nuclearVlmFailureCount >= 2) {
+                                  if (nuclearVlmConsecutiveFailureCount >= 2) {
                                       nuclearVlmReady = false;
                                       setNuclearVlmStatus(prev => ({
                                           ...prev,
@@ -3584,15 +3501,16 @@ export default function AdminPage() {
                       }
 
                       if (nuclearGroups.length === 0) {
-                          if (mergedImageRects.length > 0) {
+                          if (nuclearImageRects.length > 0 && !pageUsedRuleFallback) {
                               nuclearRuleFallbackPageCount += 1;
+                              pageUsedRuleFallback = true;
                           }
                           nuclearGroups = buildNuclearVisualGroups(
                               filteredTextItems,
                               parserProfile,
                               pageCanvas,
                               viewport,
-                              mergedImageRects
+                              nuclearImageRects
                           );
                       }
 
@@ -3631,6 +3549,22 @@ export default function AdminPage() {
                               cropCanvas.height = safeH;
                               const cropCtx = cropCanvas.getContext('2d');
                               cropCtx.drawImage(pageCanvas, safeX, safeY, safeW, safeH, 0, 0, safeW, safeH);
+                              cropCtx.fillStyle = '#FFFFFF';
+                              (group.anchorItems || []).forEach(item => {
+                                  const anchorRect = convertPdfRectToViewportRect(getTextItemRect(item), viewport);
+                                  const maskX = Math.floor(anchorRect.x - safeX) - 2;
+                                  const maskY = Math.floor(anchorRect.y - safeY) - 2;
+                                  const maskW = Math.ceil(anchorRect.w) + 4;
+                                  const maskH = Math.ceil(anchorRect.h) + 4;
+                                  if (
+                                      maskX < safeW
+                                      && maskY < safeH
+                                      && maskX + maskW > 0
+                                      && maskY + maskH > 0
+                                  ) {
+                                      cropCtx.fillRect(maskX, maskY, maskW, maskH);
+                                  }
+                              });
 
                               const cropPdfPoint1 = viewport.convertToPdfPoint(safeX, safeY);
                               const cropPdfPoint2 = viewport.convertToPdfPoint(safeX + safeW, safeY + safeH);
@@ -4197,7 +4131,7 @@ export default function AdminPage() {
             setParsedYearInput(String(detectedYear));
             setImageMap(finalImageMap);
             const vlmSummary = parserProfile.name === 'nuclear' && nuclearVlmEnabled
-                ? ` VLM採用: ${nuclearVlmPageCount}ページ、従来方式: ${nuclearRuleFallbackPageCount}ページ、VLM応答不採用: ${nuclearVlmFailureCount}ページ。`
+                ? ` VLM採用: ${nuclearVlmPageCount}ページ（部分採用: ${nuclearVlmPartialPageCount}ページ）、従来方式併用: ${nuclearRuleFallbackPageCount}ページ、VLM応答不採用: ${nuclearVlmFailureCount}ページ。`
                 : '';
             setSuccessMsg(`PDFの自動パースが完了しました！合計 ${finalQuestions.length} 問の問題と画像を登録しました。${vlmSummary}内容を確認して保存してください。`);
         } catch (err) {

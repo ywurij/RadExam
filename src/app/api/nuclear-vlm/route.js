@@ -115,35 +115,81 @@ const validateObjects = (objects) => {
         if (!anchorIds.has(object.defaultQuestionAnchorId)) {
             throw new Error(`Image ${object.id} has an invalid default question anchor`);
         }
+        if (
+            !Array.isArray(object.candidateQuestionAnchorIds)
+            || object.candidateQuestionAnchorIds.length === 0
+            || object.candidateQuestionAnchorIds.some(id => !anchorIds.has(id))
+        ) {
+            throw new Error(`Image ${object.id} has invalid candidate question anchors`);
+        }
     });
 };
 
 const normalizeGroupingResponse = (result, objects) => {
     if (!result || !Array.isArray(result.groups)) return result;
 
+    const objectById = new Map(objects.map(object => [object.id, object]));
     const imageById = new Map(
         objects
             .filter(object => object.type === 'image')
             .map(object => [object.id, object])
     );
+    const textIds = new Set(objects.filter(object => object.type === 'text').map(object => object.id));
+
+    const getPartitionBounds = imageIds => {
+        const boxes = imageIds.map(id => imageById.get(id)?.bbox).filter(Boolean);
+        if (boxes.length === 0) return null;
+        return [
+            Math.min(...boxes.map(box => box[0])),
+            Math.min(...boxes.map(box => box[1])),
+            Math.max(...boxes.map(box => box[2])),
+            Math.max(...boxes.map(box => box[3]))
+        ];
+    };
+
+    const getBoxDistance = (first, second) => {
+        const horizontalGap = Math.max(0, first[0] - second[2], second[0] - first[2]);
+        const verticalGap = Math.max(0, first[1] - second[3], second[1] - first[3]);
+        return Math.hypot(horizontalGap, verticalGap);
+    };
 
     const sectionNormalizedGroups = result.groups.flatMap(group => {
         if (!group || !Array.isArray(group.imageIds)) return [group];
 
         const imageIdsByAnchor = new Map();
         group.imageIds.forEach(imageId => {
-            const anchorId = imageById.get(imageId)?.defaultQuestionAnchorId || group.questionAnchorId;
+            const image = imageById.get(imageId);
+            if (!image) return;
+            const candidates = Array.isArray(image.candidateQuestionAnchorIds)
+                ? image.candidateQuestionAnchorIds
+                : [image.defaultQuestionAnchorId];
+            const anchorId = candidates.includes(group.questionAnchorId)
+                ? group.questionAnchorId
+                : image.defaultQuestionAnchorId;
             if (!imageIdsByAnchor.has(anchorId)) imageIdsByAnchor.set(anchorId, []);
             imageIdsByAnchor.get(anchorId).push(imageId);
         });
 
         const partitions = [...imageIdsByAnchor.entries()];
+        const legendIdsByPartition = new Map(partitions.map(([anchorId]) => [anchorId, []]));
+        (group.legendIds || []).filter(id => textIds.has(id)).forEach(legendId => {
+            const legendBox = objectById.get(legendId)?.bbox;
+            if (!legendBox || partitions.length === 0) return;
+            const nearest = partitions
+                .map(([anchorId, imageIds]) => ({
+                    anchorId,
+                    distance: getBoxDistance(legendBox, getPartitionBounds(imageIds))
+                }))
+                .sort((first, second) => first.distance - second.distance)[0];
+            legendIdsByPartition.get(nearest.anchorId)?.push(legendId);
+        });
+
         return partitions.map(([anchorId, imageIds], index) => ({
             ...group,
             groupId: partitions.length > 1 ? `${group.groupId}-section-${index + 1}` : group.groupId,
             questionAnchorId: anchorId,
             imageIds,
-            legendIds: partitions.length > 1 ? [] : group.legendIds,
+            legendIds: legendIdsByPartition.get(anchorId) || [],
             mergeReason: imageIds.length === 1 ? 'single_image' : group.mergeReason
         }));
     });
@@ -156,17 +202,28 @@ const normalizeGroupingResponse = (result, objects) => {
         ) {
             return [group];
         }
-        if (Array.isArray(group.legendIds) && group.legendIds.length > 0) {
-            return [group];
-        }
 
-        return group.imageIds.map((imageId, index) => ({
-            ...group,
-            groupId: `${group.groupId}-${index + 1}`,
-            imageIds: [imageId],
-            legendIds: [],
-            mergeReason: 'single_image'
-        }));
+        return group.imageIds.map((imageId, index) => {
+            const imageBox = imageById.get(imageId)?.bbox;
+            const legendIds = (group.legendIds || []).filter(legendId => {
+                const legendBox = objectById.get(legendId)?.bbox;
+                if (!imageBox || !legendBox) return false;
+                const nearestImageId = group.imageIds
+                    .map(candidateId => ({
+                        candidateId,
+                        distance: getBoxDistance(legendBox, imageById.get(candidateId)?.bbox)
+                    }))
+                    .sort((first, second) => first.distance - second.distance)[0]?.candidateId;
+                return nearestImageId === imageId;
+            });
+            return {
+                ...group,
+                groupId: `${group.groupId}-${index + 1}`,
+                imageIds: [imageId],
+                legendIds,
+                mergeReason: 'single_image'
+            };
+        });
     });
 
     const winningGroupByImageId = new Map();
@@ -187,19 +244,39 @@ const normalizeGroupingResponse = (result, objects) => {
         });
     });
 
+    const usedLegendIds = new Set();
     const deduplicatedGroups = mergeNormalizedGroups
         .map((group, groupIndex) => {
             const imageIds = (group?.imageIds || []).filter(imageId => (
                 winningGroupByImageId.get(imageId)?.groupIndex === groupIndex
             ));
             if (imageIds.length === 0) return null;
+            const legendIds = (group.legendIds || []).filter(id => {
+                if (!textIds.has(id) || usedLegendIds.has(id)) return false;
+                usedLegendIds.add(id);
+                return true;
+            });
             return {
                 ...group,
                 imageIds,
+                legendIds,
                 mergeReason: imageIds.length === 1 ? 'single_image' : group.mergeReason
             };
         })
         .filter(Boolean);
+
+    const assignedImageIds = new Set(deduplicatedGroups.flatMap(group => group.imageIds));
+    imageById.forEach((image, imageId) => {
+        if (assignedImageIds.has(imageId)) return;
+        deduplicatedGroups.push({
+            groupId: `algorithmic-fallback-${imageId}`,
+            questionAnchorId: image.defaultQuestionAnchorId,
+            imageIds: [imageId],
+            legendIds: [],
+            mergeReason: 'single_image',
+            confidence: 0
+        });
+    });
 
     return {
         ...result,
@@ -236,8 +313,8 @@ const validateGroupingResponse = (result, objects) => {
             if (image?.type !== 'image') {
                 throw new Error(`Unknown image id: ${id}`);
             }
-            if (image.defaultQuestionAnchorId !== group.questionAnchorId) {
-                throw new Error(`Image ${id} was moved outside its algorithmic question section`);
+            if (!image.candidateQuestionAnchorIds.includes(group.questionAnchorId)) {
+                throw new Error(`Image ${id} was moved outside its candidate question sections`);
             }
             assignedImageIds.push(id);
         });
@@ -296,7 +373,7 @@ The page image contains colored boxes with stable IDs:
 Return only data matching the supplied JSON schema.
 
 Tasks:
-1. Keep every I* object under its supplied defaultQuestionAnchorId. Question ownership was already resolved algorithmically and must not be changed.
+1. Assign every I* object to one of its candidateQuestionAnchorIds. Prefer defaultQuestionAnchorId, but choose an adjacent candidate when the visible anchor, labels, or section layout clearly shows that the default is wrong.
 2. Within each question, divide the images into the figures that should be registered separately.
 3. Attach only T* objects whose position or wording is meaningful to that figure.
 4. Set mergeReason to single_image for one I* object. For multiple I* objects, select the concrete visual evidence that justifies merging them.
@@ -310,6 +387,7 @@ Grouping rules:
 - Alignment in a row or grid alone does not make images one figure. Keep individually separable panels apart unless a shared frame, shared legend, or internal labels make their relative layout meaningful.
 - The appendix normally follows top-to-bottom reading order: an A* anchor starts a question section, and its figures follow below it until the next A* anchor. An image above the next anchor normally belongs to the preceding anchor, even if it is physically closer to the next anchor.
 - A figure may cross a midpoint between anchors. An anchor can exceptionally be below its own figure, but use that exception only when labels or composition clearly support it; never assign by proximity alone.
+- candidateQuestionAnchorIds are deliberately limited to adjacent sections. Never use any other A* object.
 - No.XX and No.XX-Y are question anchors, not legends. Never include A* in legendIds.
 - Text such as 図1, 術前, 術後, 安静時, 負荷時, 左, 右, modality names, and panel labels can be legends when spatially attached.
 - Do not invent IDs, text, coordinates, or images.
@@ -370,6 +448,9 @@ export async function POST(request) {
             questionNumber: Number.isInteger(object.questionNumber) ? object.questionNumber : undefined,
             defaultQuestionAnchorId: typeof object.defaultQuestionAnchorId === 'string'
                 ? object.defaultQuestionAnchorId
+                : undefined,
+            candidateQuestionAnchorIds: Array.isArray(object.candidateQuestionAnchorIds)
+                ? object.candidateQuestionAnchorIds.filter(id => typeof id === 'string')
                 : undefined,
             bbox: object.bbox.map(value => Math.round(value))
         }));

@@ -1,3 +1,9 @@
+import {
+    assignRectToQuestionAnchor,
+    getRectDistance,
+    mergeNuclearImageFragments
+} from './nuclearFigureGeometry.mjs';
+
 const MIN_GROUP_CONFIDENCE = 0.45;
 const MAX_TEXT_OBJECTS = 120;
 const MAX_OBJECTS = 180;
@@ -53,58 +59,34 @@ const splitItemsIntoSpatialRuns = (items = []) => {
     return runs.filter(run => run.text);
 };
 
+const extractQuestionAnchorItems = (items = []) => {
+    const sortedItems = [...items].sort((first, second) => first.x - second.x);
+    const startIndex = sortedItems.findIndex(item => /(?:No\.?|NO\.?)/i.test(String(item.text || '')));
+    if (startIndex < 0) return [];
+
+    const anchorItems = [sortedItems[startIndex]];
+    if (/[0-9０-９]{1,3}/.test(String(sortedItems[startIndex].text || ''))) {
+        return anchorItems;
+    }
+
+    for (let index = startIndex + 1; index < sortedItems.length; index++) {
+        const item = sortedItems[index];
+        const previous = anchorItems[anchorItems.length - 1];
+        const gap = item.x - (previous.x + Math.max(1, previous.width || 0));
+        if (gap > Math.max(12, item.height || 12)) break;
+        anchorItems.push(item);
+        if (/[0-9０-９]{1,3}/.test(String(item.text || ''))) break;
+    }
+
+    return anchorItems;
+};
+
 const expandRect = (rect, padding = 8) => ({
     x: rect.x - padding,
     y: rect.y - padding,
     w: rect.w + padding * 2,
     h: rect.h + padding * 2
 });
-
-const doRectsOverlap = (first, second) => (
-    first.x < second.x + second.w
-    && first.x + first.w > second.x
-    && first.y < second.y + second.h
-    && first.y + first.h > second.y
-);
-
-const getAxisGap = (firstMin, firstMax, secondMin, secondMax) => {
-    if (firstMax < secondMin) return secondMin - firstMax;
-    if (secondMax < firstMin) return firstMin - secondMax;
-    return 0;
-};
-
-const mergeWideVerticalPdfSlices = (rects, pageWidth) => {
-    if (!Number.isFinite(pageWidth) || rects.length <= 1) return rects;
-
-    const minimumSliceWidth = pageWidth * 0.52;
-    const pending = [...rects].sort((a, b) => b.y - a.y);
-    const merged = [];
-
-    pending.forEach(rect => {
-        const matchIndex = merged.findIndex(existing => {
-            const verticalGap = getAxisGap(
-                existing.y,
-                existing.y + existing.h,
-                rect.y,
-                rect.y + rect.h
-            );
-            return existing.w >= minimumSliceWidth
-                && rect.w >= minimumSliceWidth
-                && Math.abs(existing.x - rect.x) <= 3
-                && Math.abs(existing.w - rect.w) <= 3
-                && verticalGap <= 3;
-        });
-
-        if (matchIndex === -1) {
-            merged.push({ ...rect });
-            return;
-        }
-
-        merged[matchIndex] = unionRects([merged[matchIndex], rect]);
-    });
-
-    return merged;
-};
 
 const pdfRectToViewportRect = (rect, viewport) => {
     const first = viewport.convertToViewportPoint(rect.x, rect.y);
@@ -176,13 +158,10 @@ export const buildNuclearVlmPageRequest = ({
     const objects = [];
     const anchorItemKeys = new Set();
     const pageWidth = viewport.width / viewport.scale;
-    const normalizedImageRects = mergeWideVerticalPdfSlices(imageRects, pageWidth);
+    const normalizedImageRects = mergeNuclearImageFragments(imageRects, pageWidth);
 
     questionOwners.forEach((owner, index) => {
-        const ownerRuns = splitItemsIntoSpatialRuns(owner.items || []);
-        const anchorRun = ownerRuns.find(run => /(?:No\.?|NO\.?)\s*[0-9０-９]{1,3}/i.test(run.text))
-            || buildTextRun(owner.items || []);
-        const anchorItems = anchorRun.items || [];
+        const anchorItems = extractQuestionAnchorItems(owner.items || []);
         const rect = getItemsRect(anchorItems);
         if (!rect) return;
         anchorItems.forEach(item => anchorItemKeys.add(getItemKey(item)));
@@ -191,7 +170,7 @@ export const buildNuclearVlmPageRequest = ({
         const object = {
             id,
             type: 'question_anchor',
-            text: anchorRun.text || owner.text || owner.rawText || `No.${owner.questionNumber}`,
+            text: buildTextRun(anchorItems).text || `No.${owner.questionNumber}`,
             questionNumber: owner.questionNumber,
             bbox: normalizeViewportRect(viewportRect, pageCanvas),
             viewportRect
@@ -209,15 +188,16 @@ export const buildNuclearVlmPageRequest = ({
         .forEach((rect, index) => {
             const id = `I${index + 1}`;
             const viewportRect = pdfRectToViewportRect(rect, viewport);
-            const centerY = viewportRect.y + viewportRect.h / 2;
-            const precedingAnchors = visualAnchors.filter(anchor => (
-                anchor.viewportRect.y + anchor.viewportRect.h / 2 <= centerY
-            ));
-            const defaultAnchor = precedingAnchors[precedingAnchors.length - 1] || visualAnchors[0];
+            const { defaultAnchor, candidateAnchorIds } = assignRectToQuestionAnchor(
+                viewportRect,
+                visualAnchors,
+                pageCanvas.height
+            );
             const object = {
                 id,
                 type: 'image',
                 defaultQuestionAnchorId: defaultAnchor?.id,
+                candidateQuestionAnchorIds: candidateAnchorIds,
                 bbox: normalizeViewportRect(viewportRect, pageCanvas),
                 viewportRect
             };
@@ -258,6 +238,7 @@ export const buildNuclearVlmPageRequest = ({
     const publicObjects = objects.map(({ viewportRect: _viewportRect, ...object }) => object);
     return {
         pageNumber,
+        pageCanvasHeight: pageCanvas.height,
         imageDataUrl: drawObjectOverlay(pageCanvas, objects),
         objects: publicObjects,
         sourceById
@@ -281,47 +262,187 @@ export const requestNuclearVlmGrouping = async (pageRequest) => {
     return payload;
 };
 
-export const convertNuclearVlmResultToGroups = (pageRequest, payload) => {
-    const groups = payload?.result?.groups;
-    if (!Array.isArray(groups) || groups.length === 0) return [];
+const isLikelyLegendText = (text) => {
+    const trimmed = String(text || '').trim();
+    if (!trimmed || trimmed.length > 50) return false;
+    if (/^(?:No\.?|NO\.?)\s*[0-9０-９]{1,3}(?:\s*[-ー−‐–―]\s*[0-9０-９]+)?$/i.test(trimmed)) return false;
+    if (/^[-ー―－−–—]?\s*[0-9０-９]+\s*[-ー―－−–—]?$/.test(trimmed)) return false;
+    if (trimmed.length <= 24) return true;
 
+    return /(?:画像|断面|断層|前面|後面|術前|術後|安静|負荷|PET|CT|MRI|SPECT|MIP|FDG|BMIPP|PYP|MIBG|Tl|Tc|I-?123|I-?131)/i.test(trimmed);
+};
+
+const getOverlapLength = (firstMin, firstMax, secondMin, secondMax) => (
+    Math.max(0, Math.min(firstMax, secondMax) - Math.max(firstMin, secondMin))
+);
+
+const getTextAttachmentScore = (textRect, imageRects) => {
+    let bestScore = Infinity;
+
+    imageRects.forEach(imageRect => {
+        const { horizontalGap, verticalGap, distance } = getRectDistance(textRect, imageRect);
+        const xOverlap = getOverlapLength(
+            textRect.x,
+            textRect.x + textRect.w,
+            imageRect.x,
+            imageRect.x + imageRect.w
+        );
+        const yOverlap = getOverlapLength(
+            textRect.y,
+            textRect.y + textRect.h,
+            imageRect.y,
+            imageRect.y + imageRect.h
+        );
+        const topOrBottom = xOverlap >= Math.min(textRect.w * 0.45, imageRect.w * 0.18)
+            && verticalGap <= 72;
+        const side = yOverlap >= Math.min(textRect.h * 0.45, imageRect.h * 0.12)
+            && horizontalGap <= 72;
+        const corner = horizontalGap <= 32 && verticalGap <= 32;
+
+        if (topOrBottom || side || corner || distance === 0) {
+            const alignmentPenalty = topOrBottom ? horizontalGap : verticalGap;
+            bestScore = Math.min(bestScore, distance + alignmentPenalty * 0.25);
+        }
+    });
+
+    return bestScore;
+};
+
+const attachLegendSources = (groupRecords, pageRequest) => {
+    const visualAnchors = pageRequest.objects
+        .filter(object => object.type === 'question_anchor')
+        .map(object => pageRequest.sourceById.get(object.id))
+        .filter(Boolean)
+        .sort((first, second) => first.viewportRect.y - second.viewportRect.y);
+    const textSources = pageRequest.objects
+        .filter(object => object.type === 'text')
+        .map(object => pageRequest.sourceById.get(object.id))
+        .filter(source => source?.rect && source?.viewportRect && isLikelyLegendText(source.text));
+    const assignedTextIds = new Set();
+
+    groupRecords.forEach(record => {
+        record.legendSources = [];
+        record.requestedLegendIds.forEach(id => {
+            if (assignedTextIds.has(id)) return;
+            const source = pageRequest.sourceById.get(id);
+            if (!source?.viewportRect || !isLikelyLegendText(source.text)) return;
+            const score = getTextAttachmentScore(
+                source.viewportRect,
+                record.imageSources.map(image => image.viewportRect)
+            );
+            if (!Number.isFinite(score)) return;
+            assignedTextIds.add(id);
+            record.legendSources.push(source);
+        });
+    });
+
+    textSources.forEach(source => {
+        if (assignedTextIds.has(source.id)) return;
+        const textAnchorId = assignRectToQuestionAnchor(
+            source.viewportRect,
+            visualAnchors,
+            pageRequest.pageCanvasHeight
+        ).defaultAnchor?.id;
+        const candidates = groupRecords
+            .filter(record => record.questionAnchorId === textAnchorId)
+            .map(record => ({
+                record,
+                score: getTextAttachmentScore(
+                    source.viewportRect,
+                    record.imageSources.map(image => image.viewportRect)
+                )
+            }))
+            .filter(candidate => Number.isFinite(candidate.score))
+            .sort((first, second) => first.score - second.score);
+
+        if (candidates.length === 0) return;
+        assignedTextIds.add(source.id);
+        candidates[0].record.legendSources.push(source);
+    });
+};
+
+export const convertNuclearVlmResultToGroups = (pageRequest, payload) => {
     const expectedImageIds = pageRequest.objects
         .filter(object => object.type === 'image')
         .map(object => object.id);
-    const assignedImageIds = groups.flatMap(group => group.imageIds || []);
-    if (assignedImageIds.length !== expectedImageIds.length || new Set(assignedImageIds).size !== expectedImageIds.length) {
-        return [];
-    }
-    if (expectedImageIds.some(id => !assignedImageIds.includes(id))) {
-        return [];
-    }
-    if (groups.some(group => !Number.isFinite(group.confidence) || group.confidence < MIN_GROUP_CONFIDENCE)) {
-        return [];
-    }
+    const expectedImageIdSet = new Set(expectedImageIds);
+    const rawGroups = Array.isArray(payload?.result?.groups) ? payload.result.groups : [];
+    const assignedImageIds = new Set();
+    const groupRecords = [];
+    let vlmGroupCount = 0;
+    let fallbackGroupCount = 0;
 
-    return groups.map(group => {
+    rawGroups.forEach(group => {
+        const imageIds = (group?.imageIds || []).filter(id => (
+            expectedImageIdSet.has(id) && !assignedImageIds.has(id)
+        ));
+        if (imageIds.length === 0) return;
+
+        const accepted = Number.isFinite(group.confidence) && group.confidence >= MIN_GROUP_CONFIDENCE;
+        if (!accepted) {
+            imageIds.forEach(imageId => {
+                const imageSource = pageRequest.sourceById.get(imageId);
+                if (!imageSource) return;
+                assignedImageIds.add(imageId);
+                fallbackGroupCount += 1;
+                groupRecords.push({
+                    groupId: `fallback-${imageId}`,
+                    questionAnchorId: imageSource.defaultQuestionAnchorId,
+                    imageSources: [imageSource],
+                    requestedLegendIds: [],
+                    confidence: group.confidence || 0,
+                    usedVlm: false
+                });
+            });
+            return;
+        }
+
+        const imageSources = imageIds.map(id => pageRequest.sourceById.get(id)).filter(Boolean);
         const anchorSource = pageRequest.sourceById.get(group.questionAnchorId);
-        const imageSources = group.imageIds.map(id => pageRequest.sourceById.get(id));
-        const legendSources = group.legendIds.map(id => pageRequest.sourceById.get(id));
-        if (!anchorSource?.owner || imageSources.some(source => !source?.rect) || legendSources.some(source => !source?.rect)) {
-            return null;
-        }
+        if (!anchorSource?.owner || imageSources.length !== imageIds.length) return;
+        imageIds.forEach(id => assignedImageIds.add(id));
+        vlmGroupCount += 1;
+        groupRecords.push({
+            groupId: group.groupId,
+            questionAnchorId: group.questionAnchorId,
+            imageSources,
+            requestedLegendIds: Array.isArray(group.legendIds) ? group.legendIds : [],
+            confidence: group.confidence,
+            usedVlm: true
+        });
+    });
 
-        const imageRects = imageSources.map(source => source.rect);
+    expectedImageIds.forEach(imageId => {
+        if (assignedImageIds.has(imageId)) return;
+        const imageSource = pageRequest.sourceById.get(imageId);
+        if (!imageSource) return;
+        fallbackGroupCount += 1;
+        groupRecords.push({
+            groupId: `fallback-${imageId}`,
+            questionAnchorId: imageSource.defaultQuestionAnchorId,
+            imageSources: [imageSource],
+            requestedLegendIds: [],
+            confidence: 0,
+            usedVlm: false
+        });
+    });
+
+    attachLegendSources(groupRecords, pageRequest);
+
+    const groups = groupRecords.map(record => {
+        const anchorSource = pageRequest.sourceById.get(record.questionAnchorId);
+        if (!anchorSource?.owner) return null;
+        const imageRects = record.imageSources.map(source => source.rect);
+        const legendSources = [...record.legendSources].sort((first, second) => {
+            if (Math.abs(first.viewportRect.y - second.viewportRect.y) > 8) {
+                return first.viewportRect.y - second.viewportRect.y;
+            }
+            return first.viewportRect.x - second.viewportRect.x;
+        });
         const legendRects = legendSources.map(source => source.rect);
-        const imageBounds = unionRects(imageRects);
-        const allowedLegendRegion = imageBounds ? expandRect(imageBounds, 90) : null;
-        if (!allowedLegendRegion || legendRects.some(rect => !doRectsOverlap(allowedLegendRegion, rect))) {
-            return null;
-        }
         const bounds = unionRects([...imageRects, ...legendRects]);
         if (!bounds) return null;
-
-        const legendRaw = legendSources
-            .map(source => source.text)
-            .filter(Boolean)
-            .join(' ')
-            .trim();
+        const legendRaw = legendSources.map(source => source.text).filter(Boolean).join(' ').trim();
 
         return {
             bounds: expandRect(bounds),
@@ -333,8 +454,11 @@ export const convertNuclearVlmResultToGroups = (pageRequest, payload) => {
             textItems: legendSources.flatMap(source => source.items || []),
             imageRects,
             anchorItems: anchorSource.items || [],
-            vlmConfidence: group.confidence,
-            vlmGroupId: group.groupId
+            vlmConfidence: record.confidence,
+            vlmGroupId: record.groupId,
+            usedVlm: record.usedVlm
         };
     }).filter(Boolean);
+
+    return { groups, vlmGroupCount, fallbackGroupCount };
 };
