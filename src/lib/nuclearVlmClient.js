@@ -1,5 +1,6 @@
 import {
     assignRectToQuestionAnchor,
+    buildNuclearDisplayLegend,
     getRectDistance,
     mergeNuclearImageFragments
 } from './nuclearFigureGeometry.mjs';
@@ -267,6 +268,7 @@ const isLikelyLegendText = (text) => {
     if (!trimmed || trimmed.length > 50) return false;
     if (/^(?:No\.?|NO\.?)\s*[0-9０-９]{1,3}(?:\s*[-ー−‐–―]\s*[0-9０-９]+)?$/i.test(trimmed)) return false;
     if (/^[-ー―－−–—]?\s*[0-9０-９]+\s*[-ー―－−–—]?$/.test(trimmed)) return false;
+    if (/^(?:別紙|別冊|別図|付図|参考図|設問|試験問題|筆記)$/i.test(trimmed)) return false;
     if (trimmed.length <= 24) return true;
 
     return /(?:画像|断面|断層|前面|後面|術前|術後|安静|負荷|PET|CT|MRI|SPECT|MIP|FDG|BMIPP|PYP|MIBG|Tl|Tc|I-?123|I-?131)/i.test(trimmed);
@@ -443,12 +445,14 @@ export const convertNuclearVlmResultToGroups = (pageRequest, payload) => {
         const bounds = unionRects([...imageRects, ...legendRects]);
         if (!bounds) return null;
         const legendRaw = legendSources.map(source => source.text).filter(Boolean).join(' ').trim();
+        const displayLegend = buildNuclearDisplayLegend(legendSources);
 
         return {
             bounds: expandRect(bounds),
             matchedQNum: anchorSource.owner.questionNumber,
-            legend: legendRaw,
+            legend: displayLegend,
             legendRaw,
+            displayLegend,
             figureNumber: null,
             figureLabel: '',
             textItems: legendSources.flatMap(source => source.items || []),

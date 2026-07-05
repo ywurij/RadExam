@@ -107,9 +107,59 @@ export const assignRectToQuestionAnchor = (viewportRect, visualAnchors, pageHeig
     ), null);
     const defaultAnchor = bestSection?.anchor || visualAnchors[0];
     const defaultIndex = Math.max(0, visualAnchors.findIndex(anchor => anchor.id === defaultAnchor.id));
-    const candidateAnchorIds = [defaultIndex - 1, defaultIndex, defaultIndex + 1]
-        .filter(index => index >= 0 && index < visualAnchors.length)
-        .map(index => visualAnchors[index].id);
+    const strongestOverlap = Math.max(1, bestSection?.overlap || 0);
+    const candidateAnchorIds = sections
+        .filter(section => {
+            if (section.index === defaultIndex) return true;
+            if (Math.abs(section.index - defaultIndex) !== 1) return false;
+            if (section.overlap >= strongestOverlap * 0.5) return true;
+
+            const anchorCenter = section.anchor.viewportRect.y + section.anchor.viewportRect.h / 2;
+            const immediatelyBeforeAnchor = imageBottom <= anchorCenter
+                && anchorCenter - imageBottom <= 32;
+            return immediatelyBeforeAnchor;
+        })
+        .sort((first, second) => (
+            first.index === defaultIndex ? -1 : second.index === defaultIndex ? 1 : first.index - second.index
+        ))
+        .map(section => section.anchor.id);
 
     return { defaultAnchor, candidateAnchorIds };
+};
+
+const normalizeCaptionText = text => String(text || '')
+    .replace(/^[\s\[\]［］【】]*(?:No\.?|NO\.?)\s*[0-9０-９]{1,3}(?:\s*[-ー−‐–―]\s*[0-9０-９A-Za-z]+)?\s*/i, '')
+    .replace(/^(?:図|画像|Fig\.?)\s*[0-9０-９]+[\s.:：．]*\s*/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+export const buildNuclearDisplayLegend = (textSources = []) => {
+    const validSources = textSources.filter(source => source?.text && source?.viewportRect);
+    const figureSource = validSources.find(source => (
+        /^(?:図|画像|Fig\.?)\s*[0-9０-９]+/i.test(String(source.text).trim())
+    ));
+    if (!figureSource) return '';
+
+    const figureRect = figureSource.viewportRect;
+    const figureCenterY = figureRect.y + figureRect.h / 2;
+    const sameCaptionLine = validSources
+        .filter(source => {
+            const rect = source.viewportRect;
+            const centerY = rect.y + rect.h / 2;
+            const verticalTolerance = Math.max(12, figureRect.h, rect.h);
+            const horizontalGap = rect.x > figureRect.x
+                ? rect.x - (figureRect.x + figureRect.w)
+                : figureRect.x - (rect.x + rect.w);
+            return Math.abs(centerY - figureCenterY) <= verticalTolerance
+                && horizontalGap <= 90;
+        })
+        .sort((first, second) => first.viewportRect.x - second.viewportRect.x)
+        .map(source => source.text)
+        .join(' ');
+    const legend = normalizeCaptionText(sameCaptionLine);
+
+    if (/^(?:別紙|別冊|別図|付図|参考図)(?:\s*No\.?\s*[0-9０-９-]+)?$/i.test(legend)) {
+        return '';
+    }
+    return legend;
 };

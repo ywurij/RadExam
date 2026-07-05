@@ -30,6 +30,11 @@ const isLocalImageRef = (value) => typeof value === 'string' && value.startsWith
 const buildLocalImageRef = (key) => `${LOCAL_IMAGE_PREFIX}${key}`;
 const extractLocalImageKey = (value) => isLocalImageRef(value) ? value.slice(LOCAL_IMAGE_PREFIX.length) : '';
 const buildExamImageKeyPrefix = (examId) => `${examId}::`;
+const resolveImageLegend = (source, imageIndex) => (
+    Object.prototype.hasOwnProperty.call(source, 'legend')
+        ? String(source.legend ?? '')
+        : `図${imageIndex + 1}`
+);
 const buildExamImageKey = (examId, questionId, imageIndex) => {
     const suffix = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
         ? crypto.randomUUID()
@@ -80,7 +85,7 @@ const normalizeQuestionId = (question) => {
 
 const normalizeStoredImage = async (examId, questionId, image, imageIndex) => {
     const source = image && typeof image === 'object' ? image : {};
-    const legend = source.legend || `図${imageIndex + 1}`;
+    const legend = resolveImageLegend(source, imageIndex);
     const storageKey = source.storageKey || extractLocalImageKey(source.path);
     const originalPath = typeof source.path === 'string' ? source.path : '';
 
@@ -160,7 +165,7 @@ const hydrateQuestionImages = async (question) => {
         if (!storageKey) {
             return {
                 path: source.path || '',
-                legend: source.legend || `図${imageIndex + 1}`
+                legend: resolveImageLegend(source, imageIndex)
             };
         }
 
@@ -168,7 +173,7 @@ const hydrateQuestionImages = async (question) => {
         if (!blob) {
             return {
                 path: '',
-                legend: source.legend || `図${imageIndex + 1}`,
+                legend: resolveImageLegend(source, imageIndex),
                 storageKey
             };
         }
@@ -176,7 +181,7 @@ const hydrateQuestionImages = async (question) => {
         const path = await blobToDataUrl(blob);
         return {
             path,
-            legend: source.legend || `図${imageIndex + 1}`,
+            legend: resolveImageLegend(source, imageIndex),
             storageKey
         };
     }));

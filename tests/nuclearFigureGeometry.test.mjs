@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
     assignRectToQuestionAnchor,
+    buildNuclearDisplayLegend,
     mergeNuclearImageFragments
 } from '../src/lib/nuclearFigureGeometry.mjs';
 
@@ -50,5 +51,43 @@ test('assigns a boundary-crossing image by section overlap instead of center dis
     const assignment = assignRectToQuestionAnchor(crossingImage, anchors, 1263);
 
     assert.equal(assignment.defaultAnchor.id, 'A56');
-    assert.deepEqual(assignment.candidateAnchorIds, ['A56', 'A58']);
+    assert.deepEqual(assignment.candidateAnchorIds, ['A56']);
+});
+
+test('does not offer a distant adjacent anchor for a fully owned image', () => {
+    const anchors = [
+        { id: 'A45', viewportRect: { x: 0, y: 50, w: 70, h: 25 } },
+        { id: 'A46', viewportRect: { x: 0, y: 795, w: 70, h: 25 } }
+    ];
+
+    const assignment = assignRectToQuestionAnchor({ x: 190, y: 400, w: 510, h: 308 }, anchors, 1263);
+
+    assert.equal(assignment.defaultAnchor.id, 'A45');
+    assert.deepEqual(assignment.candidateAnchorIds, ['A45']);
+});
+
+test('keeps semantic text after a figure-number caption', () => {
+    const sources = [
+        { text: '図1', viewportRect: { x: 100, y: 50, w: 40, h: 20 } },
+        { text: '18F-FDG PET画像', viewportRect: { x: 155, y: 50, w: 180, h: 20 } }
+    ];
+
+    assert.equal(buildNuclearDisplayLegend(sources), '18F-FDG PET画像');
+});
+
+test('does not duplicate contextual text as a display legend', () => {
+    const sources = [
+        { text: '術前', viewportRect: { x: 100, y: 50, w: 40, h: 20 } },
+        { text: '術後', viewportRect: { x: 300, y: 50, w: 40, h: 20 } }
+    ];
+
+    assert.equal(buildNuclearDisplayLegend(sources), '');
+});
+
+test('rejects appendix reference words after a figure token', () => {
+    const sources = [
+        { text: '図1 別紙', viewportRect: { x: 100, y: 50, w: 100, h: 20 } }
+    ];
+
+    assert.equal(buildNuclearDisplayLegend(sources), '');
 });

@@ -278,6 +278,19 @@ const normalizeGroupingResponse = (result, objects) => {
         });
     });
 
+    const usedGroupIds = new Set();
+    deduplicatedGroups.forEach((group, index) => {
+        const baseId = String(group.groupId || `group-${index + 1}`);
+        let uniqueId = baseId;
+        let suffix = 2;
+        while (usedGroupIds.has(uniqueId)) {
+            uniqueId = `${baseId}-${suffix}`;
+            suffix += 1;
+        }
+        group.groupId = uniqueId;
+        usedGroupIds.add(uniqueId);
+    });
+
     return {
         ...result,
         groups: deduplicatedGroups

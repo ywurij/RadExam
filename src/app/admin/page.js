@@ -11,7 +11,10 @@ import {
     convertNuclearVlmResultToGroups,
     requestNuclearVlmGrouping
 } from '@/lib/nuclearVlmClient';
-import { mergeNuclearImageFragments } from '@/lib/nuclearFigureGeometry.mjs';
+import {
+    buildNuclearDisplayLegend,
+    mergeNuclearImageFragments
+} from '@/lib/nuclearFigureGeometry.mjs';
 
 const FOOTER_DASH_CLASS = 'ー―－\\-−–—';
 const FOOTER_PAGE_PATTERN = new RegExp(`^[${FOOTER_DASH_CLASS}]?\\s*[0-9０-９]+\\s*[${FOOTER_DASH_CLASS}]?$`);
@@ -38,6 +41,9 @@ const isValidLegendText = (text, item = null, allPageTextItems = []) => {
         return false;
     }
     if (NO_QUESTION_LABEL_PATTERN.test(trimmed)) {
+        return false;
+    }
+    if (/^(?:別紙|別冊|別図|付図|参考図|設問|試験問題|筆記)$/i.test(trimmed)) {
         return false;
     }
 
@@ -183,6 +189,10 @@ const compareImportedImages = (a, b) => {
 };
 
 const resolveImportedImageLegend = (img, idx) => {
+    if (img.legendResolved) {
+        return String(img.displayLegend ?? img.detectedLegend ?? '');
+    }
+
     const explicitFigureLegend = img.figureLabel || buildFigureLegend(img.detectedLegendRaw || img.detectedLegend || '');
     if (explicitFigureLegend) {
         return explicitFigureLegend;
@@ -262,9 +272,11 @@ const assignFigureAnchorsToNuclearImages = (images, anchors, viewport) => {
         const anchor = viewportAnchors[anchorIndex];
 
         image.figureNumber = anchor.figureNumber;
-        image.figureLabel = anchor.figureLabel || buildFigureLegend(anchor.rawText || '');
-        image.detectedLegendRaw = anchor.rawText || image.detectedLegendRaw || '';
-        image.detectedLegend = cleanLegendPrefix(anchor.rawText || image.detectedLegend || '');
+        if (!image.legendResolved) {
+            image.figureLabel = anchor.figureLabel || buildFigureLegend(anchor.rawText || '');
+            image.detectedLegendRaw = anchor.rawText || image.detectedLegendRaw || '';
+            image.detectedLegend = cleanLegendPrefix(anchor.rawText || image.detectedLegend || '');
+        }
 
         usedImages.add(imageIndex);
         usedAnchors.add(anchorIndex);
@@ -1629,11 +1641,16 @@ const buildNuclearGroupFromClusters = (group, questionOwner, questionTextItems) 
 
     const legendRaw = group.seed?.rawText || detachedBlock?.text || questionOwner.sectionLegend || '';
     const legend = cleanLegendPrefix(group.seed?.text || detachedBlock?.text || questionOwner.sectionLegend || '');
+    const displayLegend = buildNuclearDisplayLegend(textItems.map(item => ({
+        text: item.text,
+        viewportRect: getTextItemRect(item)
+    })));
 
     return {
         matchedQNum: questionOwner.questionNumber,
         legend,
         legendRaw,
+        displayLegend,
         figureNumber: group.seed?.figureNumber ?? extractFigureNumber(legendRaw || legend),
         figureLabel: group.seed?.figureLabel || buildFigureLegend(legendRaw || legend),
         imageRects,
@@ -2723,7 +2740,7 @@ export default function AdminPage() {
                     explanation: q.explanation || '',
                     images: Array.isArray(q.images) ? q.images.map((img, imgIdx) => ({
                         path: img.path || 'image_placeholder',
-                        legend: img.legend || `図${imgIdx + 1}`,
+                        legend: img.legend ?? `図${imgIdx + 1}`,
                         storageKey: img.storageKey || '',
                     })) : [],
                 };
@@ -3552,10 +3569,10 @@ export default function AdminPage() {
                               cropCtx.fillStyle = '#FFFFFF';
                               (group.anchorItems || []).forEach(item => {
                                   const anchorRect = convertPdfRectToViewportRect(getTextItemRect(item), viewport);
-                                  const maskX = Math.floor(anchorRect.x - safeX) - 2;
-                                  const maskY = Math.floor(anchorRect.y - safeY) - 2;
-                                  const maskW = Math.ceil(anchorRect.w) + 4;
-                                  const maskH = Math.ceil(anchorRect.h) + 4;
+                                  const maskX = Math.floor(anchorRect.x - safeX) - 8;
+                                  const maskY = Math.floor(anchorRect.y - safeY) - 8;
+                                  const maskW = Math.ceil(anchorRect.w) + 16;
+                                  const maskH = Math.ceil(anchorRect.h) + 16;
                                   if (
                                       maskX < safeW
                                       && maskY < safeH
@@ -3574,16 +3591,20 @@ export default function AdminPage() {
 
                               imageCounter++;
                               const detectedLegend = cleanLegendPrefix(group.legend || '');
+                              const legendResolved = Object.prototype.hasOwnProperty.call(group, 'displayLegend');
+                              const displayLegend = legendResolved ? String(group.displayLegend || '') : null;
 
                               const imgObj = {
                                   path: cropCanvas.toDataURL('image/png'),
                                   x: origMinX,
                                   y: origMinY,
-                                  legend: group.figureLabel || detectedLegend || `図${idx + 1}`,
-                                  detectedLegend: detectedLegend || null,
+                                  legend: legendResolved ? displayLegend : (group.figureLabel || detectedLegend || `図${idx + 1}`),
+                                  detectedLegend: legendResolved ? displayLegend : (detectedLegend || null),
                                   detectedLegendRaw: group.legendRaw || '',
                                   figureNumber: group.figureNumber ?? extractFigureNumber(group.legendRaw || group.legend || ''),
-                                  figureLabel: group.figureLabel || buildFigureLegend(group.legendRaw || group.legend || ''),
+                                  figureLabel: legendResolved ? '' : (group.figureLabel || buildFigureLegend(group.legendRaw || group.legend || '')),
+                                  displayLegend,
+                                  legendResolved,
                                   viewportBounds: { x: safeX, y: safeY, w: safeW, h: safeH },
                                   page: pageNum,
                                   matchedQNum: group.matchedQNum
@@ -4115,14 +4136,14 @@ export default function AdminPage() {
                     explanation: '',
                     images: q.pageImages.map((img, imgIdx) => ({
                         path: 'image_placeholder',
-                        legend: img.legend || `図${imgIdx + 1}`
+                        legend: img.legend ?? `図${imgIdx + 1}`
                     }))
                 };
 
                 if (q.pageImages.length > 0) {
                     finalImageMap[idx] = q.pageImages.map((img, imgIdx) => ({
                         path: img.path,
-                        legend: img.legend || `図${imgIdx + 1}`
+                        legend: img.legend ?? `図${imgIdx + 1}`
                     }));
                 }
             });
