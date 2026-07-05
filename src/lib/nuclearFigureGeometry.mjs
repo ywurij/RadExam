@@ -133,33 +133,52 @@ const normalizeCaptionText = text => String(text || '')
     .replace(/\s+/g, ' ')
     .trim();
 
-export const buildNuclearDisplayLegend = (textSources = []) => {
+export const resolveNuclearDisplayLegend = (textSources = []) => {
     const validSources = textSources.filter(source => source?.text && source?.viewportRect);
     const figureSource = validSources.find(source => (
         /^(?:図|画像|Fig\.?)\s*[0-9０-９]+/i.test(String(source.text).trim())
     ));
-    if (!figureSource) return '';
+    if (figureSource) {
+        const figureRect = figureSource.viewportRect;
+        const figureCenterY = figureRect.y + figureRect.h / 2;
+        const sameCaptionLineSources = validSources
+            .filter(source => {
+                const rect = source.viewportRect;
+                const centerY = rect.y + rect.h / 2;
+                const verticalTolerance = Math.max(12, figureRect.h, rect.h);
+                const horizontalGap = rect.x > figureRect.x
+                    ? rect.x - (figureRect.x + figureRect.w)
+                    : figureRect.x - (rect.x + rect.w);
+                return Math.abs(centerY - figureCenterY) <= verticalTolerance
+                    && horizontalGap <= 90;
+            })
+            .sort((first, second) => first.viewportRect.x - second.viewportRect.x);
+        const captionText = sameCaptionLineSources.map(source => source.text).join(' ');
+        const semanticLegend = normalizeCaptionText(captionText);
+        const figureToken = String(figureSource.text).trim().match(/^(?:図|画像|Fig\.?)\s*[0-9０-９]+/i)?.[0] || '';
+        const legend = semanticLegend || figureToken.replace(/\s+/g, '');
 
-    const figureRect = figureSource.viewportRect;
-    const figureCenterY = figureRect.y + figureRect.h / 2;
-    const sameCaptionLine = validSources
-        .filter(source => {
-            const rect = source.viewportRect;
-            const centerY = rect.y + rect.h / 2;
-            const verticalTolerance = Math.max(12, figureRect.h, rect.h);
-            const horizontalGap = rect.x > figureRect.x
-                ? rect.x - (figureRect.x + figureRect.w)
-                : figureRect.x - (rect.x + rect.w);
-            return Math.abs(centerY - figureCenterY) <= verticalTolerance
-                && horizontalGap <= 90;
-        })
-        .sort((first, second) => first.viewportRect.x - second.viewportRect.x)
-        .map(source => source.text)
-        .join(' ');
-    const legend = normalizeCaptionText(sameCaptionLine);
-
-    if (/^(?:別紙|別冊|別図|付図|参考図)(?:\s*No\.?\s*[0-9０-９-]+)?$/i.test(legend)) {
-        return '';
+        if (/^(?:別紙|別冊|別図|付図|参考図)(?:\s*No\.?\s*[0-9０-９-]+)?$/i.test(legend)) {
+            return { legend: '', sources: [] };
+        }
+        return { legend, sources: sameCaptionLineSources };
     }
-    return legend;
+
+    if (validSources.length !== 1) {
+        return { legend: '', sources: [] };
+    }
+
+    const source = validSources[0];
+    const legend = normalizeCaptionText(source.text);
+    if (
+        !legend
+        || /^(?:別紙|別冊|別図|付図|参考図|設問|試験問題|筆記)$/i.test(legend)
+    ) {
+        return { legend: '', sources: [] };
+    }
+    return { legend, sources: [source] };
 };
+
+export const buildNuclearDisplayLegend = textSources => (
+    resolveNuclearDisplayLegend(textSources).legend
+);

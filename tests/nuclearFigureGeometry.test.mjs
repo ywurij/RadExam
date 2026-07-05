@@ -4,7 +4,8 @@ import assert from 'node:assert/strict';
 import {
     assignRectToQuestionAnchor,
     buildNuclearDisplayLegend,
-    mergeNuclearImageFragments
+    mergeNuclearImageFragments,
+    resolveNuclearDisplayLegend
 } from '../src/lib/nuclearFigureGeometry.mjs';
 
 test('merges stacked wide strips from one rendered figure', () => {
@@ -75,13 +76,37 @@ test('keeps semantic text after a figure-number caption', () => {
     assert.equal(buildNuclearDisplayLegend(sources), '18F-FDG PET画像');
 });
 
-test('does not duplicate contextual text as a display legend', () => {
+test('moves one contextual label to the display legend', () => {
     const sources = [
-        { text: '術前', viewportRect: { x: 100, y: 50, w: 40, h: 20 } },
-        { text: '術後', viewportRect: { x: 300, y: 50, w: 40, h: 20 } }
+        { text: '術前', viewportRect: { x: 100, y: 50, w: 40, h: 20 } }
     ];
 
-    assert.equal(buildNuclearDisplayLegend(sources), '');
+    assert.equal(buildNuclearDisplayLegend(sources), '術前');
+});
+
+test('keeps repeated internal labels out of the display legend', () => {
+    const sources = [
+        { text: '上段', viewportRect: { x: 20, y: 50, w: 40, h: 20 } },
+        { text: '下段', viewportRect: { x: 20, y: 90, w: 40, h: 20 } }
+    ];
+
+    assert.deepEqual(resolveNuclearDisplayLegend(sources), { legend: '', sources: [] });
+});
+
+test('uses a figure token when it has no semantic remainder', () => {
+    const source = { text: '図3', viewportRect: { x: 100, y: 50, w: 40, h: 20 } };
+    const resolved = resolveNuclearDisplayLegend([source]);
+
+    assert.equal(resolved.legend, '図3');
+    assert.deepEqual(resolved.sources, [source]);
+});
+
+test('moves a single orientation caption to the display legend', () => {
+    const sources = [
+        { text: '左：水平断面', viewportRect: { x: 100, y: 50, w: 100, h: 20 } }
+    ];
+
+    assert.equal(buildNuclearDisplayLegend(sources), '左：水平断面');
 });
 
 test('rejects appendix reference words after a figure token', () => {

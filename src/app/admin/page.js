@@ -12,8 +12,8 @@ import {
     requestNuclearVlmGrouping
 } from '@/lib/nuclearVlmClient';
 import {
-    buildNuclearDisplayLegend,
-    mergeNuclearImageFragments
+    mergeNuclearImageFragments,
+    resolveNuclearDisplayLegend
 } from '@/lib/nuclearFigureGeometry.mjs';
 
 const FOOTER_DASH_CLASS = 'ー―－\\-−–—';
@@ -1257,8 +1257,6 @@ const getTextItemRect = (item) => ({
     h: Math.max(1, item.height || 12)
 });
 
-const buildTextItemsBounds = (items = []) => unionRectList(items.map(getTextItemRect));
-
 const dedupeNuclearAnchors = (anchors = []) => (
     anchors
         .filter(Boolean)
@@ -1619,16 +1617,7 @@ const buildNuclearGroupFromClusters = (group, questionOwner, questionTextItems) 
         ...(group.seed?.items || [])
     ];
     const contextBlocks = buildNuclearContextBlocks(questionTextItems, imageRects, anchorItems);
-    const attachedRects = contextBlocks.filter(block => block.attached).map(block => block.rect);
-    const seedRect = buildTextItemsBounds(group.seed?.items || []);
     const detachedBlock = group.legendBlock || contextBlocks.find(block => !block.attached) || null;
-    const bounds = unionRectList([
-        ...imageRects,
-        ...attachedRects,
-        ...(seedRect ? [seedRect] : [])
-    ]);
-
-    if (!bounds) return null;
 
     const contextTextItems = contextBlocks.flatMap(block => block.items || []);
     const textItems = [
@@ -1641,16 +1630,27 @@ const buildNuclearGroupFromClusters = (group, questionOwner, questionTextItems) 
 
     const legendRaw = group.seed?.rawText || detachedBlock?.text || questionOwner.sectionLegend || '';
     const legend = cleanLegendPrefix(group.seed?.text || detachedBlock?.text || questionOwner.sectionLegend || '');
-    const displayLegend = buildNuclearDisplayLegend(textItems.map(item => ({
+    const displayLegendResolution = resolveNuclearDisplayLegend(textItems.map(item => ({
         text: item.text,
-        viewportRect: getTextItemRect(item)
+        viewportRect: getTextItemRect(item),
+        items: [item]
     })));
+    const displayLegend = displayLegendResolution.legend;
+    const keepContextInFigure = displayLegendResolution.sources.length === 0 && contextBlocks.length > 1;
+    const bounds = unionRectList([
+        ...imageRects,
+        ...(keepContextInFigure ? contextBlocks.map(block => block.rect) : [])
+    ]);
+
+    if (!bounds) return null;
 
     return {
         matchedQNum: questionOwner.questionNumber,
         legend,
         legendRaw,
         displayLegend,
+        displayLegendTextItems: displayLegendResolution.sources.flatMap(source => source.items || []),
+        keepContextInFigure,
         figureNumber: group.seed?.figureNumber ?? extractFigureNumber(legendRaw || legend),
         figureLabel: group.seed?.figureLabel || buildFigureLegend(legendRaw || legend),
         imageRects,
@@ -3567,7 +3567,13 @@ export default function AdminPage() {
                               const cropCtx = cropCanvas.getContext('2d');
                               cropCtx.drawImage(pageCanvas, safeX, safeY, safeW, safeH, 0, 0, safeW, safeH);
                               cropCtx.fillStyle = '#FFFFFF';
-                              (group.anchorItems || []).forEach(item => {
+                              const maskedTextItems = [
+                                  ...(group.anchorItems || []),
+                                  ...(group.displayLegendTextItems || [])
+                              ].filter((item, itemIndex, items) => (
+                                  items.findIndex(candidate => buildTextItemKey(candidate) === buildTextItemKey(item)) === itemIndex
+                              ));
+                              maskedTextItems.forEach(item => {
                                   const anchorRect = convertPdfRectToViewportRect(getTextItemRect(item), viewport);
                                   const maskX = Math.floor(anchorRect.x - safeX) - 8;
                                   const maskY = Math.floor(anchorRect.y - safeY) - 8;

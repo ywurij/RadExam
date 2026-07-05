@@ -1,8 +1,8 @@
 import {
     assignRectToQuestionAnchor,
-    buildNuclearDisplayLegend,
     getRectDistance,
-    mergeNuclearImageFragments
+    mergeNuclearImageFragments,
+    resolveNuclearDisplayLegend
 } from './nuclearFigureGeometry.mjs';
 
 const MIN_GROUP_CONFIDENCE = 0.45;
@@ -310,6 +310,54 @@ const getTextAttachmentScore = (textRect, imageRects) => {
     return bestScore;
 };
 
+const getCaptionBelowScore = (textRect, imageRects) => {
+    let bestScore = Infinity;
+
+    imageRects.forEach(imageRect => {
+        const textBottom = textRect.y + textRect.h;
+        const verticalGap = imageRect.y - textBottom;
+        const xOverlap = getOverlapLength(
+            textRect.x,
+            textRect.x + textRect.w,
+            imageRect.x,
+            imageRect.x + imageRect.w
+        );
+        const minimumOverlap = Math.min(textRect.w * 0.45, imageRect.w * 0.15);
+        if (verticalGap < -8 || verticalGap > 90 || xOverlap < minimumOverlap) return;
+
+        const horizontalOffset = Math.abs(
+            (textRect.x + textRect.w / 2) - (imageRect.x + imageRect.w / 2)
+        );
+        bestScore = Math.min(bestScore, Math.abs(verticalGap) * 4 + horizontalOffset * 0.12);
+    });
+
+    return bestScore;
+};
+
+const getTextQuestionAnchorId = (source, visualAnchors, pageHeight) => {
+    const textRect = source.viewportRect;
+    const textCenterY = textRect.y + textRect.h / 2;
+    const sameRowAnchor = visualAnchors
+        .filter(anchor => {
+            const anchorRect = anchor.viewportRect;
+            const anchorCenterY = anchorRect.y + anchorRect.h / 2;
+            const tolerance = Math.max(18, textRect.h, anchorRect.h);
+            return Math.abs(textCenterY - anchorCenterY) <= tolerance
+                && textRect.x >= anchorRect.x + anchorRect.w - 8;
+        })
+        .sort((first, second) => {
+            const firstGap = Math.abs(textRect.x - (first.viewportRect.x + first.viewportRect.w));
+            const secondGap = Math.abs(textRect.x - (second.viewportRect.x + second.viewportRect.w));
+            return firstGap - secondGap;
+        })[0];
+
+    return sameRowAnchor?.id || assignRectToQuestionAnchor(
+        textRect,
+        visualAnchors,
+        pageHeight
+    ).defaultAnchor?.id;
+};
+
 const attachLegendSources = (groupRecords, pageRequest) => {
     const visualAnchors = pageRequest.objects
         .filter(object => object.type === 'question_anchor')
@@ -321,30 +369,56 @@ const attachLegendSources = (groupRecords, pageRequest) => {
         .map(object => pageRequest.sourceById.get(object.id))
         .filter(source => source?.rect && source?.viewportRect && isLikelyLegendText(source.text));
     const assignedTextIds = new Set();
+    const preferredRecordByLegendId = new Map();
 
     groupRecords.forEach(record => {
         record.legendSources = [];
         record.requestedLegendIds.forEach(id => {
-            if (assignedTextIds.has(id)) return;
-            const source = pageRequest.sourceById.get(id);
-            if (!source?.viewportRect || !isLikelyLegendText(source.text)) return;
-            const score = getTextAttachmentScore(
-                source.viewportRect,
-                record.imageSources.map(image => image.viewportRect)
-            );
-            if (!Number.isFinite(score)) return;
-            assignedTextIds.add(id);
-            record.legendSources.push(source);
+            if (!preferredRecordByLegendId.has(id)) {
+                preferredRecordByLegendId.set(id, record);
+            }
         });
+    });
+
+    const figureSources = textSources.filter(source => (
+        /^(?:図|画像|Fig\.?)\s*[0-9０-９]+/i.test(String(source.text || '').trim())
+    ));
+    const recordsWithFigureCaption = new Set();
+    figureSources.forEach(source => {
+        const textAnchorId = getTextQuestionAnchorId(
+            source,
+            visualAnchors,
+            pageRequest.pageCanvasHeight
+        );
+        const candidates = groupRecords
+            .filter(record => (
+                record.questionAnchorId === textAnchorId
+                && !recordsWithFigureCaption.has(record.groupId)
+            ))
+            .map(record => ({
+                record,
+                score: getCaptionBelowScore(
+                    source.viewportRect,
+                    record.imageSources.map(image => image.viewportRect)
+                )
+            }))
+            .filter(candidate => Number.isFinite(candidate.score))
+            .sort((first, second) => first.score - second.score);
+
+        if (candidates.length === 0) return;
+        const selected = candidates[0].record;
+        selected.legendSources.push(source);
+        recordsWithFigureCaption.add(selected.groupId);
+        assignedTextIds.add(source.id);
     });
 
     textSources.forEach(source => {
         if (assignedTextIds.has(source.id)) return;
-        const textAnchorId = assignRectToQuestionAnchor(
-            source.viewportRect,
+        const textAnchorId = getTextQuestionAnchorId(
+            source,
             visualAnchors,
             pageRequest.pageCanvasHeight
-        ).defaultAnchor?.id;
+        );
         const candidates = groupRecords
             .filter(record => record.questionAnchorId === textAnchorId)
             .map(record => ({
@@ -358,8 +432,13 @@ const attachLegendSources = (groupRecords, pageRequest) => {
             .sort((first, second) => first.score - second.score);
 
         if (candidates.length === 0) return;
+        const preferredRecord = preferredRecordByLegendId.get(source.id);
+        const preferredCandidate = candidates.find(candidate => candidate.record === preferredRecord);
+        const selectedCandidate = preferredCandidate && preferredCandidate.score <= candidates[0].score + 12
+            ? preferredCandidate
+            : candidates[0];
         assignedTextIds.add(source.id);
-        candidates[0].record.legendSources.push(source);
+        selectedCandidate.record.legendSources.push(source);
     });
 };
 
@@ -441,11 +520,15 @@ export const convertNuclearVlmResultToGroups = (pageRequest, payload) => {
             }
             return first.viewportRect.x - second.viewportRect.x;
         });
-        const legendRects = legendSources.map(source => source.rect);
-        const bounds = unionRects([...imageRects, ...legendRects]);
-        if (!bounds) return null;
         const legendRaw = legendSources.map(source => source.text).filter(Boolean).join(' ').trim();
-        const displayLegend = buildNuclearDisplayLegend(legendSources);
+        const displayLegendResolution = resolveNuclearDisplayLegend(legendSources);
+        const displayLegend = displayLegendResolution.legend;
+        const keepContextInFigure = displayLegendResolution.sources.length === 0 && legendSources.length > 1;
+        const bounds = unionRects([
+            ...imageRects,
+            ...(keepContextInFigure ? legendSources.map(source => source.rect) : [])
+        ]);
+        if (!bounds) return null;
 
         return {
             bounds: expandRect(bounds),
@@ -453,6 +536,8 @@ export const convertNuclearVlmResultToGroups = (pageRequest, payload) => {
             legend: displayLegend,
             legendRaw,
             displayLegend,
+            displayLegendTextItems: displayLegendResolution.sources.flatMap(source => source.items || []),
+            keepContextInFigure,
             figureNumber: null,
             figureLabel: '',
             textItems: legendSources.flatMap(source => source.items || []),
