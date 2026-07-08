@@ -12,7 +12,10 @@ import {
     requestNuclearVlmGrouping
 } from '@/lib/nuclearVlmClient';
 import {
+    detectNuclearContentRotation,
     mergeNuclearImageFragments,
+    normalizeNuclearPdfRect,
+    normalizeNuclearTextItemGeometry,
     resolveNuclearDisplayLegend
 } from '@/lib/nuclearFigureGeometry.mjs';
 
@@ -1267,8 +1270,50 @@ const dedupeNuclearAnchors = (anchors = []) => (
         .sort((a, b) => {
             if (Math.abs(b.y - a.y) > 10) return b.y - a.y;
             return a.x - b.x;
-        })
+    })
 );
+
+const extractNuclearQuestionAnchorsFromLine = (line, parserProfile) => {
+    const anchors = [];
+
+    (line.items || []).forEach(item => {
+        const text = String(item.text || '');
+        const pattern = /(?:No\.?|NO\.?)\s*([0-9０-９]{1,3})(?:\s*[-ー−‐–―]\s*[0-9０-９A-Za-z]+)?/gi;
+        let match;
+        while ((match = pattern.exec(text)) !== null) {
+            const normalizedNumber = match[1].replace(/[０-９]/g, char => (
+                String(char.charCodeAt(0) - 0xFEE0)
+            ));
+            const questionNumber = Number.parseInt(normalizedNumber, 10);
+            if (!Number.isInteger(questionNumber)) continue;
+
+            const characterWidth = Math.max(1, item.width || 0) / Math.max(1, text.length);
+            const anchorItem = {
+                ...item,
+                text: match[0],
+                x: item.x + characterWidth * match.index,
+                width: characterWidth * match[0].length
+            };
+            anchors.push({
+                ...line,
+                x: anchorItem.x,
+                text: match[0],
+                items: [anchorItem],
+                questionNumber,
+                sectionLegend: extractNuclearSectionLegend(text)
+            });
+        }
+    });
+
+    if (anchors.length > 0) return anchors;
+    const questionNumber = extractQuestionNumberFromText(line.text, [parserProfile.imageLabelPattern]);
+    if (questionNumber === null) return [];
+    return [{
+        ...line,
+        questionNumber,
+        sectionLegend: extractNuclearSectionLegend(buildInlineTextFromItems(line.items || []) || line.text || '')
+    }];
+};
 
 const buildNuclearQuestionOwners = (textItems, parserProfile) => {
     const lines = buildTextLineEntriesFromItems(textItems);
@@ -1278,22 +1323,31 @@ const buildNuclearQuestionOwners = (textItems, parserProfile) => {
     );
 
     const anchors = lines
-        .map(line => ({
-            ...line,
-            questionNumber: extractQuestionNumberFromText(line.text, [parserProfile.imageLabelPattern]),
-            sectionLegend: extractNuclearSectionLegend(buildInlineTextFromItems(line.items || []) || line.text || '')
-        }))
-        .filter(line => line.questionNumber !== null)
+        .flatMap(line => extractNuclearQuestionAnchorsFromLine(line, parserProfile))
         .sort((a, b) => b.y - a.y);
+    const rows = [];
+    anchors.forEach(anchor => {
+        const row = rows.find(candidate => Math.abs(candidate.y - anchor.y) <= 10);
+        if (row) row.anchors.push(anchor);
+        else rows.push({ y: anchor.y, anchors: [anchor] });
+    });
+    rows.sort((first, second) => second.y - first.y);
 
-    return anchors.map((anchor, index) => {
-        const next = anchors[index + 1] || null;
-        return {
-            ...anchor,
-            ownerKey: `${anchor.questionNumber}:${Math.round(anchor.y)}:${index}:${anchor.text || anchor.sectionLegend || ''}`,
-            ownerTopY: Math.min(pageMaxY, anchor.y + 48),
-            ownerBottomY: next ? next.y + 24 : parserProfile.footerMinY
-        };
+    return rows.flatMap((row, rowIndex) => {
+        const nextRow = rows[rowIndex + 1] || null;
+        const sortedAnchors = row.anchors.sort((first, second) => first.x - second.x);
+        return sortedAnchors.map((anchor, anchorIndex) => {
+            const previous = sortedAnchors[anchorIndex - 1] || null;
+            const next = sortedAnchors[anchorIndex + 1] || null;
+            return {
+                ...anchor,
+                ownerKey: `${anchor.questionNumber}:${Math.round(anchor.y)}:${anchorIndex}:${anchor.text || anchor.sectionLegend || ''}`,
+                ownerTopY: Math.min(pageMaxY, row.y + 48),
+                ownerBottomY: nextRow ? nextRow.y + 24 : parserProfile.footerMinY,
+                ownerLeftX: previous ? (previous.x + anchor.x) / 2 : -Infinity,
+                ownerRightX: next ? (anchor.x + next.x) / 2 : Infinity
+            };
+        });
     });
 };
 
@@ -1306,8 +1360,11 @@ const scoreNuclearOwnerForRect = (rect, owner) => {
     const overlapHeight = Math.max(0, Math.min(rectTopY, bandTopY) - Math.max(rectBottomY, bandBottomY));
     const overlapRatio = overlapHeight / Math.max(1, rect.h);
     const clampedCenterY = Math.max(bandBottomY, Math.min(centerY, bandTopY));
+    const centerX = getRectCenterX(rect);
+    const clampedCenterX = Math.max(owner.ownerLeftX, Math.min(centerX, owner.ownerRightX));
+    const horizontalPenalty = Math.abs(centerX - clampedCenterX) * 8;
 
-    return (overlapRatio * 1000) - (Math.abs(centerY - clampedCenterY) * 6);
+    return (overlapRatio * 1000) - (Math.abs(centerY - clampedCenterY) * 6) - horizontalPenalty;
 };
 
 const assignNuclearItemsToOwners = (items, owners, toRect) => {
@@ -1713,6 +1770,86 @@ const buildNuclearSemanticGroups = (textItems, imageRects, parserProfile) => {
     });
 };
 
+const buildRotatedNuclearQuestionCompositeGroups = (textItems, imageRects, parserProfile) => {
+    const questionOwners = buildNuclearQuestionOwners(textItems, parserProfile);
+    if (questionOwners.length === 0 || imageRects.length === 0) {
+        return [];
+    }
+
+    const usableTextItems = textItems.filter(item => !FOOTER_PAGE_PATTERN.test(item.text.trim()));
+    const rectsByQuestion = assignNuclearItemsToOwners(imageRects, questionOwners, rect => rect);
+    const textItemsByQuestion = assignNuclearItemsToOwners(usableTextItems, questionOwners, getTextItemRect);
+
+    return questionOwners.flatMap(questionOwner => {
+        const ownedImageRects = rectsByQuestion.get(questionOwner.ownerKey) || [];
+        if (ownedImageRects.length === 0) return [];
+
+        const ownedTextItems = textItemsByQuestion.get(questionOwner.ownerKey) || [];
+        const questionLines = buildTextLineEntriesFromItems(ownedTextItems);
+        const figureAnchors = buildNuclearQuestionFigureAnchors(
+            questionLines,
+            ownedImageRects,
+            questionOwner.questionNumber
+        );
+        const bounds = unionRectList(ownedImageRects);
+        if (!bounds) return [];
+
+        const compositeCluster = {
+            imageRects: ownedImageRects,
+            bounds,
+            centerX: getRectCenterX(bounds),
+            centerY: getRectCenterY(bounds)
+        };
+        const group = {
+            clusters: [compositeCluster],
+            seed: figureAnchors.length === 1 ? figureAnchors[0] : null,
+            legendBlock: null
+        };
+
+        return buildNuclearGroupFromClusters(group, questionOwner, ownedTextItems);
+    }).filter(Boolean);
+};
+
+const buildRotatedNuclearOwnerBandGroups = (textItems, parserProfile, pageWidth) => {
+    const questionOwners = buildNuclearQuestionOwners(textItems, parserProfile);
+    if (questionOwners.length === 0 || !Number.isFinite(pageWidth) || pageWidth <= 0) {
+        return [];
+    }
+
+    const usableTextItems = textItems.filter(item => !FOOTER_PAGE_PATTERN.test(item.text.trim()));
+    const textItemsByQuestion = assignNuclearItemsToOwners(usableTextItems, questionOwners, getTextItemRect);
+
+    return questionOwners.map(questionOwner => {
+        const ownedTextItems = textItemsByQuestion.get(questionOwner.ownerKey) || [];
+        const leftX = Number.isFinite(questionOwner.ownerLeftX) ? Math.max(0, questionOwner.ownerLeftX) : 0;
+        const rightX = Number.isFinite(questionOwner.ownerRightX) ? Math.min(pageWidth, questionOwner.ownerRightX) : pageWidth;
+        const bottomY = Math.max(parserProfile.footerMinY, questionOwner.ownerBottomY);
+        const topY = Math.max(bottomY + 1, questionOwner.ownerTopY);
+        const bounds = {
+            x: leftX,
+            y: bottomY,
+            w: Math.max(1, rightX - leftX),
+            h: Math.max(1, topY - bottomY)
+        };
+        const compositeCluster = {
+            imageRects: [bounds],
+            bounds,
+            centerX: getRectCenterX(bounds),
+            centerY: getRectCenterY(bounds)
+        };
+
+        return buildNuclearGroupFromClusters(
+            {
+                clusters: [compositeCluster],
+                seed: null,
+                legendBlock: null
+            },
+            questionOwner,
+            ownedTextItems
+        );
+    }).filter(Boolean);
+};
+
 const collectInkComponentsInCanvasRegion = (canvas, region, options = {}) => {
     const {
         threshold = 245,
@@ -1898,6 +2035,23 @@ const chooseConservativeCropRegion = (rawRegion, candidateRegion) => {
     );
 
     return isTooAggressive ? rawRegion : candidateRegion;
+};
+
+const buildNuclearPageViewports = (page, scale, rotation) => {
+    const renderViewport = page.getViewport({ scale, rotation });
+    if (rotation !== 270) {
+        return { renderViewport, analysisViewport: renderViewport };
+    }
+
+    const analysisHeight = page.view[2] - page.view[0];
+    const analysisViewport = {
+        width: renderViewport.width,
+        height: renderViewport.height,
+        scale,
+        convertToViewportPoint: (x, y) => [x * scale, (analysisHeight - y) * scale],
+        convertToPdfPoint: (x, y) => [x / scale, analysisHeight - (y / scale)]
+    };
+    return { renderViewport, analysisViewport };
 };
 
 const convertPdfRectToViewportRect = (rect, viewport) => {
@@ -2991,20 +3145,30 @@ export default function AdminPage() {
             }
 
             const rawPagesTextData = [];
+            const nuclearPageAnalysisRotations = new Map();
 
             // 1. 【第1パス】各ページからテキストコンテンツのみを抽出
             for (let pageNum = firstQuestionPage; pageNum <= totalPages; pageNum++) {
                 setPdfProgress(prev => ({ ...prev, status: `ページ ${pageNum}/${totalPages} のテキストを読み込み中...` }));
                 const page = await pdf.getPage(pageNum);
                 const textContent = await page.getTextContent();
-                const textItems = textContent.items.map(item => ({
-                    text: item.str,
-                    x: item.transform[4],
-                    y: item.transform[5],
-                    width: item.width || (item.str.length * (item.height || item.transform[3] || 10) * 0.8),
-                    height: item.height || item.transform[3] || 0,
-                    pageNum: pageNum
-                }));
+                const analysisRotation = parserProfile.name === 'nuclear'
+                    ? detectNuclearContentRotation(textContent.items)
+                    : 0;
+                nuclearPageAnalysisRotations.set(pageNum, analysisRotation);
+                const pageHeight = page.view[3] - page.view[1];
+                const textItems = textContent.items.map(item => (
+                    parserProfile.name === 'nuclear'
+                        ? normalizeNuclearTextItemGeometry(item, pageHeight, analysisRotation, pageNum)
+                        : {
+                            text: item.str,
+                            x: item.transform[4],
+                            y: item.transform[5],
+                            width: item.width || (item.str.length * (item.height || item.transform[3] || 10) * 0.8),
+                            height: item.height || item.transform[3] || 0,
+                            pageNum
+                        }
+                ));
 
                 rawPagesTextData.push({
                     pageNum,
@@ -3387,6 +3551,7 @@ export default function AdminPage() {
              for (let pageNum = firstQuestionPage; pageNum <= totalPages; pageNum++) {
                  setPdfProgress(prev => ({ ...prev, status: `ページ ${pageNum}/${totalPages} の画像を抽出・解析中...` }));
                  const page = await pdf.getPage(pageNum);
+                 const nuclearAnalysisRotation = nuclearPageAnalysisRotations.get(pageNum) || 0;
 
                  const pageData = rawPagesTextData.find(p => p.pageNum === pageNum);
                  const textItems = pageData ? pageData.textItems : [];
@@ -3433,12 +3598,12 @@ export default function AdminPage() {
                          const imgH = Math.abs(currentTransform[3]);
                          
                          if (imgW > 5 && imgH > 5) {
-                             rawImageRects.push({
+                             rawImageRects.push(normalizeNuclearPdfRect({
                                  x: imgX,
                                  y: imgY,
                                  w: imgW,
                                  h: imgH
-                             });
+                             }, page.view[3] - page.view[1], parserProfile.name === 'nuclear' ? nuclearAnalysisRotation : 0));
                          }
                      }
                  }
@@ -3448,16 +3613,20 @@ export default function AdminPage() {
 
                  if (parserProfile.name === 'nuclear') {
                       const scale = 1.5;
-                      const viewport = page.getViewport({ scale });
+                      const { renderViewport, analysisViewport: viewport } = buildNuclearPageViewports(
+                          page,
+                          scale,
+                          nuclearAnalysisRotation
+                      );
                       const pageFigureAnchors = buildNuclearFigureAnchors(buildTextLineEntriesFromItems(filteredTextItems));
                       const pageCanvas = document.createElement('canvas');
-                      pageCanvas.width = viewport.width;
-                      pageCanvas.height = viewport.height;
+                      pageCanvas.width = renderViewport.width;
+                      pageCanvas.height = renderViewport.height;
                       const canvasCtx = pageCanvas.getContext('2d');
 
                       await page.render({
                           canvasContext: canvasCtx,
-                          viewport
+                          viewport: renderViewport
                       }).promise;
 
                       let nuclearGroups = [];
@@ -3467,18 +3636,38 @@ export default function AdminPage() {
                           viewport.width / viewport.scale
                       );
 
+                      const buildRotatedFallbackGroups = () => buildRotatedNuclearOwnerBandGroups(
+                          filteredTextItems,
+                          parserProfile,
+                          viewport.width / viewport.scale
+                      );
+
                       if (nuclearImageRects.length > 0) {
                           const questionOwners = buildNuclearQuestionOwners(filteredTextItems, parserProfile);
-                          const pageRequest = buildNuclearVlmPageRequest({
-                              pageNumber: pageNum,
-                              pageCanvas,
-                              viewport,
-                              imageRects: nuclearImageRects,
-                              textLines: buildTextLineEntriesFromItems(filteredTextItems),
-                              questionOwners
-                          });
+                          if (nuclearAnalysisRotation !== 0) {
+                              nuclearGroups = buildRotatedNuclearQuestionCompositeGroups(
+                                  filteredTextItems,
+                                  nuclearImageRects,
+                                  parserProfile
+                              );
+                              if (nuclearGroups.length > 0) {
+                                  nuclearStructuralPageCount += 1;
+                              }
+                          }
 
-                          if (pageRequest && (pageRequest.structuralGroupingComplete || nuclearVlmReady)) {
+                          const pageRequest = nuclearGroups.length === 0
+                              ? buildNuclearVlmPageRequest({
+                                  pageNumber: pageNum,
+                                  pageCanvas,
+                                  viewport,
+                                  imageRects: nuclearImageRects,
+                                  textLines: buildTextLineEntriesFromItems(filteredTextItems),
+                                  questionOwners,
+                                  forceQuestionComposite: nuclearAnalysisRotation !== 0
+                              })
+                              : null;
+
+                          if (nuclearGroups.length === 0 && pageRequest && (pageRequest.structuralGroupingComplete || nuclearVlmReady)) {
                               setPdfProgress(prev => ({
                                   ...prev,
                                   status: pageRequest.structuralGroupingComplete
@@ -3524,17 +3713,26 @@ export default function AdminPage() {
                       }
 
                       if (nuclearGroups.length === 0) {
-                          if (nuclearImageRects.length > 0 && !pageUsedRuleFallback) {
+                          if (nuclearAnalysisRotation !== 0) {
+                              nuclearGroups = buildRotatedFallbackGroups();
+                              if (nuclearGroups.length > 0) {
+                                  nuclearStructuralPageCount += 1;
+                              }
+                          }
+
+                          if (nuclearGroups.length === 0 && nuclearImageRects.length > 0 && !pageUsedRuleFallback) {
                               nuclearRuleFallbackPageCount += 1;
                               pageUsedRuleFallback = true;
                           }
-                          nuclearGroups = buildNuclearVisualGroups(
-                              filteredTextItems,
-                              parserProfile,
-                              pageCanvas,
-                              viewport,
-                              nuclearImageRects
-                          );
+                          if (nuclearGroups.length === 0) {
+                              nuclearGroups = buildNuclearVisualGroups(
+                                  filteredTextItems,
+                                  parserProfile,
+                                  pageCanvas,
+                                  viewport,
+                                  nuclearImageRects
+                              );
+                          }
                       }
 
                       if (nuclearGroups.length > 0) {

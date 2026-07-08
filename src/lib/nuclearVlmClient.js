@@ -1,6 +1,7 @@
 import {
     assignRectToQuestionAnchor,
     buildNuclearStructuralGroups,
+    expandFigureRectWithinOwner,
     getRectDistance,
     getNuclearTextQuestionAnchorId,
     mergeNuclearImageFragments,
@@ -85,13 +86,6 @@ const extractQuestionAnchorItems = (items = []) => {
     return anchorItems;
 };
 
-const expandRect = (rect, padding = 8) => ({
-    x: rect.x - padding,
-    y: rect.y - padding,
-    w: rect.w + padding * 2,
-    h: rect.h + padding * 2
-});
-
 const pdfRectToViewportRect = (rect, viewport) => {
     const first = viewport.convertToViewportPoint(rect.x, rect.y);
     const second = viewport.convertToViewportPoint(rect.x + rect.w, rect.y + rect.h);
@@ -158,7 +152,8 @@ export const buildNuclearVlmPageRequest = ({
     viewport,
     imageRects,
     textLines,
-    questionOwners
+    questionOwners,
+    forceQuestionComposite = false
 }) => {
     if (!pageCanvas || imageRects.length === 0 || questionOwners.length === 0) {
         return null;
@@ -215,6 +210,24 @@ export const buildNuclearVlmPageRequest = ({
             sourceById.set(id, { ...object, rect });
         });
 
+    if (forceQuestionComposite) {
+        const structuralGrouping = buildNuclearStructuralGroups(objects, pageCanvas.height, {
+            forceQuestionComposite
+        });
+        if (structuralGrouping.complete) {
+            const publicObjects = objects.map(({ viewportRect: _viewportRect, ...object }) => object);
+            return {
+                pageNumber,
+                pageCanvasHeight: pageCanvas.height,
+                imageDataUrl: '',
+                objects: publicObjects,
+                sourceById,
+                structuralGroups: structuralGrouping.groups,
+                structuralGroupingComplete: true
+            };
+        }
+    }
+
     if (objects.length > MAX_OBJECTS) {
         return null;
     }
@@ -245,7 +258,9 @@ export const buildNuclearVlmPageRequest = ({
             sourceById.set(id, { ...object, rect, items: line.items || [] });
         });
 
-    const structuralGrouping = buildNuclearStructuralGroups(objects, pageCanvas.height);
+    const structuralGrouping = buildNuclearStructuralGroups(objects, pageCanvas.height, {
+        forceQuestionComposite
+    });
     const publicObjects = objects.map(({ viewportRect: _viewportRect, ...object }) => object);
     return {
         pageNumber,
@@ -555,7 +570,7 @@ export const convertNuclearVlmResultToGroups = (pageRequest, payload) => {
         if (!bounds) return null;
 
         return {
-            bounds: expandRect(bounds),
+            bounds: expandFigureRectWithinOwner(bounds, imageRects, anchorSource.owner),
             matchedQNum: anchorSource.owner.questionNumber,
             legend: displayLegend,
             legendRaw,

@@ -5,9 +5,14 @@ import {
     assignRectToQuestionAnchor,
     buildNuclearStructuralGroups,
     buildNuclearDisplayLegend,
+    detectNuclearContentRotation,
+    expandFigureRectWithinOwner,
     mergeNuclearImageFragments,
+    normalizeNuclearPdfRect,
+    normalizeNuclearTextItemGeometry,
     resolveNuclearDisplayLegend
 } from '../src/lib/nuclearFigureGeometry.mjs';
+import { buildNuclearVlmPageRequest } from '../src/lib/nuclearVlmClient.js';
 
 const structuralObject = (id, type, x, y, w, h, extra = {}) => ({
     id,
@@ -73,6 +78,27 @@ test('does not offer a distant adjacent anchor for a fully owned image', () => {
 
     assert.equal(assignment.defaultAnchor.id, 'A45');
     assert.deepEqual(assignment.candidateAnchorIds, ['A45']);
+});
+
+test('assigns side-by-side images to question anchors on the same row', () => {
+    const anchors = [
+        { id: 'A53', viewportRect: { x: 50, y: 400, w: 60, h: 24 } },
+        { id: 'A55', viewportRect: { x: 310, y: 400, w: 60, h: 24 } }
+    ];
+
+    const left = assignRectToQuestionAnchor(
+        { x: 78, y: 425, w: 190, h: 365 },
+        anchors,
+        842
+    );
+    const right = assignRectToQuestionAnchor(
+        { x: 328, y: 425, w: 228, h: 365 },
+        anchors,
+        842
+    );
+
+    assert.equal(left.defaultAnchor.id, 'A53');
+    assert.equal(right.defaultAnchor.id, 'A55');
 });
 
 test('keeps semantic text after a figure-number caption', () => {
@@ -175,4 +201,186 @@ test('leaves unlabelled multi-image sections for VLM grouping', () => {
 
     assert.equal(result.complete, false);
     assert.deepEqual(result.groups, []);
+});
+
+test('orders structural figure groups by figure label instead of page position', () => {
+    const objects = [
+        structuralObject('A1', 'question_anchor', 40, 25, 75, 24, { text: 'No. 52-2' }),
+        structuralObject('T4', 'text', 80, 60, 40, 20, { text: '図4' }),
+        structuralObject('T6', 'text', 360, 60, 40, 20, { text: '図6' }),
+        structuralObject('T5', 'text', 80, 330, 40, 20, { text: '図5' }),
+        structuralObject('I4', 'image', 70, 90, 220, 200, { defaultQuestionAnchorId: 'A1' }),
+        structuralObject('I6', 'image', 350, 90, 220, 240, { defaultQuestionAnchorId: 'A1' }),
+        structuralObject('I5', 'image', 70, 360, 220, 200, { defaultQuestionAnchorId: 'A1' })
+    ];
+
+    const result = buildNuclearStructuralGroups(objects, 760);
+
+    assert.deepEqual(result.groups.map(group => group.legendIds[0]), ['T4', 'T5', 'T6']);
+    assert.deepEqual(result.groups.map(group => group.imageIds), [['I4'], ['I5'], ['I6']]);
+});
+
+test('keeps staggered side-by-side figure labels in one row', () => {
+    const objects = [
+        structuralObject('A1', 'question_anchor', 40, 25, 75, 24, { text: 'No. 56' }),
+        structuralObject('T3', 'text', 70, 560, 40, 20, { text: '図3' }),
+        structuralObject('T4', 'text', 335, 584, 40, 20, { text: '図4' }),
+        structuralObject('I3', 'image', 65, 590, 245, 225, { defaultQuestionAnchorId: 'A1' }),
+        structuralObject('I4', 'image', 335, 614, 210, 165, { defaultQuestionAnchorId: 'A1' })
+    ];
+
+    const result = buildNuclearStructuralGroups(objects, 840);
+
+    assert.deepEqual(result.groups.map(group => group.imageIds), [['I3'], ['I4']]);
+});
+
+test('groups tight two-by-two image grids without a figure label', () => {
+    const objects = [
+        structuralObject('A1', 'question_anchor', 40, 25, 75, 24, { text: 'No. 52' }),
+        structuralObject('I1', 'image', 100, 100, 80, 75, { defaultQuestionAnchorId: 'A1' }),
+        structuralObject('I2', 'image', 187, 100, 80, 75, { defaultQuestionAnchorId: 'A1' }),
+        structuralObject('I3', 'image', 100, 183, 80, 75, { defaultQuestionAnchorId: 'A1' }),
+        structuralObject('I4', 'image', 187, 183, 80, 75, { defaultQuestionAnchorId: 'A1' }),
+        structuralObject('I5', 'image', 350, 100, 80, 75, { defaultQuestionAnchorId: 'A1' }),
+        structuralObject('I6', 'image', 437, 100, 80, 75, { defaultQuestionAnchorId: 'A1' }),
+        structuralObject('I7', 'image', 350, 183, 80, 75, { defaultQuestionAnchorId: 'A1' }),
+        structuralObject('I8', 'image', 437, 183, 80, 75, { defaultQuestionAnchorId: 'A1' })
+    ];
+
+    const result = buildNuclearStructuralGroups(objects, 600);
+
+    assert.equal(result.complete, true);
+    assert.deepEqual(result.groups.map(group => group.imageIds), [
+        ['I1', 'I2', 'I3', 'I4'],
+        ['I5', 'I6', 'I7', 'I8']
+    ]);
+});
+
+test('keeps a differently sized adjacent image outside a paired composite', () => {
+    const objects = [
+        structuralObject('A1', 'question_anchor', 40, 25, 75, 24, { text: 'No. 53' }),
+        structuralObject('I1', 'image', 40, 70, 140, 425, { defaultQuestionAnchorId: 'A1' }),
+        structuralObject('I2', 'image', 177, 70, 140, 425, { defaultQuestionAnchorId: 'A1' }),
+        structuralObject('I3', 'image', 322, 115, 245, 185, { defaultQuestionAnchorId: 'A1' })
+    ];
+
+    const result = buildNuclearStructuralGroups(objects, 700);
+
+    assert.deepEqual(result.groups.map(group => group.imageIds), [
+        ['I1', 'I2'],
+        ['I3']
+    ]);
+});
+
+test('groups an aligned three-panel row as one composite', () => {
+    const objects = [
+        structuralObject('A1', 'question_anchor', 40, 25, 75, 24, { text: 'No. 47' }),
+        structuralObject('I1', 'image', 100, 100, 95, 360, { defaultQuestionAnchorId: 'A1' }),
+        structuralObject('I2', 'image', 265, 104, 95, 358, { defaultQuestionAnchorId: 'A1' }),
+        structuralObject('I3', 'image', 430, 103, 95, 355, { defaultQuestionAnchorId: 'A1' })
+    ];
+
+    const result = buildNuclearStructuralGroups(objects, 600);
+
+    assert.equal(result.complete, true);
+    assert.deepEqual(result.groups.map(group => group.imageIds), [['I1', 'I2', 'I3']]);
+});
+
+test('normalizes clockwise page content into a horizontal analysis space', () => {
+    const textItem = {
+        str: 'No. 49',
+        transform: [0, -13, 13, 0, 523.7, 768.1],
+        width: 35,
+        height: 13
+    };
+
+    assert.equal(detectNuclearContentRotation([textItem]), 270);
+    const normalizedText = normalizeNuclearTextItemGeometry(textItem, 842, 270, 19);
+    const normalizedRect = normalizeNuclearPdfRect(
+        { x: 93.8, y: 169.8, w: 109.4, h: 502.6 },
+        842,
+        270
+    );
+    assert.ok(Math.abs(normalizedText.x - 73.9) < 0.001);
+    assert.equal(normalizedText.y, 523.7);
+    assert.ok(Math.abs(normalizedRect.x - 169.6) < 0.001);
+    assert.deepEqual(
+        { y: normalizedRect.y, w: normalizedRect.w, h: normalizedRect.h },
+        { y: 93.8, w: 502.6, h: 109.4 }
+    );
+});
+
+test('keeps every image object on a rotated question page in one composite', () => {
+    const objects = [
+        structuralObject('A1', 'question_anchor', 20, 20, 70, 20, { text: 'No. 50' }),
+        structuralObject('I1', 'image', 60, 70, 280, 180, { defaultQuestionAnchorId: 'A1' }),
+        structuralObject('I2', 'image', 390, 70, 180, 180, { defaultQuestionAnchorId: 'A1' }),
+        structuralObject('I3', 'image', 60, 280, 180, 180, { defaultQuestionAnchorId: 'A1' }),
+        structuralObject('I4', 'image', 280, 280, 180, 180, { defaultQuestionAnchorId: 'A1' })
+    ];
+
+    const result = buildNuclearStructuralGroups(objects, 595, {
+        forceQuestionComposite: true
+    });
+
+    assert.equal(result.complete, true);
+    assert.deepEqual(result.groups.map(group => group.imageIds), [['I1', 'I2', 'I3', 'I4']]);
+});
+
+test('builds rotated structural request before generic object limit', () => {
+    const pageCanvas = { width: 1000, height: 1000 };
+    const viewport = {
+        scale: 1,
+        width: 1000,
+        height: 1000,
+        convertToViewportPoint: (x, y) => [x, 1000 - y]
+    };
+    const questionOwners = [{
+        questionNumber: 54,
+        items: [{ text: 'No. 54', x: 20, y: 940, width: 50, height: 12 }],
+        ownerTopY: 960,
+        ownerBottomY: 40,
+        ownerLeftX: -Infinity,
+        ownerRightX: Infinity
+    }];
+    const imageRects = Array.from({ length: 190 }, (_value, index) => ({
+        x: 80 + (index % 19) * 40,
+        y: 120 + Math.floor(index / 19) * 45,
+        w: 28,
+        h: 28
+    }));
+
+    const request = buildNuclearVlmPageRequest({
+        pageNumber: 25,
+        pageCanvas,
+        viewport,
+        imageRects,
+        textLines: [],
+        questionOwners,
+        forceQuestionComposite: true
+    });
+
+    assert.ok(request);
+    assert.equal(request.structuralGroupingComplete, true);
+    assert.equal(request.structuralGroups.length, 1);
+    assert.equal(request.structuralGroups[0].imageIds.length, 190);
+    assert.equal(request.imageDataUrl, '');
+});
+
+test('does not expand a crop into the next question anchor band', () => {
+    const imageRect = { x: 110, y: 370.9, w: 464, h: 433.8 };
+    const result = expandFigureRectWithinOwner(
+        imageRect,
+        [imageRect],
+        {
+            ownerLeftX: -Infinity,
+            ownerRightX: Infinity,
+            ownerBottomY: 375,
+            ownerTopY: 830
+        },
+        8
+    );
+
+    assert.equal(result.y, imageRect.y);
+    assert.ok(Math.abs(result.h - (imageRect.h + 8)) < 0.001);
 });

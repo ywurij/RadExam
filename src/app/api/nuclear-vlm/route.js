@@ -485,6 +485,7 @@ export async function POST(request) {
                 format: VLM_RESPONSE_SCHEMA,
                 options: {
                     temperature: 0,
+                    seed: 42,
                     num_predict: 1200
                 }
             })
