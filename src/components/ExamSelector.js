@@ -25,6 +25,12 @@ export default function ExamSelector() {
  
      const [sessions, setSessions] = useState([]);
 
+    const visibleSessions = useMemo(() => (
+        [...sessions]
+            .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))
+            .slice(0, 4)
+    ), [sessions]);
+
     const isYearValidForExam = (examId, yearValue) => {
         if (!examId || yearValue === 'all' || yearValue === 'last3' || yearValue === 'last5') {
             return true;
@@ -331,7 +337,7 @@ export default function ExamSelector() {
                 <div className={styles.resumeSection}>
                     <h2 className={styles.label}>中断した演習から再開</h2>
                     <div className={styles.resumeGrid}>
-                        {sessions.map(session => {
+                        {visibleSessions.map(session => {
                             const examName = exams.find(e => e.id === session.examId)?.name || session.examId;
                             const progressPercent = session.questionIds && session.questionIds.length > 0
                                 ? Math.round(((session.currentIndex || 0) / session.questionIds.length) * 100)

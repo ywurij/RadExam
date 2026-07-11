@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
-import { getExamData, getAllQuestions, getQuestionsByYear, getGlobalQuestionId, getGenres, initializeLocalExams } from '@/lib/data';
+import { getExamData, getAllQuestions, getQuestionsByYear, getGlobalQuestionId, getGenres, getExamName, initializeLocalExams } from '@/lib/data';
 import QuestionCard from '@/components/QuestionCard';
 import styles from './quiz.module.scss';
 import { saveLocalProgress, getLocalProgress, updateLocalQuestion } from '@/lib/localDb';
@@ -49,6 +49,9 @@ function QuizContent() {
     useEffect(() => {
         const loadData = async () => {
             setLoading(true);
+
+            // 直接この画面を開いた場合も、カスタム試験名などのメタデータを利用できるようにする
+            await initializeLocalExams();
 
             // 1. Load User Progress (Local)
             let userProg = {};
@@ -348,7 +351,7 @@ function QuizContent() {
 
     const currentQuestion = questions[currentIndex];
 
-    const renderNavigation = (className) => (
+    const renderNavigation = (className, showExamName = false) => (
         <div className={className}>
             <button
                 onClick={() => setCurrentIndex((p) => Math.max(0, p - 1))}
@@ -357,6 +360,12 @@ function QuizContent() {
             >
                 前の問題
             </button>
+
+            {showExamName && (
+                <div className={styles.currentExamName} title={getExamName(examId)}>
+                    {getExamName(examId)}
+                </div>
+            )}
 
             {isReviewing ? (
                 <button
@@ -421,7 +430,7 @@ function QuizContent() {
                 </div>
             </header>
 
-            {renderNavigation(styles.topNavigation)}
+            {renderNavigation(styles.topNavigation, true)}
 
             <QuestionCard
                 question={currentQuestion}

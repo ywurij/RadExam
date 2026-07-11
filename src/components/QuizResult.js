@@ -27,7 +27,12 @@ export default function QuizResult({ questions, userProgress, onHome, onToggleLi
 
     return (
         <div className={styles.container} onMouseMove={handleMouseMove}>
-            <h1 className={styles.title}>演習結果</h1>
+            <div className={styles.resultHeader}>
+                <h1 className={styles.title}>演習結果</h1>
+                <button onClick={onHome} className={styles.homeBtn}>
+                    ホームに戻る
+                </button>
+            </div>
 
             <div className={styles.scoreCard}>
                 <div className={styles.scoreLabel}>正解率</div>

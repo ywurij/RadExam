@@ -51,10 +51,30 @@
 }
 
 .topNavigation {
-    display: flex;
-    justify-content: space-between;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1fr);
+    align-items: center;
     gap: 1rem;
     margin-bottom: 1.5rem;
+
+    .navBtn:first-child {
+        justify-self: start;
+    }
+
+    .navBtn:last-child {
+        justify-self: end;
+    }
+}
+
+.currentExamName {
+    min-width: 0;
+    overflow: hidden;
+    color: #2d3748;
+    font-size: 1rem;
+    font-weight: 700;
+    text-align: center;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .navBtn {
@@ -76,5 +96,19 @@
         opacity: 0.5;
         cursor: not-allowed;
         background: #f7fafc;
+    }
+}
+
+@media (max-width: 640px) {
+    .topNavigation {
+        gap: 0.5rem;
+    }
+
+    .currentExamName {
+        font-size: 0.875rem;
+    }
+
+    .navBtn {
+        padding: 0.75rem;
     }
 }

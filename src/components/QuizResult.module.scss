@@ -9,6 +9,14 @@
     font-size: 1.5rem;
     font-weight: bold;
     color: #1f2937;
+    margin: 0;
+}
+
+.resultHeader {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
     margin-bottom: 2rem;
 }
 
@@ -149,6 +157,11 @@
 @media (max-width: 640px) {
     .container {
         padding: 1rem;
+    }
+
+    .resultHeader {
+        align-items: stretch;
+        flex-direction: column;
     }
 }
 
