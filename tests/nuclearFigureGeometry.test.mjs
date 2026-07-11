@@ -3,10 +3,12 @@ import assert from 'node:assert/strict';
 
 import {
     assignRectToQuestionAnchor,
+    buildNuclearCanvasRotationPlan,
     buildNuclearStructuralGroups,
     buildNuclearDisplayLegend,
     detectNuclearContentRotation,
     expandFigureRectWithinOwner,
+    extractPdfImageRectFromTransform,
     mergeNuclearImageFragments,
     normalizeNuclearPdfRect,
     normalizeNuclearTextItemGeometry,
@@ -308,6 +310,58 @@ test('normalizes clockwise page content into a horizontal analysis space', () =>
         { y: normalizedRect.y, w: normalizedRect.w, h: normalizedRect.h },
         { y: 93.8, w: 502.6, h: 109.4 }
     );
+});
+
+test('detects rotated content even when the No anchor is split or unavailable', () => {
+    const items = [
+        { str: 'Time', transform: [0, -10, 10, 0, 100, 700] },
+        { str: 'Activity', transform: [0, -10, 10, 0, 130, 700] },
+        { str: 'Curve', transform: [0, -10, 10, 0, 160, 700] },
+        { str: 'Minutes', transform: [0, -10, 10, 0, 190, 700] },
+        { str: 'kcpm', transform: [0, -10, 10, 0, 220, 700] }
+    ];
+
+    assert.equal(detectNuclearContentRotation(items), 270);
+});
+
+test('extracts a non-zero image rect from a rotated PDF image transform', () => {
+    const rect = extractPdfImageRectFromTransform([0, -774.96, 329.28, 0, 111.84, 808.44]);
+
+    assert.ok(Math.abs(rect.x - 111.84) < 0.001);
+    assert.ok(Math.abs(rect.y - 33.48) < 0.001);
+    assert.ok(Math.abs(rect.w - 329.28) < 0.001);
+    assert.ok(Math.abs(rect.h - 774.96) < 0.001);
+});
+
+test('normalizes the 2021 No.59 image object to the complete landscape graph', () => {
+    const rawRect = extractPdfImageRectFromTransform([0, -774.96, 329.28, 0, 111.84, 808.44]);
+    const normalizedRect = normalizeNuclearPdfRect(rawRect, 841.92, 270);
+
+    assert.ok(Math.abs(normalizedRect.x - 33.48) < 0.001);
+    assert.ok(Math.abs(normalizedRect.y - 111.84) < 0.001);
+    assert.ok(Math.abs(normalizedRect.w - 774.96) < 0.001);
+    assert.ok(Math.abs(normalizedRect.h - 329.28) < 0.001);
+    assert.ok(normalizedRect.w > normalizedRect.h * 2);
+});
+
+test('builds a canvas rotation plan matching the normalized clockwise PDF space', () => {
+    const plan = buildNuclearCanvasRotationPlan(892.8, 1262.88, 270);
+
+    assert.deepEqual(
+        {
+            width: plan.width,
+            height: plan.height,
+            translateX: plan.translateX,
+            translateY: plan.translateY
+        },
+        {
+            width: 1263,
+            height: 893,
+            translateX: 0,
+            translateY: 893
+        }
+    );
+    assert.equal(plan.radians, -Math.PI / 2);
 });
 
 test('keeps every image object on a rotated question page in one composite', () => {

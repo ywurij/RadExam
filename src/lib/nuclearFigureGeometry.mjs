@@ -4,16 +4,64 @@ const axisGap = (firstMin, firstMax, secondMin, secondMax) => {
     return 0;
 };
 
+export const extractPdfImageRectFromTransform = (transform = []) => {
+    const [
+        a = 0,
+        b = 0,
+        c = 0,
+        d = 0,
+        e = 0,
+        f = 0
+    ] = transform;
+    const corners = [
+        [e, f],
+        [a + e, b + f],
+        [c + e, d + f],
+        [a + c + e, b + d + f]
+    ];
+    const xs = corners.map(([x]) => x);
+    const ys = corners.map(([_x, y]) => y);
+    const minX = Math.min(...xs);
+    const minY = Math.min(...ys);
+    const maxX = Math.max(...xs);
+    const maxY = Math.max(...ys);
+
+    return {
+        x: minX,
+        y: minY,
+        w: maxX - minX,
+        h: maxY - minY
+    };
+};
+
 export const detectNuclearContentRotation = (items = []) => {
     const anchorItems = items.filter(item => /(?:No\.?|NO\.?)/i.test(String(item.str || '')));
-    if (anchorItems.length === 0) return 0;
-
-    const verticalClockwiseCount = anchorItems.filter(item => {
+    const isClockwiseVertical = item => {
         const transform = item.transform || [];
         return Math.abs(transform[1] || 0) > Math.abs(transform[0] || 0)
             && (transform[1] || 0) < 0;
-    }).length;
-    return verticalClockwiseCount > anchorItems.length / 2 ? 270 : 0;
+    };
+    const isCounterClockwiseVertical = item => {
+        const transform = item.transform || [];
+        return Math.abs(transform[1] || 0) > Math.abs(transform[0] || 0)
+            && (transform[1] || 0) > 0;
+    };
+
+    if (anchorItems.length > 0) {
+        const verticalClockwiseCount = anchorItems.filter(isClockwiseVertical).length;
+        if (verticalClockwiseCount > anchorItems.length / 2) return 270;
+    }
+
+    const significantItems = items.filter(item => String(item.str || '').trim().length > 0);
+    if (significantItems.length < 3) return 0;
+
+    const clockwiseCount = significantItems.filter(isClockwiseVertical).length;
+    const counterClockwiseCount = significantItems.filter(isCounterClockwiseVertical).length;
+    const verticalCount = clockwiseCount + counterClockwiseCount;
+    return (
+        clockwiseCount > counterClockwiseCount
+        && verticalCount >= Math.max(3, significantItems.length * 0.6)
+    ) ? 270 : 0;
 };
 
 export const normalizeNuclearTextItemGeometry = (item, pageHeight, rotation, pageNum) => {
@@ -45,6 +93,28 @@ export const normalizeNuclearPdfRect = (rect, pageHeight, rotation) => {
         y: rect.x,
         w: rect.h,
         h: rect.w
+    };
+};
+
+export const buildNuclearCanvasRotationPlan = (width, height, rotation) => {
+    if (rotation !== 270) {
+        return {
+            width,
+            height,
+            translateX: 0,
+            translateY: 0,
+            radians: 0
+        };
+    }
+
+    const sourceWidth = Math.ceil(width);
+    const sourceHeight = Math.ceil(height);
+    return {
+        width: sourceHeight,
+        height: sourceWidth,
+        translateX: 0,
+        translateY: sourceWidth,
+        radians: -Math.PI / 2
     };
 };
 

@@ -12,7 +12,9 @@ import {
     requestNuclearVlmGrouping
 } from '@/lib/nuclearVlmClient';
 import {
+    buildNuclearCanvasRotationPlan,
     detectNuclearContentRotation,
+    extractPdfImageRectFromTransform,
     mergeNuclearImageFragments,
     normalizeNuclearPdfRect,
     normalizeNuclearTextItemGeometry,
@@ -1810,9 +1812,15 @@ const buildRotatedNuclearQuestionCompositeGroups = (textItems, imageRects, parse
     }).filter(Boolean);
 };
 
-const buildRotatedNuclearOwnerBandGroups = (textItems, parserProfile, pageWidth) => {
+const buildRotatedNuclearOwnerBandGroups = (textItems, parserProfile, pageWidth, pageHeight) => {
     const questionOwners = buildNuclearQuestionOwners(textItems, parserProfile);
-    if (questionOwners.length === 0 || !Number.isFinite(pageWidth) || pageWidth <= 0) {
+    if (
+        questionOwners.length === 0
+        || !Number.isFinite(pageWidth)
+        || pageWidth <= 0
+        || !Number.isFinite(pageHeight)
+        || pageHeight <= 0
+    ) {
         return [];
     }
 
@@ -1823,8 +1831,13 @@ const buildRotatedNuclearOwnerBandGroups = (textItems, parserProfile, pageWidth)
         const ownedTextItems = textItemsByQuestion.get(questionOwner.ownerKey) || [];
         const leftX = Number.isFinite(questionOwner.ownerLeftX) ? Math.max(0, questionOwner.ownerLeftX) : 0;
         const rightX = Number.isFinite(questionOwner.ownerRightX) ? Math.min(pageWidth, questionOwner.ownerRightX) : pageWidth;
-        const bottomY = Math.max(parserProfile.footerMinY, questionOwner.ownerBottomY);
-        const topY = Math.max(bottomY + 1, questionOwner.ownerTopY);
+        const useFullPageBand = questionOwners.length === 1;
+        const bottomY = useFullPageBand
+            ? parserProfile.footerMinY
+            : Math.max(parserProfile.footerMinY, questionOwner.ownerBottomY);
+        const topY = useFullPageBand
+            ? pageHeight
+            : Math.max(bottomY + 1, questionOwner.ownerTopY);
         const bounds = {
             x: leftX,
             y: bottomY,
@@ -1848,6 +1861,46 @@ const buildRotatedNuclearOwnerBandGroups = (textItems, parserProfile, pageWidth)
             ownedTextItems
         );
     }).filter(Boolean);
+};
+
+const buildRotatedNuclearAnchorPageGroups = (textItems, parserProfile, pageWidth, pageHeight) => {
+    if (!Number.isFinite(pageWidth) || pageWidth <= 0 || !Number.isFinite(pageHeight) || pageHeight <= 0) {
+        return [];
+    }
+
+    const anchors = buildNuclearQuestionOwners(textItems, parserProfile);
+    if (anchors.length === 0) return [];
+
+    return anchors.map(anchor => {
+        const leftX = Number.isFinite(anchor.ownerLeftX) ? Math.max(0, anchor.ownerLeftX) : 0;
+        const rightX = Number.isFinite(anchor.ownerRightX) ? Math.min(pageWidth, anchor.ownerRightX) : pageWidth;
+        const bounds = {
+            x: leftX,
+            y: parserProfile.footerMinY,
+            w: Math.max(1, rightX - leftX),
+            h: Math.max(1, pageHeight - parserProfile.footerMinY)
+        };
+
+        return {
+            matchedQNum: anchor.questionNumber,
+            legend: '',
+            legendRaw: '',
+            displayLegend: '',
+            displayLegendTextItems: [],
+            keepContextInFigure: true,
+            figureNumber: null,
+            figureLabel: '',
+            imageRects: [bounds],
+            textItems: [],
+            anchorItems: (anchor.items || []).filter(item => (
+                NO_QUESTION_LABEL_PATTERN.test(String(item.text || '').trim())
+                || INLINE_NO_QUESTION_PREFIX_PATTERN.test(String(item.text || '').trim())
+            )),
+            bounds,
+            ownerTopY: pageHeight,
+            ownerBottomY: parserProfile.footerMinY
+        };
+    });
 };
 
 const collectInkComponentsInCanvasRegion = (canvas, region, options = {}) => {
@@ -2038,20 +2091,64 @@ const chooseConservativeCropRegion = (rawRegion, candidateRegion) => {
 };
 
 const buildNuclearPageViewports = (page, scale, rotation) => {
-    const renderViewport = page.getViewport({ scale, rotation });
+    const baseRenderViewport = page.getViewport({ scale, rotation: 0 });
     if (rotation !== 270) {
-        return { renderViewport, analysisViewport: renderViewport };
+        return {
+            baseRenderViewport,
+            renderViewport: baseRenderViewport,
+            analysisViewport: baseRenderViewport
+        };
     }
 
+    const rotationPlan = buildNuclearCanvasRotationPlan(
+        baseRenderViewport.width,
+        baseRenderViewport.height,
+        rotation
+    );
     const analysisHeight = page.view[2] - page.view[0];
     const analysisViewport = {
-        width: renderViewport.width,
-        height: renderViewport.height,
+        width: rotationPlan.width,
+        height: rotationPlan.height,
         scale,
         convertToViewportPoint: (x, y) => [x * scale, (analysisHeight - y) * scale],
         convertToPdfPoint: (x, y) => [x / scale, analysisHeight - (y / scale)]
     };
-    return { renderViewport, analysisViewport };
+    return {
+        baseRenderViewport,
+        renderViewport: rotationPlan,
+        analysisViewport
+    };
+};
+
+const renderNuclearPageCanvas = async (page, scale, rotation) => {
+    const {
+        baseRenderViewport,
+        renderViewport,
+        analysisViewport
+    } = buildNuclearPageViewports(page, scale, rotation);
+    const sourceCanvas = document.createElement('canvas');
+    sourceCanvas.width = Math.ceil(baseRenderViewport.width);
+    sourceCanvas.height = Math.ceil(baseRenderViewport.height);
+    const sourceContext = sourceCanvas.getContext('2d');
+
+    await page.render({
+        canvasContext: sourceContext,
+        viewport: baseRenderViewport
+    }).promise;
+
+    if (rotation !== 270) {
+        return { pageCanvas: sourceCanvas, analysisViewport };
+    }
+
+    const pageCanvas = document.createElement('canvas');
+    pageCanvas.width = renderViewport.width;
+    pageCanvas.height = renderViewport.height;
+    const canvasContext = pageCanvas.getContext('2d');
+    canvasContext.translate(renderViewport.translateX, renderViewport.translateY);
+    canvasContext.rotate(renderViewport.radians);
+    canvasContext.drawImage(sourceCanvas, 0, 0);
+
+    return { pageCanvas, analysisViewport };
 };
 
 const convertPdfRectToViewportRect = (rect, viewport) => {
@@ -3592,10 +3689,7 @@ export default function AdminPage() {
                              b1 * e2 + d1 * f2 + f1
                          ];
                      } else if (fn === pdfjsLib.OPS.paintImageXObject || fn === pdfjsLib.OPS.paintInlineImageXObject) {
-                         const imgX = currentTransform[4];
-                         const imgY = currentTransform[5];
-                         const imgW = Math.abs(currentTransform[0]);
-                         const imgH = Math.abs(currentTransform[3]);
+                         const { x: imgX, y: imgY, w: imgW, h: imgH } = extractPdfImageRectFromTransform(currentTransform);
                          
                          if (imgW > 5 && imgH > 5) {
                              rawImageRects.push(normalizeNuclearPdfRect({
@@ -3613,21 +3707,12 @@ export default function AdminPage() {
 
                  if (parserProfile.name === 'nuclear') {
                       const scale = 1.5;
-                      const { renderViewport, analysisViewport: viewport } = buildNuclearPageViewports(
+                      const { pageCanvas, analysisViewport: viewport } = await renderNuclearPageCanvas(
                           page,
                           scale,
                           nuclearAnalysisRotation
                       );
                       const pageFigureAnchors = buildNuclearFigureAnchors(buildTextLineEntriesFromItems(filteredTextItems));
-                      const pageCanvas = document.createElement('canvas');
-                      pageCanvas.width = renderViewport.width;
-                      pageCanvas.height = renderViewport.height;
-                      const canvasCtx = pageCanvas.getContext('2d');
-
-                      await page.render({
-                          canvasContext: canvasCtx,
-                          viewport: renderViewport
-                      }).promise;
 
                       let nuclearGroups = [];
                       let pageUsedRuleFallback = false;
@@ -3636,17 +3721,34 @@ export default function AdminPage() {
                           viewport.width / viewport.scale
                       );
 
+                      // Question anchors must remain available even when the same text item was
+                      // consumed while parsing questions. Rotated pages cannot safely fall through
+                      // to the legacy unrotated crop path because their image rects are normalized.
+                      const rotatedGroupingTextItems = textItems;
                       const buildRotatedFallbackGroups = () => buildRotatedNuclearOwnerBandGroups(
-                          filteredTextItems,
+                          rotatedGroupingTextItems,
                           parserProfile,
-                          viewport.width / viewport.scale
+                          viewport.width / viewport.scale,
+                          viewport.height / viewport.scale
                       );
+
+                      if (nuclearAnalysisRotation !== 0 && nuclearImageRects.length === 0) {
+                          nuclearGroups = buildRotatedNuclearAnchorPageGroups(
+                              rotatedGroupingTextItems,
+                              parserProfile,
+                              viewport.width / viewport.scale,
+                              viewport.height / viewport.scale
+                          );
+                          if (nuclearGroups.length > 0) {
+                              nuclearStructuralPageCount += 1;
+                          }
+                      }
 
                       if (nuclearImageRects.length > 0) {
                           const questionOwners = buildNuclearQuestionOwners(filteredTextItems, parserProfile);
                           if (nuclearAnalysisRotation !== 0) {
                               nuclearGroups = buildRotatedNuclearQuestionCompositeGroups(
-                                  filteredTextItems,
+                                  rotatedGroupingTextItems,
                                   nuclearImageRects,
                                   parserProfile
                               );
@@ -3732,6 +3834,18 @@ export default function AdminPage() {
                                   viewport,
                                   nuclearImageRects
                               );
+                          }
+
+                          if (nuclearGroups.length === 0 && nuclearAnalysisRotation !== 0) {
+                              nuclearGroups = buildRotatedNuclearAnchorPageGroups(
+                                  rotatedGroupingTextItems,
+                                  parserProfile,
+                                  viewport.width / viewport.scale,
+                                  viewport.height / viewport.scale
+                              );
+                              if (nuclearGroups.length > 0) {
+                                  nuclearStructuralPageCount += 1;
+                              }
                           }
                       }
 
