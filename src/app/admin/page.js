@@ -19,7 +19,17 @@ import {
     normalizeNuclearTextItemGeometry,
     resolveNuclearDisplayLegend
 } from '@/lib/nuclearFigureGeometry.mjs';
-import { buildPairedOptionText, extractQuestionTable, findNearestPrecedingQuestion, isPairedOptionHeader } from '@/lib/pdfImportText';
+import {
+    applyDiagnosticImportCorrection,
+    buildPairedOptionText,
+    extractQuestionTable,
+    extractOptionColumnHeaders,
+    findNearestPrecedingQuestion,
+    isPairedOptionHeader,
+    isRepeatedOptionOrFigureLabel,
+    removeContainedImageRects,
+    splitOptionItemsByColumns,
+} from '@/lib/pdfImportText';
 
 const FOOTER_DASH_CLASS = 'ー―－\\-−–—';
 const FOOTER_PAGE_PATTERN = new RegExp(`^[${FOOTER_DASH_CLASS}]?\\s*[0-9０-９]+\\s*[${FOOTER_DASH_CLASS}]?$`);
@@ -3397,10 +3407,19 @@ export default function AdminPage() {
                         const trimmed = String(lineStr || '').trim();
                         if (!trimmed) return;
 
+                        const detectedHeaders = extractOptionColumnHeaders(originalLine);
+                        if (detectedHeaders.length >= 2) {
+                            if (originalLine) q.finalUsedLines.push(originalLine);
+                            return;
+                        }
+
                         const match = trimmed.match(optionPattern);
                         if (match) {
                             optionsStarted = true;
                             const optKey = canonicalizeOptionKey(trimmed[0][0]);
+                            if (isRepeatedOptionOrFigureLabel(optKey, q.options, optionsStarted)) {
+                                return;
+                            }
                             const optText = trimmed.substring(match[0].length).trim();
                             q.options[optKey] = optText;
                             lastOptionKey = optKey;
@@ -3987,7 +4006,7 @@ export default function AdminPage() {
                       }));
                       const effectiveRects = parserProfile.name === 'nuclear'
                           ? mergeNuclearImageRects(preMatchedRects)
-                          : preMatchedRects;
+                          : removeContainedImageRects(preMatchedRects);
 
                       const usedLegendTextKeys = new Set();
 
@@ -4197,6 +4216,8 @@ export default function AdminPage() {
                              path: base64Data,
                              x: crop.minX,
                              y: crop.minY,
+                             w: crop.w,
+                             h: crop.h,
                              legend: crop.legendStr || `図${idx + 1}`,
                              detectedLegend: crop.legendStr || null,
                              page: pageNum,
@@ -4226,6 +4247,7 @@ export default function AdminPage() {
                  const originalOptions = normalizeQuestionOptions(q.options);
                  let optionsStarted = false;
                  let pairedOptionColumns = false;
+                 let optionColumnHeaders = [];
                  let lastOptionKey = '';
                  const cleanQuestionLines = [];
                  const rebuiltOptions = {};
@@ -4260,6 +4282,14 @@ export default function AdminPage() {
                      const sanitizedLineItems = entry.items;
                      const lineText = entry.text;
 
+                     const detectedHeaders = extractOptionColumnHeaders(sanitizedLineItems);
+                     if (detectedHeaders.length >= 2) {
+                         optionColumnHeaders = detectedHeaders;
+                         pairedOptionColumns = detectedHeaders.length === 2;
+                         rebuiltUsedLines.push(sanitizedLineItems);
+                         return;
+                     }
+
                      if (!optionsStarted && isPairedOptionHeader(lineText)) {
                          pairedOptionColumns = true;
                          rebuiltUsedLines.push(sanitizedLineItems);
@@ -4275,8 +4305,15 @@ export default function AdminPage() {
                      if (match) {
                          optionsStarted = true;
                          const optKey = canonicalizeOptionKey(lineText[0][0]);
+                         if (isRepeatedOptionOrFigureLabel(optKey, rebuiltOptions, optionsStarted)) {
+                             return;
+                         }
+                         const columnGroups = splitOptionItemsByColumns(sanitizedLineItems, optionColumnHeaders);
+                         const columnText = columnGroups.length >= 3
+                             ? columnGroups.map(group => buildLineText(group).trim()).filter(Boolean).join(' ')
+                             : '';
                          const pairedText = pairedOptionColumns ? buildPairedOptionText(sanitizedLineItems) : '';
-                         const optText = pairedText || stripFooterSuffix(lineText.substring(match[0].length).trim());
+                         const optText = pairedText || columnText || stripFooterSuffix(lineText.substring(match[0].length).trim());
                          rebuiltOptions[optKey] = optText;
                          lastOptionKey = optKey;
                          rebuiltUsedLines.push(sanitizedLineItems);
@@ -4375,6 +4412,10 @@ export default function AdminPage() {
                      img.legend = resolveImportedImageLegend(img, idx);
                  });
              });
+
+             if (examCategory === '2') {
+                 parsedQuestionsList.forEach(q => applyDiagnosticImportCorrection(detectedYear, q));
+             }
 
              // 2.5.5 ベクタ図形など画像オブジェクトとして検出できない図へのフォールバック
              const figureCuePattern = /(?:図|画像|写真|シェーマ|模式図|図に示|画像を示|写真を示|造影を示|先端形状)/;
