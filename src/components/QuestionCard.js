@@ -120,7 +120,8 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveQ
         setDraft(previous => {
             const images = [...previous.images];
             if (pdfTarget?.mode === 'replace') {
-                images[pdfTarget.index] = { ...images[pdfTarget.index], path };
+                const { storageKey: _oldStorageKey, ...imageWithoutStorageKey } = images[pdfTarget.index];
+                images[pdfTarget.index] = { ...imageWithoutStorageKey, path };
             } else {
                 images.push({ path, legend: `図${images.length + 1}` });
             }
