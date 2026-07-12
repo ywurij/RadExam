@@ -245,7 +245,8 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveQ
     };
 
     return (
-        <div className={styles.card}>
+        <div className={styles.cardLayout}>
+            <div className={styles.questionBlock}>
             {/* Header / ID & Status (Genre Removed from here) */}
             <div className={styles.header}>
                 <span className={styles.questionId}>{question.year} - {question.id}</span>
@@ -411,18 +412,16 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveQ
                 )}
             </div>
 
-            {/* Actions */}
-            <div className={styles.actionRow}>
-                {!showAnswer ? (
+                {/* Actions */}
+                <div className={styles.actionRow}>
+                    {!showAnswer ? (
                     <button
                         className={styles.revealBtn}
                         onClick={handleAnswerCheck}
                     >
                         回答・解説を見る
                     </button>
-                ) : (
-                    <div className={styles.resultArea}>
-                        {/* Explicit Answer & Genre Display */}
+                    ) : (
                         <div className={`${styles.explicitAnswer} ${isCorrect ? styles.correct : ''}`}>
                             <div className={styles.answerBlock}>
                                 {isEditingAnswer ? (
@@ -473,9 +472,14 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveQ
                                 )}
                             </div>
                         </div>
+                    )}
+                </div>
+            </div>
 
-                        {/* Explanation Area */}
-                        <div className={styles.explanation}>
+            {showAnswer && (
+                <>
+                    {/* Explanation Area */}
+                    <div className={styles.explanation}>
                             <div className={styles.expHeader}>
                                 <h3>解説</h3>
                                 {!isEditingExplanation && (
@@ -509,11 +513,10 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveQ
                                     </div>
                                 </div>
                             )}
-                        </div>
+                    </div>
 
-                        {/* Genre Display - Moved Below Explanation */}
-                        {/* Genre Display - Moved Below Explanation */}
-                        <div className={styles.genreArea}>
+                    {/* Genre Display */}
+                    <div className={styles.genreArea}>
                             {isEditingGenre ? (
                                 <div className={styles.genreEdit}>
                                     <span className={styles.label}>ジャンルを選択:</span>
@@ -595,10 +598,9 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveQ
                                     <button onClick={startEditingGenre} className={styles.iconEditBtn} title="編集">✎</button>
                                 </>
                             )}
-                        </div>
                     </div>
-                )}
-            </div>
+                </>
+            )}
         </div>
     );
 }

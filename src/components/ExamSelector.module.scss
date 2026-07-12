@@ -1,5 +1,5 @@
 .container {
-  max-width: 1200px;
+  max-width: var(--page-max-width-wide);
   margin: 0 auto;
   padding: 4rem 2rem;
   font-family: var(--font-geist-sans), sans-serif;

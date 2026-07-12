@@ -7,7 +7,7 @@ export default function UsagePage() {
 
     return (
         <div style={{
-            maxWidth: '900px',
+            maxWidth: 'var(--page-max-width-wide)',
             margin: '0 auto',
             padding: '2.5rem 1.5rem',
             fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',

@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect } from 'react';
-import styles from '../login/login.module.scss';
 import { useRouter } from 'next/navigation';
 
 import { initializeLocalExams, getExamTypes } from '@/lib/data';
@@ -4646,7 +4645,7 @@ export default function AdminPage() {
     return (
         <>
         <div style={{
-            maxWidth: '1200px',
+            maxWidth: 'var(--page-max-width-wide)',
             margin: '0 auto',
             padding: '2rem 1rem',
             fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',

@@ -1,9 +1,18 @@
-.card {
+.cardLayout {
+    width: 100%;
+    margin-bottom: 2rem;
+}
+
+.questionBlock {
     background: #fff;
     border-radius: 1rem;
     box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
     padding: 2rem;
-    margin-bottom: 2rem;
+    margin-bottom: 1.5rem;
+
+    .explicitAnswer {
+        margin-bottom: 0;
+    }
 }
 
 .header {
@@ -262,7 +271,8 @@
 }
 
 .genreArea {
-    margin-top: 1rem;
+    width: 100%;
+    margin: 0 auto;
     display: flex;
     justify-content: space-between;
     /* Push edit button to right */
@@ -274,8 +284,9 @@
     color: #4a5568;
     background: #fff;
     padding: 1rem;
-    border-radius: 0.5rem;
+    border-radius: 0.75rem;
     border: 1px solid #e2e8f0;
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
 }
 
 .genreContent {
@@ -549,6 +560,22 @@
     margin-bottom: 0.5rem;
 }
 
+.explanation {
+    width: calc(100vw - 2rem);
+    max-width: var(--page-max-width-wide);
+    margin: 0 0 1.5rem 50%;
+    padding: 2rem;
+    transform: translateX(-50%);
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-radius: 1rem;
+    box-shadow: 0 2px 6px rgba(15, 23, 42, 0.08);
+
+    @media (max-width: 640px) {
+        padding: 1rem;
+    }
+}
+
 .inlineEdit {
     display: flex;
     align-items: center;
@@ -617,7 +644,7 @@
 
 /* --- Dark Mode Overrides --- */
 @media (prefers-color-scheme: dark) {
-    .card {
+    .questionBlock {
         background: #1a202c;
         color: #e2e8f0;
         box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
@@ -717,6 +744,11 @@
     .genreBadge {
         background: #2d3748;
         color: #e2e8f0;
+    }
+
+    .explanation {
+        background: #1a202c;
+        border-color: #2d3748;
     }
 
     /* Inputs */
