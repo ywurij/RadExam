@@ -46,7 +46,7 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveQ
     const currentImages = question.images || EMPTY_ARRAY;
 
     // Parse selection limit
-    const maxSelection = getSelectionCount(currentQuestionText);
+    const maxSelection = getSelectionCount(currentQuestionText, currentAnswer);
 
     // Memoize slides
     const slides = useMemo(() => currentImages?.map(img => {
