@@ -160,6 +160,26 @@
     text-align: center;
 }
 
+.imageOrderActions {
+  display: inline-flex;
+  gap: 0.2rem;
+
+  button {
+    min-width: 1.7rem;
+    padding: 0.15rem 0.3rem;
+    border: 1px solid #cbd5e0;
+    border-radius: 0.25rem;
+    background: #fff;
+    color: #4a5568;
+    cursor: pointer;
+  }
+
+  button:disabled {
+    opacity: 0.35;
+    cursor: default;
+  }
+}
+
 .options {
     display: flex;
     flex-direction: column;

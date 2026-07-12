@@ -2,9 +2,10 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import PdfClipper from '@/components/PdfClipper';
 
 import { initializeLocalExams, getExamTypes } from '@/lib/data';
-import { saveLocalExam, deleteLocalExam, exportAllLocalData, importLocalData, getLocalExam } from '@/lib/localDb';
+import { saveLocalExam, deleteLocalExam, exportAllLocalData, importLocalData, getLocalExam, saveExamPdf, getExamPdfs } from '@/lib/localDb';
 import {
     buildNuclearVlmPageRequest,
     convertNuclearVlmResultToGroups,
@@ -2874,6 +2875,7 @@ export default function AdminPage() {
     const [parsedQuestions, setParsedQuestions] = useState([]);
     const [parsedYearInput, setParsedYearInput] = useState('');
     const [imageMap, setImageMap] = useState({});
+    const [importedPdfFiles, setImportedPdfFiles] = useState([]);
     const [errorMsg, setErrorMsg] = useState('');
     const [successMsg, setSuccessMsg] = useState('');
     const [examId, setExamId] = useState('');
@@ -2886,6 +2888,9 @@ export default function AdminPage() {
     const [editingExamName, setEditingExamName] = useState('');
     const [editingQuestions, setEditingQuestions] = useState([]);
     const [editingYearFilter, setEditingYearFilter] = useState('all');
+    const [editingPdfFiles, setEditingPdfFiles] = useState([]);
+    const [selectedEditingPdfKey, setSelectedEditingPdfKey] = useState('');
+    const [pdfModal, setPdfModal] = useState(null);
     const [nuclearVlmEnabled, setNuclearVlmEnabled] = useState(true);
     const [nuclearVlmStatus, setNuclearVlmStatus] = useState({
         state: 'unchecked',
@@ -2983,9 +2988,19 @@ export default function AdminPage() {
         });
     };
 
+    const handleMoveImportedImage = (questionIndex, imageIndex, direction) => {
+        setImageMap(prev => {
+            const images = [...(prev[questionIndex] || [])];
+            const nextIndex = imageIndex + direction;
+            if (nextIndex < 0 || nextIndex >= images.length) return prev;
+            [images[imageIndex], images[nextIndex]] = [images[nextIndex], images[imageIndex]];
+            return { ...prev, [questionIndex]: images };
+        });
+    };
+
     const loadExamForEditing = async (exam) => {
         try {
-            const questions = await getLocalExam(exam.id);
+            const [questions, pdfs] = await Promise.all([getLocalExam(exam.id), getExamPdfs(exam.id)]);
             const normalizedQuestions = questions.map((q, index) => {
                 const year = Number(q.year) || new Date().getFullYear();
                 const questionNumber = Number(q.questionNumber ?? String(q.id ?? '').slice(-3) ?? index + 1) || (index + 1);
@@ -3010,6 +3025,8 @@ export default function AdminPage() {
             setEditingExamId(exam.id);
             setEditingExamName(exam.name);
             setEditingQuestions(normalizedQuestions);
+            setEditingPdfFiles(pdfs);
+            setSelectedEditingPdfKey(pdfs[0]?.key || '');
             const availableYears = [...new Set(normalizedQuestions.map(q => Number(q.year)).filter(Boolean))].sort((a, b) => b - a);
             setEditingYearFilter(availableYears[0] ? String(availableYears[0]) : 'all');
             setSuccessMsg(`試験「${exam.name}」を編集モードで読み込みました。`);
@@ -3102,6 +3119,35 @@ export default function AdminPage() {
         }));
     };
 
+    const handleEditingImageMove = (questionIndex, imageIndex, direction) => {
+        updateEditingQuestion(questionIndex, question => {
+            const images = [...question.images];
+            const nextIndex = imageIndex + direction;
+            if (nextIndex < 0 || nextIndex >= images.length) return question;
+            [images[imageIndex], images[nextIndex]] = [images[nextIndex], images[imageIndex]];
+            return { ...question, images };
+        });
+    };
+
+    const openPdfForQuestion = (questionIndex = null) => {
+        const pdf = editingPdfFiles.find(item => item.key === selectedEditingPdfKey) || editingPdfFiles[0];
+        if (!pdf) {
+            setErrorMsg('この試験に保存されているPDFはありません。');
+            return;
+        }
+        setPdfModal({ pdf, questionIndex });
+    };
+
+    const handlePdfClip = (imagePath) => {
+        if (pdfModal?.questionIndex == null) return;
+        updateEditingQuestion(pdfModal.questionIndex, question => ({
+            ...question,
+            images: [...question.images, { path: imagePath, legend: `図${question.images.length + 1}` }],
+        }));
+        setPdfModal(null);
+        setSuccessMsg('PDFの選択範囲を画像として追加しました。編集内容を保存してください。');
+    };
+
     const handleParsedQuestionsYearChange = (value) => {
         setParsedYearInput(value);
 
@@ -3184,6 +3230,7 @@ export default function AdminPage() {
             const combinedQuestions = [];
             const combinedImageMap = {};
             const importSummaries = [];
+            const parsedPdfRecords = [];
 
             for (const [fileIndex, file] of files.entries()) {
             setPdfProgress({
@@ -4563,6 +4610,7 @@ export default function AdminPage() {
                 ? ` 構造アンカー採用: ${nuclearStructuralPageCount}ページ、VLM採用: ${nuclearVlmPageCount}ページ（部分採用: ${nuclearVlmPartialPageCount}ページ）、従来方式併用: ${nuclearRuleFallbackPageCount}ページ、VLM応答不採用: ${nuclearVlmFailureCount}ページ。`
                 : '';
             importSummaries.push(`${file.name}: ${detectedYear}年・${finalQuestions.length}問${vlmSummary}`);
+            parsedPdfRecords.push({ file, year: detectedYear });
             }
 
             const duplicateQuestionIds = combinedQuestions
@@ -4576,6 +4624,7 @@ export default function AdminPage() {
             setParsedQuestions(combinedQuestions);
             setParsedYearInput(detectedYears.length === 1 ? String(detectedYears[0]) : '');
             setImageMap(combinedImageMap);
+            setImportedPdfFiles(parsedPdfRecords);
             setSuccessMsg(`${files.length}件のPDFの自動パースが完了しました。合計 ${combinedQuestions.length} 問を取り込みました。${importSummaries.join(' / ')} 内容を確認して保存してください。`);
         } catch (err) {
             console.error('PDF Import Error:', err);
@@ -4625,6 +4674,7 @@ export default function AdminPage() {
             // 保存を実行（マージは既存試験への追加モードに限定）
             const finalIsMerge = importMode === 'existing';
             await saveLocalExam(examId, examName, finalQuestions, finalIsMerge);
+            await Promise.all(importedPdfFiles.map(item => saveExamPdf(examId, item.year, item.file)));
             
             // data.js のメモリキャッシュを更新
             await initializeLocalExams(true);
@@ -4635,6 +4685,7 @@ export default function AdminPage() {
             setParsedQuestions([]);
             setParsedYearInput('');
             setImageMap({});
+            setImportedPdfFiles([]);
             loadLocalExams();
         } catch (e) {
             setErrorMsg(`保存に失敗しました: ${e.message}`);
@@ -5192,6 +5243,7 @@ export default function AdminPage() {
                                             setParsedQuestions([]);
                                             setParsedYearInput('');
                                             setImageMap({});
+                                            setImportedPdfFiles([]);
                                         }}
                                         style={{
                                             padding: '0.75rem 1.5rem',
@@ -5332,6 +5384,10 @@ export default function AdminPage() {
                                                                     <img src={img.path} alt={img.legend} style={{ width: '30px', height: '30px', objectFit: 'cover', borderRadius: '2px' }} />
                                                                     <span style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap', maxWidth: '160px' }}>{img.legend}</span>
                                                                 </button>
+                                                                <div style={{ display: 'flex', gap: '0.15rem', marginLeft: '0.3rem' }}>
+                                                                    <button type="button" disabled={imgIdx === 0} onClick={() => handleMoveImportedImage(qIdx, imgIdx, -1)} title="前へ移動" style={{ minWidth: '42px', minHeight: '36px', padding: '0.4rem 0.55rem', fontSize: '1rem', fontWeight: 'bold' }}>↑</button>
+                                                                    <button type="button" disabled={imgIdx === localImages.length - 1} onClick={() => handleMoveImportedImage(qIdx, imgIdx, 1)} title="後へ移動" style={{ minWidth: '42px', minHeight: '36px', padding: '0.4rem 0.55rem', fontSize: '1rem', fontWeight: 'bold' }}>↓</button>
+                                                                </div>
                                                                 <button 
                                                                     onClick={() => handleRemoveImage(qIdx, imgIdx)}
                                                                     style={{
@@ -5568,6 +5624,20 @@ export default function AdminPage() {
                                 </div>
                             </div>
 
+                            <div style={{ marginBottom: '1.5rem', padding: '1rem', background: '#f7fafc', border: '1px solid #e2e8f0', borderRadius: '0.5rem' }}>
+                                <div style={{ fontWeight: 'bold', marginBottom: '0.5rem' }}>登録元PDF</div>
+                                {editingPdfFiles.length === 0 ? (
+                                    <div style={{ color: '#718096', fontSize: '0.85rem' }}>この試験には登録元PDFが保存されていません。</div>
+                                ) : (
+                                    <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                                        <select value={selectedEditingPdfKey} onChange={e => setSelectedEditingPdfKey(e.target.value)} style={{ minWidth: '260px', padding: '0.5rem' }}>
+                                            {editingPdfFiles.map(pdf => <option key={pdf.key} value={pdf.key}>{pdf.year ? `${pdf.year}年 — ` : ''}{pdf.name}</option>)}
+                                        </select>
+                                        <button type="button" onClick={() => openPdfForQuestion(null)} style={{ padding: '0.5rem 0.8rem', fontWeight: 'bold' }}>PDFを閲覧</button>
+                                    </div>
+                                )}
+                            </div>
+
                             <div style={{ marginBottom: '1.5rem', display: 'grid', gridTemplateColumns: 'minmax(220px, 320px)', gap: '1rem' }}>
                                 <div>
                                     <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '0.35rem' }}>表示年度</label>
@@ -5665,15 +5735,24 @@ export default function AdminPage() {
                                                     ＋ 画像を追加
                                                     <input type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => handleEditingImageAdd(questionIndex, e.target.files?.[0])} />
                                                 </label>
+                                                {editingPdfFiles.length > 0 && (
+                                                    <button type="button" onClick={() => openPdfForQuestion(questionIndex)} style={{ padding: '0.45rem 0.8rem', border: '1px solid #3182ce', color: '#3182ce', background: '#fff', borderRadius: '0.25rem', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 'bold' }}>
+                                                        PDFから切り抜く
+                                                    </button>
+                                                )}
                                             </div>
                                             {question.images.length === 0 ? (
                                                 <div style={{ color: '#718096', fontSize: '0.8rem' }}>この問題に画像はありません。</div>
                                             ) : (
                                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
                                                     {question.images.map((image, imageIndex) => (
-                                                        <div key={`${question.id}-image-${imageIndex}`} style={{ display: 'grid', gridTemplateColumns: '72px 1fr auto', gap: '0.75rem', alignItems: 'center', background: '#fff', padding: '0.6rem', borderRadius: '0.375rem', border: '1px solid #e2e8f0' }}>
+                                                        <div key={`${question.id}-image-${imageIndex}`} style={{ display: 'grid', gridTemplateColumns: '72px 1fr auto auto', gap: '0.75rem', alignItems: 'center', background: '#fff', padding: '0.6rem', borderRadius: '0.375rem', border: '1px solid #e2e8f0' }}>
                                                             <img src={image.path} alt={image.legend || `image-${imageIndex + 1}`} style={{ width: '72px', height: '72px', objectFit: 'cover', borderRadius: '0.25rem', background: '#edf2f7' }} />
                                                             <input value={image.legend || ''} onChange={(e) => handleEditingImageLegendChange(questionIndex, imageIndex, e.target.value)} placeholder="画像レジェンド" style={{ width: '100%', padding: '0.55rem', borderRadius: '0.375rem', border: '1px solid #cbd5e0' }} />
+                                                            <div style={{ display: 'flex', gap: '0.25rem' }}>
+                                                                <button type="button" disabled={imageIndex === 0} onClick={() => handleEditingImageMove(questionIndex, imageIndex, -1)} title="前へ移動" style={{ minWidth: '48px', minHeight: '40px', padding: '0.45rem 0.6rem', fontSize: '1.05rem', fontWeight: 'bold' }}>↑</button>
+                                                                <button type="button" disabled={imageIndex === question.images.length - 1} onClick={() => handleEditingImageMove(questionIndex, imageIndex, 1)} title="後へ移動" style={{ minWidth: '48px', minHeight: '40px', padding: '0.45rem 0.6rem', fontSize: '1.05rem', fontWeight: 'bold' }}>↓</button>
+                                                            </div>
                                                             <button
                                                                 onClick={() => handleEditingImageRemove(questionIndex, imageIndex)}
                                                                 style={{
@@ -5702,6 +5781,17 @@ export default function AdminPage() {
             )}
 
         </div>
+        {pdfModal && (
+            <div onClick={() => setPdfModal(null)} style={{ position: 'fixed', inset: 0, zIndex: 2100, background: 'rgba(15,23,42,0.82)', padding: '2rem', overflow: 'auto' }}>
+                <div onClick={e => e.stopPropagation()} style={{ maxWidth: '1200px', margin: '0 auto', background: '#edf2f7', borderRadius: '0.6rem', padding: '1rem' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'center', marginBottom: '0.75rem' }}>
+                        <strong>{pdfModal.pdf.name}{pdfModal.questionIndex != null ? ` — 問題 ${editingQuestions[pdfModal.questionIndex]?.id} に画像追加` : ''}</strong>
+                        <button type="button" onClick={() => setPdfModal(null)}>閉じる</button>
+                    </div>
+                    <PdfClipper pdfBlob={pdfModal.pdf.blob} onClip={pdfModal.questionIndex != null ? handlePdfClip : undefined} />
+                </div>
+            </div>
+        )}
         {previewImageModal && (
             <div
                 onClick={() => setPreviewImageModal(null)}

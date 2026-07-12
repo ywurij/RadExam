@@ -23,6 +23,12 @@ const imageStore = localforage.createInstance({
     description: 'ローカル試験画像を保存するストア'
 });
 
+const pdfStore = localforage.createInstance({
+    name: 'RadTestLocal',
+    storeName: 'exam_pdfs',
+    description: '試験登録に使用したPDFを保存するストア'
+});
+
 const LOCAL_IMAGE_PREFIX = 'local-image://';
 
 const isDataUrl = (value) => typeof value === 'string' && value.startsWith('data:');
@@ -30,6 +36,7 @@ const isLocalImageRef = (value) => typeof value === 'string' && value.startsWith
 const buildLocalImageRef = (key) => `${LOCAL_IMAGE_PREFIX}${key}`;
 const extractLocalImageKey = (value) => isLocalImageRef(value) ? value.slice(LOCAL_IMAGE_PREFIX.length) : '';
 const buildExamImageKeyPrefix = (examId) => `${examId}::`;
+const buildExamPdfKeyPrefix = (examId) => `${examId}::`;
 const resolveImageLegend = (source, imageIndex) => (
     Object.prototype.hasOwnProperty.call(source, 'legend')
         ? String(source.legend ?? '')
@@ -292,6 +299,34 @@ export const getAllLocalExams = async () => {
 export const deleteLocalExam = async (examId) => {
     await examsStore.removeItem(examId);
     await cleanupOrphanExamImages(examId, new Set());
+    const pdfKeys = [];
+    await pdfStore.iterate((_value, key) => {
+        if (key.startsWith(buildExamPdfKeyPrefix(examId))) pdfKeys.push(key);
+    });
+    await Promise.all(pdfKeys.map(key => pdfStore.removeItem(key)));
+};
+
+export const saveExamPdf = async (examId, year, file) => {
+    if (!examId || !file) return;
+    const name = file.name || `${year || 'unknown'}.pdf`;
+    const key = `${buildExamPdfKeyPrefix(examId)}${year || 'unknown'}::${name}`;
+    await pdfStore.setItem(key, {
+        examId,
+        year: Number(year) || null,
+        name,
+        type: file.type || 'application/pdf',
+        size: file.size || 0,
+        blob: file instanceof Blob ? file : new Blob([file], { type: 'application/pdf' }),
+        updatedAt: new Date().toISOString(),
+    });
+};
+
+export const getExamPdfs = async (examId) => {
+    const records = [];
+    await pdfStore.iterate((value, key) => {
+        if (key.startsWith(buildExamPdfKeyPrefix(examId))) records.push({ key, ...value });
+    });
+    return records.sort((a, b) => (b.year || 0) - (a.year || 0) || a.name.localeCompare(b.name, 'ja'));
 };
 
 /**
@@ -397,7 +432,8 @@ export const exportAllLocalData = async () => {
         timestamp: Date.now(),
         exams: {},
         progress: {},
-        images: {}
+        images: {},
+        pdfs: {}
     };
 
     // 試験データをエクスポート用に追加
@@ -413,6 +449,15 @@ export const exportAllLocalData = async () => {
     await imageStore.iterate((value, key) => {
         backup.images[key] = value;
     });
+
+    const pdfRecords = [];
+    await pdfStore.iterate((value, key) => pdfRecords.push([key, value]));
+    await Promise.all(pdfRecords.map(async ([key, value]) => {
+        backup.pdfs[key] = {
+            ...value,
+            blob: value?.blob instanceof Blob ? await blobToDataUrl(value.blob) : value?.blob,
+        };
+    }));
 
     return backup;
 };
@@ -431,7 +476,7 @@ export const importLocalData = async (jsonData, strategy = 'overwrite') => {
         throw new Error("Unsupported import strategy");
     }
 
-    const { exams, progress, images } = jsonData;
+    const { exams, progress, images, pdfs } = jsonData;
 
     // 1. 試験データのインポート
     if (exams && typeof exams === 'object') {
@@ -454,6 +499,16 @@ export const importLocalData = async (jsonData, strategy = 'overwrite') => {
     if (images && typeof images === 'object') {
         for (const [key, value] of Object.entries(images)) {
             await imageStore.setItem(key, value);
+        }
+    }
+
+    await pdfStore.clear();
+    if (pdfs && typeof pdfs === 'object') {
+        for (const [key, value] of Object.entries(pdfs)) {
+            await pdfStore.setItem(key, {
+                ...value,
+                blob: isDataUrl(value?.blob) ? await dataUrlToBlob(value.blob) : value?.blob,
+            });
         }
     }
 };

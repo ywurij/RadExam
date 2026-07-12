@@ -162,6 +162,15 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveQ
         setEditingLegendIdx(null);
     };
 
+    const handleMoveImage = (idx, direction) => {
+        const nextIndex = idx + direction;
+        if (!onSaveQuestionData || nextIndex < 0 || nextIndex >= currentImages.length) return;
+        const updatedImages = [...currentImages];
+        [updatedImages[idx], updatedImages[nextIndex]] = [updatedImages[nextIndex], updatedImages[idx]];
+        onSaveQuestionData(question.id, { images: updatedImages });
+        setLightboxIndex(nextIndex);
+    };
+
     const toggleOption = (key) => {
         if (showAnswer) return;
 
@@ -337,6 +346,12 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveQ
                                         <span className={styles.legend} style={{ margin: 0, color: '#a0aec0', fontStyle: 'italic' }}>凡例なし</span>
                                     )}
                                     <button onClick={() => startEditingLegend(idx, img.legend)} className={styles.iconEditBtn} style={{ padding: 0 }} title="凡例を編集">✎</button>
+                                    {currentImages.length > 1 && (
+                                        <span className={styles.imageOrderActions}>
+                                            <button disabled={idx === 0} onClick={() => handleMoveImage(idx, -1)} title="画像を前へ">←</button>
+                                            <button disabled={idx === currentImages.length - 1} onClick={() => handleMoveImage(idx, 1)} title="画像を後へ">→</button>
+                                        </span>
+                                    )}
                                 </div>
                             )}
                         </div>
