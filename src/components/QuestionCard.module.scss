@@ -74,6 +74,36 @@
     margin-bottom: 2rem;
 }
 
+.questionText :global(.tableWrapper) {
+    width: 100%;
+    margin: 1.5rem 0 0;
+    overflow-x: auto;
+
+    table {
+        width: 100%;
+        min-width: 560px;
+        border-collapse: collapse;
+    }
+
+    th,
+    td {
+        padding: 0.55rem 0.75rem;
+        border: 1px solid #cbd5e0;
+        text-align: center;
+        white-space: nowrap;
+    }
+
+    th:first-child,
+    td:first-child {
+        text-align: left;
+    }
+
+    th {
+        background: #f7fafc;
+        font-weight: 600;
+    }
+}
+
 .imageGrid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -667,6 +697,17 @@
     .questionText,
     .richTextContent {
         color: #e2e8f0;
+    }
+
+    .questionText :global(.tableWrapper) {
+        th,
+        td {
+            border-color: #4a5568;
+        }
+
+        th {
+            background: #2d3748;
+        }
     }
 
     .optionBtn {

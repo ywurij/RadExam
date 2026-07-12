@@ -19,6 +19,7 @@ import {
     normalizeNuclearTextItemGeometry,
     resolveNuclearDisplayLegend
 } from '@/lib/nuclearFigureGeometry.mjs';
+import { buildPairedOptionText, extractQuestionTable, findNearestPrecedingQuestion, isPairedOptionHeader } from '@/lib/pdfImportText';
 
 const FOOTER_DASH_CLASS = 'ー―－\\-−–—';
 const FOOTER_PAGE_PATTERN = new RegExp(`^[${FOOTER_DASH_CLASS}]?\\s*[0-9０-９]+\\s*[${FOOTER_DASH_CLASS}]?$`);
@@ -2338,7 +2339,7 @@ const getPdfParserProfile = (examCategory) => {
         minOptionCount: 3,
         maxQuestionNumber: 150,
         footerMinY: 60,
-        imageAssignmentStrategy: 'page-last-question'
+        imageAssignmentStrategy: 'nearest-preceding-question'
     };
 };
 
@@ -4224,12 +4225,13 @@ export default function AdminPage() {
              parsedQuestionsList.forEach(q => {
                  const originalOptions = normalizeQuestionOptions(q.options);
                  let optionsStarted = false;
+                 let pairedOptionColumns = false;
                  let lastOptionKey = '';
                  const cleanQuestionLines = [];
                  const rebuiltOptions = {};
                  const rebuiltUsedLines = [];
 
-                 q.usedLines.forEach(line => {
+                 const sanitizedEntries = q.usedLines.map(line => {
                      const sanitizedLineItems = line.filter(item => {
                          if (imageContainedTextKeys.has(buildTextItemKey(item))) return false;
                          const trimmed = item.text.trim();
@@ -4240,18 +4242,41 @@ export default function AdminPage() {
                          return !isFooterFragment;
                      });
 
-                     if (sanitizedLineItems.length === 0) return;
-
+                     if (sanitizedLineItems.length === 0) return null;
                      let lineText = buildLineText(sanitizedLineItems).trim();
-                     if (!lineText) return;
+                     if (!lineText) return null;
                      lineText = stripFooterSuffix(lineText);
-                     if (!lineText) return;
+                     if (!lineText) return null;
+                     return { items: sanitizedLineItems, text: lineText };
+                 }).filter(Boolean);
+
+                 const firstOptionIndex = sanitizedEntries.findIndex(entry => optionPattern.test(entry.text));
+                 const questionEntries = firstOptionIndex >= 0
+                     ? sanitizedEntries.slice(0, firstOptionIndex)
+                     : sanitizedEntries;
+                 const detectedTable = extractQuestionTable(questionEntries);
+
+                 sanitizedEntries.forEach((entry, entryIndex) => {
+                     const sanitizedLineItems = entry.items;
+                     const lineText = entry.text;
+
+                     if (!optionsStarted && isPairedOptionHeader(lineText)) {
+                         pairedOptionColumns = true;
+                         rebuiltUsedLines.push(sanitizedLineItems);
+                         return;
+                     }
+
+                     if (!optionsStarted && detectedTable.lineIndexes.has(entryIndex)) {
+                         rebuiltUsedLines.push(sanitizedLineItems);
+                         return;
+                     }
 
                      const match = lineText.match(optionPattern);
                      if (match) {
                          optionsStarted = true;
                          const optKey = canonicalizeOptionKey(lineText[0][0]);
-                         const optText = stripFooterSuffix(lineText.substring(match[0].length).trim());
+                         const pairedText = pairedOptionColumns ? buildPairedOptionText(sanitizedLineItems) : '';
+                         const optText = pairedText || stripFooterSuffix(lineText.substring(match[0].length).trim());
                          rebuiltOptions[optKey] = optText;
                          lastOptionKey = optKey;
                          rebuiltUsedLines.push(sanitizedLineItems);
@@ -4274,7 +4299,7 @@ export default function AdminPage() {
                      }
                  });
 
-                 q.question = cleanQuestionLines.join('\n').trim();
+                 q.question = [cleanQuestionLines.join('\n').trim(), detectedTable.html].filter(Boolean).join('\n');
                  q.options = getFilledOptionCount(rebuiltOptions) > 0
                      ? normalizeQuestionOptions(rebuiltOptions)
                      : originalOptions;
@@ -4304,8 +4329,7 @@ export default function AdminPage() {
                  }
              });
 
-             // 優先順位2：同一ページ内で出現した画像を、そのページ内の「最後の問題」に割り当てる
-             // （試験4など「問題文→選択肢→画像」の順番になるため、ページ下部の画像は直前の問題に属する）
+             // 優先順位2：同一ページ内の画像を、その直前にある最も近い問題へ割り当てる
              const questionsByPage = {};
              parsedQuestionsList.forEach(q => {
                  if (!questionsByPage[q.startPage]) questionsByPage[q.startPage] = [];
@@ -4328,12 +4352,8 @@ export default function AdminPage() {
 
                      if (parserProfile.imageAssignmentStrategy === 'nearest-preceding-question') {
                          pageImgs.forEach(img => {
-                             const precedingQuestions = qs.filter(q => q.anchorY >= img.y - 5);
-                             const targetQ = precedingQuestions.length > 0
-                                 ? precedingQuestions.reduce((closest, candidate) => (
-                                     (candidate.anchorY - img.y) < (closest.anchorY - img.y) ? candidate : closest
-                                 ))
-                                 : qs[qs.length - 1];
+                             const targetQ = findNearestPrecedingQuestion(qs, img.y);
+                             if (!targetQ) return;
                              targetQ.pageImages.push(img);
                              assignedImages.add(img);
                          });
