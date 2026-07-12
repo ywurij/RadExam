@@ -1,621 +1,229 @@
 "use client";
 
-import { useState, useEffect, useMemo } from 'react';
-import Image from 'next/image';
-import Lightbox from "yet-another-react-lightbox";
-import "yet-another-react-lightbox/styles.css";
+import { useEffect, useMemo, useState } from 'react';
+import Lightbox from 'yet-another-react-lightbox';
+import 'yet-another-react-lightbox/styles.css';
 import AnswerEditor from './AnswerEditor';
+import PdfClipper from './PdfClipper';
 import { getSelectionCount } from '@/lib/utils';
 import styles from './QuestionCard.module.scss';
-import 'katex/dist/katex.min.css'; // Import global Katex CSS here just in case
+import 'katex/dist/katex.min.css';
 
-export default function QuestionCard({ question, userProgress, onAnswer, onSaveQuestionData, onUpdateStatus, availableGenres }) {
+const normalizeAnswer = value => Array.isArray(value) ? value : String(value || '').split(/[,、\s]+/).filter(Boolean);
+
+export default function QuestionCard({ question, userProgress, onAnswer, onSaveQuestionData, onUpdateStatus, availableGenres, pdfFiles = [], onEditingChange }) {
     const [selectedOptions, setSelectedOptions] = useState([]);
     const [showAnswer, setShowAnswer] = useState(false);
-
-    // Editing States
+    const [isEditing, setIsEditing] = useState(false);
+    const [isSaving, setIsSaving] = useState(false);
     const [isEditingAnswer, setIsEditingAnswer] = useState(false);
     const [isEditingGenre, setIsEditingGenre] = useState(false);
     const [isEditingExplanation, setIsEditingExplanation] = useState(false);
-    const [isEditingQuestion, setIsEditingQuestion] = useState(false);
-    const [isEditingOptions, setIsEditingOptions] = useState(false);
-    const [editingLegendIdx, setEditingLegendIdx] = useState(null);
-
-    const [editAnswerKey, setEditAnswerKey] = useState("");
-    const [editGenre, setEditGenre] = useState("");
-    const [draftExplanation, setDraftExplanation] = useState("");
-    const [isSavingExplanation, setIsSavingExplanation] = useState(false);
-    
-    const [draftQuestionText, setDraftQuestionText] = useState("");
-    const [draftOptions, setDraftOptions] = useState({});
-    const [draftLegendText, setDraftLegendText] = useState("");
-
-    // Lightbox state
+    const [editAnswer, setEditAnswer] = useState([]);
+    const [editGenre, setEditGenre] = useState('');
+    const [editExplanation, setEditExplanation] = useState('');
+    const [draft, setDraft] = useState(null);
+    const [draggedImageIndex, setDraggedImageIndex] = useState(null);
+    const [pdfTarget, setPdfTarget] = useState(null);
+    const [selectedPdfKey, setSelectedPdfKey] = useState('');
     const [lightboxOpen, setLightboxOpen] = useState(false);
     const [lightboxIndex, setLightboxIndex] = useState(0);
 
-    // Stable reference for empty array
-    const EMPTY_ARRAY = useMemo(() => [], []);
-
-    // Derived states
-    const currentAnswer = question.answer || EMPTY_ARRAY;
-    const currentGenre = question.genre || "";
-    const currentExplanation = question.explanation || "";
-    const currentQuestionText = question.question || "";
+    const currentAnswer = question.answer || [];
+    const currentImages = useMemo(() => question.images || [], [question.images]);
     const currentOptions = question.options || {};
-    const currentImages = question.images || EMPTY_ARRAY;
+    const maxSelection = getSelectionCount(question.question || '', currentAnswer);
+    const slides = useMemo(() => currentImages.map(img => ({ src: img.path?.startsWith('data:') ? img.path : `/${img.path}` })), [currentImages]);
+    const selectedPdf = pdfFiles.find(pdf => pdf.key === selectedPdfKey) || pdfFiles[0];
 
-    // Parse selection limit
-    const maxSelection = getSelectionCount(currentQuestionText, currentAnswer);
-
-    // Memoize slides
-    const slides = useMemo(() => currentImages?.map(img => {
-        const isBase64 = img.path?.startsWith('data:');
-        return { src: isBase64 ? img.path : `/${img.path}` };
-    }) || [], [currentImages]);
-
-    // KaTeX Rendering for View Mode
-    useEffect(() => {
-        if (!isEditingExplanation && showAnswer) {
-            import('katex').then(katex => {
-                const mathNodes = document.querySelectorAll('.richTextContent span[data-type="math"]');
-                mathNodes.forEach(node => {
-                    const latex = node.getAttribute('latex');
-                    if (latex) {
-                        try {
-                            katex.default.render(latex, node, {
-                                throwOnError: false,
-                                displayMode: false // Inline math
-                            });
-                        } catch (e) {
-                            console.error("KaTeX render error:", e);
-                            node.textContent = latex;
-                        }
-                    }
-                });
-            });
-        }
-    }, [isEditingExplanation, showAnswer, currentExplanation]); // Re-run when switching to view mode or explanation changes
-
-    // Sync state if revisiting a question
     useEffect(() => {
         setSelectedOptions([]);
         setShowAnswer(false);
+        setIsEditing(false);
+        onEditingChange?.(false);
         setIsEditingAnswer(false);
         setIsEditingGenre(false);
         setIsEditingExplanation(false);
-        setIsSavingExplanation(false);
-        setIsEditingQuestion(false);
-        setIsEditingOptions(false);
-        setEditingLegendIdx(null);
-        // Reset drafts to avoid stale content
-        setEditAnswerKey("");
-        setEditGenre("");
-        setDraftExplanation("");
-        setDraftQuestionText("");
-        setDraftOptions({});
-        setDraftLegendText("");
-    }, [question.id]);
+        setDraft(null);
+        setPdfTarget(null);
+        setSelectedPdfKey(pdfFiles[0]?.key || '');
+    }, [question.id, pdfFiles, onEditingChange]);
 
-    // Handlers for starting edit
-    const startEditingAnswer = () => {
-        const ansStr = Array.isArray(currentAnswer) ? currentAnswer.join(',') : (currentAnswer || "");
-        setEditAnswerKey(ansStr);
-        setIsEditingAnswer(true);
-    };
-
-    const startEditingGenre = () => {
-        setEditGenre(currentGenre);
-        setIsEditingGenre(true);
-    };
-
-    const startEditingExplanation = () => {
-        setDraftExplanation(currentExplanation);
-        setIsEditingExplanation(true);
-    };
-
-    const startEditingQuestion = () => {
-        setDraftQuestionText(currentQuestionText);
-        setIsEditingQuestion(true);
-    };
-
-    const startEditingOptions = () => {
-        setDraftOptions({ ...currentOptions });
-        setIsEditingOptions(true);
-    };
-
-    const startEditingLegend = (idx, currentLegend) => {
-        setDraftLegendText(currentLegend || "");
-        setEditingLegendIdx(idx);
-    };
-
-    const handleSaveQuestionText = () => {
-        if (onSaveQuestionData) {
-            onSaveQuestionData(question.id, {
-                question: draftQuestionText
+    useEffect(() => {
+        if (!showAnswer) return;
+        import('katex').then(katex => {
+            document.querySelectorAll('.richTextContent span[data-type="math"]').forEach(node => {
+                const latex = node.getAttribute('latex');
+                if (latex) katex.default.render(latex, node, { throwOnError: false, displayMode: false });
             });
+        });
+    }, [showAnswer, question.explanation]);
+
+    const beginEditing = () => {
+        setDraft({
+            question: question.question || '',
+            options: { ...currentOptions },
+            images: currentImages.map(image => ({ ...image })),
+        });
+        setSelectedPdfKey(pdfFiles[0]?.key || '');
+        setIsEditing(true);
+        onEditingChange?.(true);
+    };
+
+    const closeEditing = () => {
+        setIsEditing(false);
+        setDraft(null);
+        setPdfTarget(null);
+        onEditingChange?.(false);
+    };
+
+    const saveAll = async () => {
+        if (!draft || isSaving) return;
+        setIsSaving(true);
+        try {
+            await onSaveQuestionData?.(question.id, draft);
+            closeEditing();
+        } catch (error) {
+            console.error('Failed to save question:', error);
+        } finally {
+            setIsSaving(false);
         }
-        setIsEditingQuestion(false);
     };
 
-    const handleSaveOptions = () => {
-        if (onSaveQuestionData) {
-            onSaveQuestionData(question.id, {
-                options: draftOptions
-            });
-        }
-        setIsEditingOptions(false);
+    const updateDraftImage = (index, updates) => setDraft(previous => ({
+        ...previous,
+        images: previous.images.map((image, imageIndex) => imageIndex === index ? { ...image, ...updates } : image),
+    }));
+
+    const handleImageFile = file => {
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = event => setDraft(previous => ({
+            ...previous,
+            images: [...previous.images, { path: event.target.result, legend: `図${previous.images.length + 1}` }],
+        }));
+        reader.readAsDataURL(file);
     };
 
-    const handleSaveLegend = (idx) => {
-        if (onSaveQuestionData) {
-            const updatedImages = currentImages.map((img, i) => {
-                if (i === idx) {
-                    return { ...img, legend: draftLegendText };
-                }
-                return img;
-            });
-            onSaveQuestionData(question.id, {
-                images: updatedImages
-            });
-        }
-        setEditingLegendIdx(null);
+    const handleDropImage = targetIndex => {
+        if (draggedImageIndex == null || draggedImageIndex === targetIndex) return;
+        setDraft(previous => {
+            const images = [...previous.images];
+            const [moved] = images.splice(draggedImageIndex, 1);
+            images.splice(targetIndex, 0, moved);
+            return { ...previous, images };
+        });
+        setDraggedImageIndex(null);
     };
 
-    const handleMoveImage = (idx, direction) => {
-        const nextIndex = idx + direction;
-        if (!onSaveQuestionData || nextIndex < 0 || nextIndex >= currentImages.length) return;
-        const updatedImages = [...currentImages];
-        [updatedImages[idx], updatedImages[nextIndex]] = [updatedImages[nextIndex], updatedImages[idx]];
-        onSaveQuestionData(question.id, { images: updatedImages });
-        setLightboxIndex(nextIndex);
-    };
-
-    const toggleOption = (key) => {
-        if (showAnswer) return;
-
-        if (selectedOptions.includes(key)) {
-            setSelectedOptions(prev => prev.filter(k => k !== key));
-        } else {
-            if (maxSelection === 1) {
-                // Single choice: Replace
-                setSelectedOptions([key]);
-            } else if (selectedOptions.length < maxSelection) {
-                // Multi choice: Add if within limit
-                setSelectedOptions(prev => [...prev, key]);
+    const handlePdfClip = path => {
+        setDraft(previous => {
+            const images = [...previous.images];
+            if (pdfTarget?.mode === 'replace') {
+                images[pdfTarget.index] = { ...images[pdfTarget.index], path };
+            } else {
+                images.push({ path, legend: `図${images.length + 1}` });
             }
-        }
+            return { ...previous, images };
+        });
+        setPdfTarget(null);
     };
 
-    const handleAnswerCheck = () => {
+    const toggleOption = key => {
+        if (showAnswer) return;
+        setSelectedOptions(previous => previous.includes(key)
+            ? previous.filter(item => item !== key)
+            : maxSelection === 1 ? [key] : previous.length < maxSelection ? [...previous, key] : previous);
+    };
+
+    const revealAnswer = () => {
         setShowAnswer(true);
         onAnswer(selectedOptions);
-
-        if (currentAnswer && onUpdateStatus) {
-            const normalize = (val) => {
-                if (Array.isArray(val)) return [...val].sort().join('');
-                return (val || '').split(',').sort().join('');
-            };
-            const isCorrect = normalize(selectedOptions) === normalize(currentAnswer);
-            onUpdateStatus(question.id, { status: isCorrect ? 'correct' : 'incorrect' });
-        }
+        const expected = [...normalizeAnswer(currentAnswer)].sort().join('');
+        const actual = [...selectedOptions].sort().join('');
+        onUpdateStatus?.(question.id, { status: expected === actual ? 'correct' : 'incorrect' });
     };
 
-    const handleSaveAnswer = () => {
-        if (onSaveQuestionData) {
-            const safeAnswer = editAnswerKey.split(/[,、\s]+/).map(s => s.trim()).filter(Boolean);
-            onSaveQuestionData(question.id, {
-                answer: safeAnswer
-            });
-        }
+    const saveAnswer = async () => {
+        await onSaveQuestionData?.(question.id, { answer: editAnswer });
         setIsEditingAnswer(false);
     };
-
-    const handleSaveGenre = () => {
-        if (onSaveQuestionData) {
-            onSaveQuestionData(question.id, {
-                genre: editGenre
-            });
-        }
+    const saveGenre = async () => {
+        await onSaveQuestionData?.(question.id, { genre: editGenre });
         setIsEditingGenre(false);
     };
-
-    const handleSaveExplanation = async () => {
-        if (isSavingExplanation) return;
-        setIsSavingExplanation(true);
-
-        try {
-            if (onSaveQuestionData) {
-                await onSaveQuestionData(question.id, {
-                    explanation: draftExplanation
-                });
-            }
-            setIsEditingExplanation(false);
-        } catch (error) {
-            console.error("Failed to save explanation:", error);
-            alert("解説の保存に失敗しました。");
-        } finally {
-            setIsSavingExplanation(false);
-        }
+    const saveExplanation = async () => {
+        await onSaveQuestionData?.(question.id, { explanation: editExplanation });
+        setIsEditingExplanation(false);
     };
 
-    // Status / Favorite handlers
     const isCorrect = userProgress?.status === 'correct';
     const isIncorrect = userProgress?.status === 'incorrect';
     const isLiked = userProgress?.isLiked || false;
-
-    const handleStatusToggle = (status) => {
-        const newStatus = userProgress?.status === status ? null : status;
-        if (onUpdateStatus) onUpdateStatus(question.id, { status: newStatus });
-    };
-
-    const handleLikeToggle = () => {
-        if (onUpdateStatus) onUpdateStatus(question.id, { isLiked: !isLiked });
-    };
+    const toggleStatus = status => onUpdateStatus?.(question.id, { status: userProgress?.status === status ? null : status });
 
     return (
         <div className={styles.cardLayout}>
             <div className={styles.questionBlock}>
-            {/* Header / ID & Status (Genre Removed from here) */}
-            <div className={styles.header}>
-                <span className={styles.questionId}>{question.year} - {question.id}</span>
-                {/* Genre logic moved to result area, but if not showing answer, user might want to see genre? 
-                    User asked: "After clicking reveal button, display genre with answer/explanation".
-                    So we hide it here? Or keep it? "Genre display position... after clicking...". 
-                    implies it shouldn't be here, OR it should be duplicated/moved. 
-                    I'll remove it from header to reduce clutter as requested. 
-                */}
-
-                <div className={styles.statusIcons}>
-                    <button
-                        className={`${styles.statusBtn} ${isLiked ? styles.activeLiked : ''}`}
-                        onClick={handleLikeToggle}
-                        title="お気に入り"
-                    >
-                        ★
-                    </button>
-                    <button
-                        className={`${styles.statusBtn} ${isCorrect ? styles.activeCorrect : ''}`}
-                        onClick={() => handleStatusToggle('correct')}
-                        title="正解として記録"
-                    >
-                        ✓
-                    </button>
-                    <button
-                        className={`${styles.statusBtn} ${isIncorrect ? styles.activeIncorrect : ''}`}
-                        onClick={() => handleStatusToggle('incorrect')}
-                        title="不正解として記録"
-                    >
-                        ✕
-                    </button>
+                <div className={styles.header}>
+                    <span className={styles.questionId}>{question.year} - {question.id}</span>
+                    <div className={styles.statusIcons}>
+                        {!isEditing && <button type="button" onClick={beginEditing} className={styles.editQuestionBtn}>設問を編集</button>}
+                        <button className={`${styles.statusBtn} ${isLiked ? styles.activeLiked : ''}`} onClick={() => onUpdateStatus?.(question.id, { isLiked: !isLiked })} title="お気に入り">★</button>
+                        <button className={`${styles.statusBtn} ${isCorrect ? styles.activeCorrect : ''}`} onClick={() => toggleStatus('correct')} title="正解として記録">✓</button>
+                        <button className={`${styles.statusBtn} ${isIncorrect ? styles.activeIncorrect : ''}`} onClick={() => toggleStatus('incorrect')} title="不正解として記録">✕</button>
+                    </div>
                 </div>
-            </div>
 
-            {/* Question Text */}
-            <div className={styles.questionSection} style={{ marginBottom: '1.5rem' }}>
-                {!isEditingQuestion ? (
-                    <div className={styles.questionTextWrapper} style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '0.5rem' }}>
-                        <div
-                            className={styles.questionText}
-                            style={{ margin: 0, flex: 1 }}
-                            dangerouslySetInnerHTML={{ __html: currentQuestionText }}
-                        />
-                        <button onClick={startEditingQuestion} className={styles.iconEditBtn} style={{ marginTop: '4px' }} title="問題文を編集">✎</button>
+                {isEditing && draft ? (
+                    <div className={`${styles.editWorkspace} ${selectedPdf ? styles.withPdf : ''}`}>
+                    <div className={styles.unifiedEditor}>
+                        <div className={styles.editorTitleRow}><h3>設問全体の編集</h3><span>編集後、下部の「変更を保存」でまとめて反映します。</span></div>
+
+                        <label className={styles.editorLabel}>問題文</label>
+                        <AnswerEditor content={draft.question} onChange={value => setDraft(previous => ({ ...previous, question: value }))} />
+
+                        <label className={styles.editorLabel}>選択肢</label>
+                        <div className={styles.optionEditorGrid}>
+                            {Object.keys(draft.options).sort().map(key => <div key={key}><strong>{key}.</strong><input value={draft.options[key] || ''} onChange={event => setDraft(previous => ({ ...previous, options: { ...previous.options, [key]: event.target.value } }))} /></div>)}
+                        </div>
+
+                        <label className={styles.editorLabel}>画像・レジェンド</label>
+                        <div className={styles.imageEditToolbar}>
+                            <label>＋ 画像ファイルを追加<input type="file" accept="image/*" hidden onChange={event => handleImageFile(event.target.files?.[0])} /></label>
+                            {pdfFiles.length > 0 && <><select value={selectedPdfKey} onChange={event => { setSelectedPdfKey(event.target.value); setPdfTarget(null); }}>{pdfFiles.map(pdf => <option key={pdf.key} value={pdf.key}>{pdf.year ? `${pdf.year}年 — ` : ''}{pdf.name}</option>)}</select><button type="button" onClick={() => setPdfTarget({ mode: 'add' })}>PDFから画像を追加</button></>}
+                        </div>
+                        {draft.images.length === 0 ? <p className={styles.emptyImages}>画像は登録されていません。</p> : <div className={styles.editImageGrid}>{draft.images.map((image, index) => (
+                            <div key={`${image.storageKey || image.path?.slice(0, 30)}-${index}`} draggable onDragStart={() => setDraggedImageIndex(index)} onDragOver={event => event.preventDefault()} onDrop={() => handleDropImage(index)} className={styles.editImageCard}>
+                                <div className={styles.dragHandle}>⠿ ドラッグして並べ替え</div>
+                                <img src={image.path?.startsWith('data:') ? image.path : `/${image.path}`} alt={image.legend || `画像${index + 1}`} />
+                                <input value={image.legend || ''} onChange={event => updateDraftImage(index, { legend: event.target.value })} placeholder="画像レジェンド" />
+                                <div><button type="button" disabled={!selectedPdf} onClick={() => setPdfTarget({ mode: 'replace', index })}>PDFから差し替え</button><button type="button" className={styles.deleteImageBtn} onClick={() => setDraft(previous => ({ ...previous, images: previous.images.filter((_, imageIndex) => imageIndex !== index) }))}>削除</button></div>
+                            </div>
+                        ))}</div>}
+                        <div className={styles.unifiedEditActions}><button type="button" onClick={closeEditing} disabled={isSaving}>キャンセル</button><button type="button" onClick={saveAll} disabled={isSaving}>{isSaving ? '保存中…' : '変更を保存'}</button></div>
+                    </div>
+                    {selectedPdf && <aside className={styles.pdfReferencePanel}>
+                        <div className={styles.pdfReferenceHeader}>
+                            <div><strong>登録元PDF</strong><span>{pdfTarget ? (pdfTarget.mode === 'replace' ? `画像${pdfTarget.index + 1}の差し替え範囲を選択中` : '追加する画像範囲を選択中') : '問題文・選択肢・レジェンドの確認用'}</span></div>
+                            {pdfTarget && <button type="button" onClick={() => setPdfTarget(null)}>切り抜きを解除</button>}
+                        </div>
+                        <PdfClipper pdfBlob={selectedPdf.blob} initialSearchText={question.question || ''} onClip={pdfTarget ? handlePdfClip : undefined} />
+                    </aside>}
                     </div>
                 ) : (
-                    <div className={styles.editorWrapper} style={{ marginBottom: '1rem' }}>
-                        <h4 style={{ margin: '0 0 0.5rem 0' }}>問題文の編集</h4>
-                        <AnswerEditor content={draftQuestionText} onChange={setDraftQuestionText} />
-                        <div className={styles.editActions}>
-                            <button onClick={() => setIsEditingQuestion(false)} className={styles.cancelBtn}>キャンセル</button>
-                            <button onClick={handleSaveQuestionText} className={styles.saveBtn}>保存</button>
-                        </div>
-                    </div>
+                    <>
+                        <div className={styles.questionSection} style={{ marginBottom: '1.5rem' }}><div className={styles.questionText} dangerouslySetInnerHTML={{ __html: question.question || '' }} /></div>
+                        {currentImages.length > 0 && <div className={`${styles.imageGrid} ${currentImages.length === 1 ? styles.singleGrid : ''}`}>{currentImages.map((img, idx) => <div key={idx} className={styles.imageWrapper} onClick={() => { setLightboxIndex(idx); setLightboxOpen(true); }}><img src={img.path?.startsWith('data:') ? img.path : `/${img.path}`} alt={img.legend || `Image ${idx + 1}`} className={styles.thumbnail} /><div className={styles.legend} dangerouslySetInnerHTML={{ __html: img.legend || '凡例なし' }} /></div>)}</div>}
+                        <div className={styles.optionsSection} style={{ marginBottom: '2rem' }}><h4>選択肢</h4><div className={styles.options}>{Object.entries(currentOptions).sort((a, b) => a[0].localeCompare(b[0])).map(([key, text]) => { const selected = selectedOptions.includes(key); const answer = normalizeAnswer(currentAnswer).includes(key); let className = styles.optionBtn; if (selected) className += ` ${styles.selected}`; if (showAnswer && answer) className += ` ${styles.correct}`; if (showAnswer && selected && !answer) className += ` ${styles.wrong}`; return <button key={key} className={className} onClick={() => toggleOption(key)}><span className={styles.optionKey}>{key}</span><span dangerouslySetInnerHTML={{ __html: text }} /></button>; })}</div></div>
+                        <div className={styles.actionRow}>{!showAnswer ? <button className={styles.revealBtn} onClick={revealAnswer}>回答・解説を見る</button> : <div className={`${styles.explicitAnswer} ${isCorrect ? styles.correct : ''}`}><div className={styles.answerBlock}>{isEditingAnswer ? <div className={styles.inlineEditAnswer}><span className={styles.label}>正解を選択:</span><div className={styles.answerSelectionGrid}>{Object.keys(currentOptions).sort().map(key => <button type="button" key={key} className={editAnswer.includes(key) ? styles.draftAnswerActive : ''} onClick={() => setEditAnswer(previous => previous.includes(key) ? previous.filter(item => item !== key) : [...previous, key].sort())}>{key}</button>)}</div><div className={styles.editActions}><button onClick={() => setIsEditingAnswer(false)} className={styles.cancelBtn}>キャンセル</button><button onClick={saveAnswer} className={styles.saveBtn}>保存</button></div></div> : <><div className={styles.answerText}><span className={styles.label}>正解は</span><span className={styles.value}>{normalizeAnswer(currentAnswer).join(', ')} です</span></div><button onClick={() => { setEditAnswer(normalizeAnswer(currentAnswer)); setIsEditingAnswer(true); }} className={styles.iconEditBtn} title="正解を編集">✎</button></>}</div></div>}</div>
+                    </>
                 )}
             </div>
 
-            {/* Images */}
-            {currentImages && currentImages.length > 0 && (
-                <div className={`${styles.imageGrid} ${currentImages.length === 1 ? styles.singleGrid : ''}`}>
-                    {currentImages.map((img, idx) => (
-                        <div key={idx} className={styles.imageWrapper} onClick={() => { setLightboxIndex(idx); setLightboxOpen(true); }}>
-                            <img
-                                src={img.path?.startsWith('data:') ? img.path : `/${img.path}`}
-                                alt={img.legend || `Image ${idx + 1}`}
-                                className={styles.thumbnail}
-                            />
-                            {editingLegendIdx === idx ? (
-                                <div className={styles.legendEditWrapper} onClick={(e) => e.stopPropagation()} style={{ marginTop: '0.5rem', width: '100%' }}>
-                                    <input
-                                        type="text"
-                                        value={draftLegendText}
-                                        onChange={(e) => setDraftLegendText(e.target.value)}
-                                        style={{ width: '100%', padding: '0.3rem', fontSize: '0.85rem', border: '1px solid #cbd5e0', borderRadius: '0.25rem' }}
-                                        autoFocus
-                                    />
-                                    <div className={styles.legendEditActions} style={{ marginTop: '0.25rem', display: 'flex', justifyContent: 'flex-end', gap: '0.25rem' }}>
-                                        <button onClick={() => setEditingLegendIdx(null)} style={{ padding: '0.1rem 0.4rem', fontSize: '0.75rem', background: '#e2e8f0', border: 'none', borderRadius: '0.25rem', cursor: 'pointer' }}>✕</button>
-                                        <button onClick={() => handleSaveLegend(idx)} style={{ padding: '0.1rem 0.4rem', fontSize: '0.75rem', background: '#3182ce', color: 'white', border: 'none', borderRadius: '0.25rem', cursor: 'pointer' }}>✓</button>
-                                    </div>
-                                </div>
-                            ) : (
-                                <div className={styles.legendWrapper} onClick={(e) => e.stopPropagation()} style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.25rem' }}>
-                                    {img.legend ? (
-                                        <span className={styles.legend} style={{ margin: 0 }} dangerouslySetInnerHTML={{ __html: img.legend }} />
-                                    ) : (
-                                        <span className={styles.legend} style={{ margin: 0, color: '#a0aec0', fontStyle: 'italic' }}>凡例なし</span>
-                                    )}
-                                    <button onClick={() => startEditingLegend(idx, img.legend)} className={styles.iconEditBtn} style={{ padding: 0 }} title="凡例を編集">✎</button>
-                                    {currentImages.length > 1 && (
-                                        <span className={styles.imageOrderActions}>
-                                            <button disabled={idx === 0} onClick={() => handleMoveImage(idx, -1)} title="画像を前へ">←</button>
-                                            <button disabled={idx === currentImages.length - 1} onClick={() => handleMoveImage(idx, 1)} title="画像を後へ">→</button>
-                                        </span>
-                                    )}
-                                </div>
-                            )}
-                        </div>
-                    ))}
-                </div>
-            )}
+            {showAnswer && !isEditing && <><div className={styles.explanation}><div className={styles.expHeader}><h3>解説</h3>{!isEditingExplanation && <button onClick={() => { setEditExplanation(question.explanation || ''); setIsEditingExplanation(true); }} className={styles.iconEditBtn} title="解説を編集">✎</button>}</div>{isEditingExplanation ? <div className={styles.editorWrapper}><AnswerEditor content={editExplanation} onChange={setEditExplanation} /><div className={styles.editActions}><button onClick={() => setIsEditingExplanation(false)} className={styles.cancelBtn}>キャンセル</button><button onClick={saveExplanation} className={styles.saveBtn}>保存</button></div></div> : <div className={`richTextContent ${styles.richTextContent}`} dangerouslySetInnerHTML={{ __html: question.explanation || '解説がありません' }} />}</div><div className={styles.genreArea}>{isEditingGenre ? <div className={styles.genreEdit}><span className={styles.label}>ジャンル:</span><input className={styles.fullWidthInput} value={editGenre} onChange={event => setEditGenre(event.target.value)} list="question-genres" /><datalist id="question-genres">{availableGenres?.map(genre => <option key={genre} value={genre} />)}</datalist><div className={styles.editActions}><button onClick={() => setIsEditingGenre(false)} className={styles.cancelBtn}>キャンセル</button><button onClick={saveGenre} className={styles.saveBtn}>保存</button></div></div> : <><div className={styles.genreContent}><span className={styles.label}>ジャンル:</span><div className={styles.genreTags}>{(Array.isArray(question.genre) ? question.genre : (question.genre || '未設定').split(/[,、\s]+/)).map((genre, index) => genre && <span key={index} className={styles.genreBadge}>{genre}</span>)}</div></div><button onClick={() => { setEditGenre(Array.isArray(question.genre) ? question.genre.join(', ') : (question.genre || '')); setIsEditingGenre(true); }} className={styles.iconEditBtn} title="ジャンルを編集">✎</button></>}</div></>}
 
-            <Lightbox
-                open={lightboxOpen}
-                close={() => setLightboxOpen(false)}
-                index={lightboxIndex}
-                slides={slides}
-            />
-
-            {/* Options Section */}
-            <div className={styles.optionsSection} style={{ marginBottom: '2rem' }}>
-                <div className={styles.optionsHeader} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
-                    <h4 style={{ margin: 0, fontSize: '1rem', color: '#4a5568' }}>選択肢</h4>
-                    {!isEditingOptions && (
-                        <button onClick={startEditingOptions} style={{ fontSize: '0.8rem', background: 'none', border: 'none', color: '#3182ce', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                            ✎ 選択肢を編集
-                        </button>
-                    )}
-                </div>
-
-                {!isEditingOptions ? (
-                    <div className={styles.options} style={{ marginBottom: 0 }}>
-                        {currentOptions && Object.entries(currentOptions).sort((a,b) => a[0].localeCompare(b[0])).map(([key, text]) => {
-                            const isSelected = selectedOptions.includes(key);
-                            const isActualAnswer = Array.isArray(currentAnswer) ? currentAnswer.includes(key) : currentAnswer === key;
-                            const isCorrectChoice = isActualAnswer;
-                            let optionClass = styles.optionBtn;
-
-                            if (isSelected) optionClass += ` ${styles.selected}`;
-                            if (showAnswer) {
-                                if (isCorrectChoice) optionClass += ` ${styles.correct}`;
-                                if (isSelected && !isCorrectChoice) optionClass += ` ${styles.wrong}`;
-                            }
-
-                            return (
-                                <button
-                                    key={key}
-                                    className={optionClass}
-                                    onClick={() => toggleOption(key)}
-                                >
-                                    <span className={styles.optionKey}>{key}</span>
-                                    <span dangerouslySetInnerHTML={{ __html: text }} />
-                                </button>
-                            );
-                        })}
-                    </div>
-                ) : (
-                    <div className={styles.optionsEditForm} style={{ background: '#f8fafc', padding: '1rem', borderRadius: '0.5rem', border: '1px solid #e2e8f0' }}>
-                        {currentOptions && Object.keys(currentOptions).sort().map(key => (
-                            <div key={key} style={{ display: 'flex', alignItems: 'center', marginBottom: '0.5rem' }}>
-                                <span style={{ fontWeight: 'bold', width: '24px', color: '#4a5568' }}>{key}</span>
-                                <input
-                                    type="text"
-                                    value={draftOptions[key] || ""}
-                                    onChange={(e) => {
-                                        const val = e.target.value;
-                                        setDraftOptions(prev => ({ ...prev, [key]: val }));
-                                    }}
-                                    style={{ flex: 1, padding: '0.4rem', border: '1px solid #cbd5e0', borderRadius: '0.25rem', fontSize: '0.9rem' }}
-                                />
-                            </div>
-                        ))}
-                        <div className={styles.editActions} style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.75rem' }}>
-                            <button onClick={() => setIsEditingOptions(false)} className={styles.cancelBtn}>キャンセル</button>
-                            <button onClick={handleSaveOptions} className={styles.saveBtn}>保存</button>
-                        </div>
-                    </div>
-                )}
-            </div>
-
-                {/* Actions */}
-                <div className={styles.actionRow}>
-                    {!showAnswer ? (
-                    <button
-                        className={styles.revealBtn}
-                        onClick={handleAnswerCheck}
-                    >
-                        回答・解説を見る
-                    </button>
-                    ) : (
-                        <div className={`${styles.explicitAnswer} ${isCorrect ? styles.correct : ''}`}>
-                            <div className={styles.answerBlock}>
-                                {isEditingAnswer ? (
-                                    <div className={styles.inlineEditAnswer}>
-                                        <span className={styles.label}>正解を選択（タップして切替）:</span>
-                                        <div className={styles.answerEditFlexWrapper}>
-                                            <div className={styles.answerSelectionGrid}>
-                                                {question.options && Object.keys(question.options).map(key => {
-                                                    const currentList = editAnswerKey.split(/[,、\s]+/).map(s => s.trim()).filter(Boolean);
-                                                    const isSelected = currentList.includes(key);
-                                                    return (
-                                                        <button
-                                                            key={key}
-                                                            type="button"
-                                                            className={`${styles.answerTileBtn} ${isSelected ? styles.active : ''}`}
-                                                            onClick={() => {
-                                                                let newList;
-                                                                if (isSelected) {
-                                                                    newList = currentList.filter(item => item !== key);
-                                                                } else {
-                                                                    newList = [...currentList, key];
-                                                                }
-                                                                const sortedList = newList.sort((a, b) => a.localeCompare(b));
-                                                                setEditAnswerKey(sortedList.join(', '));
-                                                            }}
-                                                        >
-                                                            {key}
-                                                        </button>
-                                                    );
-                                                })}
-                                            </div>
-                                            <div className={styles.editActions}>
-                                                <button onClick={() => setIsEditingAnswer(false)} className={styles.cancelBtn}>キャンセル</button>
-                                                <button onClick={handleSaveAnswer} className={styles.saveBtn}>保存</button>
-                                            </div>
-                                        </div>
-                                    </div>
-                                ) : (
-                                    <>
-                                        <div className={styles.answerText}>
-                                            <span className={styles.label}>正解は</span>
-                                            <span className={styles.value}>
-                                                {Array.isArray(currentAnswer) ? currentAnswer.join(', ') : currentAnswer} です
-                                            </span>
-                                        </div>
-                                        <button onClick={startEditingAnswer} className={styles.iconEditBtn} title="編集">✎</button>
-                                    </>
-                                )}
-                            </div>
-                        </div>
-                    )}
-                </div>
-            </div>
-
-            {showAnswer && (
-                <>
-                    {/* Explanation Area */}
-                    <div className={styles.explanation}>
-                            <div className={styles.expHeader}>
-                                <h3>解説</h3>
-                                {!isEditingExplanation && (
-                                    <button onClick={startEditingExplanation} className={styles.iconEditBtn} title="編集">✎</button>
-                                )}
-                            </div>
-
-                            {!isEditingExplanation ? (
-                                <div
-                                    className={`richTextContent ${styles.richTextContent}`}
-                                    dangerouslySetInnerHTML={{ __html: currentExplanation || '解説がありません' }}
-                                />
-                            ) : (
-                                <div className={styles.editorWrapper}>
-                                    <AnswerEditor content={draftExplanation} onChange={setDraftExplanation} />
-                                    <div className={styles.editActions}>
-                                        <button 
-                                            onClick={() => setIsEditingExplanation(false)} 
-                                            className={styles.cancelBtn}
-                                            disabled={isSavingExplanation}
-                                        >
-                                            キャンセル
-                                        </button>
-                                        <button 
-                                            onClick={handleSaveExplanation} 
-                                            className={styles.saveBtn}
-                                            disabled={isSavingExplanation}
-                                        >
-                                            {isSavingExplanation ? '保存中...' : '保存'}
-                                        </button>
-                                    </div>
-                                </div>
-                            )}
-                    </div>
-
-                    {/* Genre Display */}
-                    <div className={styles.genreArea}>
-                            {isEditingGenre ? (
-                                <div className={styles.genreEdit}>
-                                    <span className={styles.label}>ジャンルを選択:</span>
-                                    <div className={styles.genreSelectionGrid}>
-                                        {availableGenres?.map(g => {
-                                            const isSelected = editGenre.split(/[,、\s]+/).includes(g);
-                                            return (
-                                                <label key={g} className={styles.genreCheckbox}>
-                                                    <input
-                                                        type="checkbox"
-                                                        checked={isSelected}
-                                                        onChange={(e) => {
-                                                            const currentList = editGenre.split(/[,、\s]+/).filter(x => x && x.trim() !== '');
-                                                            let newList;
-                                                            if (e.target.checked) {
-                                                                newList = [...currentList, g];
-                                                            } else {
-                                                                newList = currentList.filter(item => item !== g);
-                                                            }
-                                                            // Unique and clean
-                                                            const uniqueList = Array.from(new Set(newList));
-                                                            setEditGenre(uniqueList.join(', '));
-                                                        }}
-                                                    />
-                                                    <span>{g}</span>
-                                                </label>
-                                            );
-                                        })}
-                                    </div>
-
-                                    <div className={styles.customGenreInput}>
-                                        <label>新規/その他:</label>
-                                        <input
-                                            type="text"
-                                            value={(() => {
-                                                // Extract items NOT in availableGenres to show in input?
-                                                // Or just allow appending?
-                                                // Simpler: Just allow append. But that's messy if they untoggle.
-                                                // Let's keep it simple: reliable checklist + free text appending is complex in one string.
-                                                // Let's purely rely on the Checkbox to MANAGE the string for known genres.
-                                                // And simple text input for "Everything else".
-                                                // Strategy:
-                                                // The `editGenre` state holds the FULL string.
-                                                // The input field shows items that are NOT in `availableGenres`.
-                                                const currentList = editGenre.split(/[,、\s]+/).filter(x => x && x.trim() !== '');
-                                                const customItems = currentList.filter(item => !availableGenres?.includes(item));
-                                                return customItems.join(', ');
-                                            })()}
-                                            onChange={(e) => {
-                                                const val = e.target.value;
-                                                const customParts = val.split(/[,、\s]+/).filter(x => x && x.trim() !== '');
-                                                // Get currently selected KNOWN genres
-                                                const currentList = editGenre.split(/[,、\s]+/).filter(x => x && x.trim() !== '');
-                                                const knownSelected = currentList.filter(item => availableGenres?.includes(item));
-
-                                                // Combine
-                                                const final = [...knownSelected, ...customParts];
-                                                setEditGenre(final.join(', '));
-                                            }}
-                                            placeholder="リストにないジャンルを入力"
-                                        />
-                                    </div>
-
-                                    <div className={styles.editActions}>
-                                        <button onClick={() => setIsEditingGenre(false)} className={styles.cancelBtn}>キャンセル</button>
-                                        <button onClick={handleSaveGenre} className={styles.saveBtn}>保存</button>
-                                    </div>
-                                </div>
-                            ) : (
-                                <>
-                                    <div className={styles.genreContent}>
-                                        <span className={styles.label}>ジャンル:</span>
-                                        <div className={styles.genreTags}>
-                                            {(Array.isArray(currentGenre) ? currentGenre : (currentGenre || '未設定').split(/[,、\s]+/)).map((g, i) => g && (
-                                                <span key={i} className={styles.genreBadge}>{g}</span>
-                                            ))}
-                                        </div>
-                                    </div>
-                                    <button onClick={startEditingGenre} className={styles.iconEditBtn} title="編集">✎</button>
-                                </>
-                            )}
-                    </div>
-                </>
-            )}
+            <Lightbox open={lightboxOpen} close={() => setLightboxOpen(false)} index={lightboxIndex} slides={slides} />
         </div>
     );
 }

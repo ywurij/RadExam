@@ -78,13 +78,14 @@ function PdfPage({ pdf, pageNumber, active, onClip }) {
     );
 }
 
-export default function PdfClipper({ pdfBlob, onClip }) {
+export default function PdfClipper({ pdfBlob, onClip, initialSearchText = '' }) {
     const scrollRef = useRef(null);
     const [pdf, setPdf] = useState(null);
     const [pageCount, setPageCount] = useState(0);
     const [currentPage, setCurrentPage] = useState(1);
     const [activePages, setActivePages] = useState(new Set([1, 2]));
     const [error, setError] = useState('');
+    const [initialPage, setInitialPage] = useState(null);
 
     useEffect(() => {
         let cancelled = false;
@@ -99,9 +100,41 @@ export default function PdfClipper({ pdfBlob, onClip }) {
             setPageCount(document.numPages);
             setCurrentPage(1);
             setActivePages(new Set([1, 2, 3].filter(number => number <= document.numPages)));
+            const query = String(initialSearchText || '').replace(/<[^>]+>/g, '').replace(/\s+/g, '').slice(0, 22);
+            if (query.length >= 6) {
+                for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
+                    const page = await document.getPage(pageNumber);
+                    const content = await page.getTextContent();
+                    const pageText = content.items.map(item => item.str || '').join('').replace(/\s+/g, '');
+                    if (pageText.includes(query)) {
+                        if (!cancelled) {
+                            setCurrentPage(pageNumber);
+                            setActivePages(new Set([pageNumber - 2, pageNumber - 1, pageNumber, pageNumber + 1, pageNumber + 2].filter(number => number >= 1 && number <= document.numPages)));
+                            setInitialPage(pageNumber);
+                        }
+                        break;
+                    }
+                }
+            }
         })().catch(e => !cancelled && setError(`PDFを開けませんでした: ${e.message}`));
         return () => { cancelled = true; };
-    }, [pdfBlob]);
+    }, [pdfBlob, initialSearchText]);
+
+    useEffect(() => {
+        if (!initialPage || !scrollRef.current) return;
+        const frame = requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+                const root = scrollRef.current;
+                const target = root?.querySelector(`[data-pdf-page="${initialPage}"]`);
+                if (root && target) {
+                    root.scrollTop += target.getBoundingClientRect().top - root.getBoundingClientRect().top - 12;
+                    setCurrentPage(initialPage);
+                }
+                setInitialPage(null);
+            });
+        });
+        return () => cancelAnimationFrame(frame);
+    }, [initialPage, pageCount]);
 
     const handleScroll = event => {
         const root = event.currentTarget;

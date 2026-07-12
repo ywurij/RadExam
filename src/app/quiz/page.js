@@ -5,7 +5,7 @@ import { useSearchParams, useRouter } from 'next/navigation';
 import { getExamData, getAllQuestions, getQuestionsByYear, getGlobalQuestionId, getGenres, getExamName, initializeLocalExams } from '@/lib/data';
 import QuestionCard from '@/components/QuestionCard';
 import styles from './quiz.module.scss';
-import { saveLocalProgress, getLocalProgress, updateLocalQuestion } from '@/lib/localDb';
+import { saveLocalProgress, getLocalProgress, updateLocalQuestion, getExamPdfs } from '@/lib/localDb';
 import QuizResult from '@/components/QuizResult';
 
 const generateUUID = () => {
@@ -45,6 +45,8 @@ function QuizContent() {
     const user = null; // ローカル完結型のためログイン不要
     const [allGenres, setAllGenres] = useState([]);
     const [sessionId, setSessionId] = useState(null);
+    const [examPdfFiles, setExamPdfFiles] = useState([]);
+    const [isQuestionEditing, setIsQuestionEditing] = useState(false);
 
     useEffect(() => {
         const loadData = async () => {
@@ -52,6 +54,12 @@ function QuizContent() {
 
             // 直接この画面を開いた場合も、カスタム試験名などのメタデータを利用できるようにする
             await initializeLocalExams();
+            try {
+                setExamPdfFiles(await getExamPdfs(examId));
+            } catch (error) {
+                console.error('Failed to load exam PDFs:', error);
+                setExamPdfFiles([]);
+            }
 
             // 1. Load User Progress (Local)
             let userProg = {};
@@ -415,7 +423,7 @@ function QuizContent() {
     if (!currentQuestion) return <div className={styles.error}>条件に一致する問題がありません。</div>;
 
     return (
-        <div className={styles.container}>
+        <div className={`${styles.container} ${isQuestionEditing ? styles.editingContainer : ''}`}>
             <header className={styles.topBar}>
                 {isReviewing ? (
                     <button onClick={handleBackToResults} className={styles.backBtn}>← 結果に戻る</button>
@@ -439,6 +447,8 @@ function QuizContent() {
                 onUpdateStatus={handleUpdateStatus}
                 onSaveQuestionData={handleSaveQuestionData}
                 availableGenres={allGenres}
+                pdfFiles={examPdfFiles}
+                onEditingChange={setIsQuestionEditing}
             />
 
             {renderNavigation(styles.navigation)}

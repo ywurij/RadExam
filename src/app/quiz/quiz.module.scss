@@ -7,6 +7,11 @@
     flex-direction: column;
 }
 
+.editingContainer {
+    max-width: min(1600px, calc(100vw - 2rem));
+    transition: max-width 0.2s ease;
+}
+
 .topBar {
     display: flex;
     justify-content: space-between;
