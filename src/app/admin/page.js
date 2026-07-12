@@ -3151,16 +3151,37 @@ export default function AdminPage() {
         }
     };
 
-    const handlePdfImport = async (e) => {
-        const file = e.target.files[0];
-        if (!file) return;
+    const handlePdfImport = async (eventOrFiles) => {
+        const sourceFiles = eventOrFiles?.target?.files || eventOrFiles;
+        const files = Array.from(sourceFiles || [])
+            .filter(file => file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf'))
+            .sort((a, b) => a.name.localeCompare(b.name, 'ja'));
+        if (files.length === 0) {
+            setErrorMsg('PDFファイルが見つかりませんでした。');
+            return;
+        }
+
+        if (eventOrFiles?.target) {
+            eventOrFiles.target.value = '';
+        }
 
         setIsParsingPdf(true);
         setErrorMsg('');
         setSuccessMsg('');
-        setPdfProgress({ current: 0, total: 0, status: 'PDFファイルを読み込んでいます...' });
+        setPdfProgress({ current: 0, total: 0, status: `${files.length}件のPDFファイルを読み込んでいます...` });
 
         try {
+            const combinedQuestions = [];
+            const combinedImageMap = {};
+            const importSummaries = [];
+
+            for (const [fileIndex, file] of files.entries()) {
+            setPdfProgress({
+                current: 0,
+                total: 0,
+                status: `${fileIndex + 1}/${files.length}: ${file.name} を読み込んでいます...`
+            });
+
             const parserProfile = getPdfParserProfile(examCategory);
             let nuclearVlmReady = false;
             let nuclearVlmPageCount = 0;
@@ -3196,7 +3217,8 @@ export default function AdminPage() {
             // -------------------------------------------------------------
             // A. PDFから「年度」および「最初の問題開始ページ」をスキャン・同定
             // -------------------------------------------------------------
-            let detectedYear = new Date().getFullYear();
+            const filenameYear = file.name.match(/(?:19|20)\d{2}/)?.[0];
+            let detectedYear = filenameYear ? Number(filenameYear) : new Date().getFullYear();
             let firstQuestionPage = parserProfile.fixedFirstQuestionPage || 1;
             let foundFirstPage = Boolean(parserProfile.fixedFirstQuestionPage);
 
@@ -4472,13 +4494,29 @@ export default function AdminPage() {
                 }
             });
 
-            setParsedQuestions(finalQuestions);
-            setParsedYearInput(String(detectedYear));
-            setImageMap(finalImageMap);
+            const questionOffset = combinedQuestions.length;
+            combinedQuestions.push(...finalQuestions);
+            Object.entries(finalImageMap).forEach(([questionIndex, images]) => {
+                combinedImageMap[questionOffset + Number(questionIndex)] = images;
+            });
             const vlmSummary = parserProfile.name === 'nuclear' && nuclearVlmEnabled
                 ? ` 構造アンカー採用: ${nuclearStructuralPageCount}ページ、VLM採用: ${nuclearVlmPageCount}ページ（部分採用: ${nuclearVlmPartialPageCount}ページ）、従来方式併用: ${nuclearRuleFallbackPageCount}ページ、VLM応答不採用: ${nuclearVlmFailureCount}ページ。`
                 : '';
-            setSuccessMsg(`PDFの自動パースが完了しました！合計 ${finalQuestions.length} 問の問題と画像を登録しました。${vlmSummary}内容を確認して保存してください。`);
+            importSummaries.push(`${file.name}: ${detectedYear}年・${finalQuestions.length}問${vlmSummary}`);
+            }
+
+            const duplicateQuestionIds = combinedQuestions
+                .map(question => question.id)
+                .filter((id, index, ids) => ids.indexOf(id) !== index);
+            if (duplicateQuestionIds.length > 0) {
+                throw new Error(`複数PDF間で問題IDが重複しています（例: ${duplicateQuestionIds[0]}）。各PDFの検出年度を確認してください。`);
+            }
+
+            const detectedYears = [...new Set(combinedQuestions.map(question => question.year))].sort((a, b) => b - a);
+            setParsedQuestions(combinedQuestions);
+            setParsedYearInput(detectedYears.length === 1 ? String(detectedYears[0]) : '');
+            setImageMap(combinedImageMap);
+            setSuccessMsg(`${files.length}件のPDFの自動パースが完了しました。合計 ${combinedQuestions.length} 問を取り込みました。${importSummaries.join(' / ')} 内容を確認して保存してください。`);
         } catch (err) {
             console.error('PDF Import Error:', err);
             setErrorMsg(`PDFのインポートに失敗しました: ${err.message}`);
@@ -4502,7 +4540,7 @@ export default function AdminPage() {
             setErrorMsg('試験IDは半角英数字、ハイフン、アンダースコアのみ使用可能です。');
             return;
         }
-        if (!/^\d{4}$/.test(String(parsedQuestions[0]?.year ?? ''))) {
+        if (parsedQuestions.some(question => !/^\d{4}$/.test(String(question.year ?? '')))) {
             setErrorMsg('取り込み年度は4桁の西暦で入力してください。');
             return;
         }
@@ -4719,7 +4757,7 @@ export default function AdminPage() {
                                 <>
                                     <h3 style={{ margin: 0, marginBottom: '1rem' }}>過去問PDFから自動登録</h3>
                                     <p style={{ color: '#718096', fontSize: '0.85rem', marginBottom: '1.5rem' }}>
-                                        試験過去問PDFファイルを選択すると、アプリ上で問題文、選択肢、埋め込み画像を抽出し、登録用データを自動作成します。
+                                        同じ試験の複数年度PDFをまとめて選択すると、問題文、選択肢、埋め込み画像を年度別に抽出し、一括登録用データを作成します。
                                     </p>
 
                                     {/* Exam Category Selection */}
@@ -4807,15 +4845,49 @@ export default function AdminPage() {
                                         position: 'relative'
                                     }}
                                     onClick={() => document.getElementById('pdf-file-selector').click()}
+                                    onDragOver={(event) => event.preventDefault()}
+                                    onDrop={(event) => {
+                                        event.preventDefault();
+                                        handlePdfImport(event.dataTransfer.files);
+                                    }}
                                     >
                                         <div style={{ fontSize: '3rem', marginBottom: '0.75rem' }}>📁</div>
                                         <div style={{ fontWeight: 'bold', color: '#2d3748', fontSize: '1.05rem', marginBottom: '0.3rem' }}>
-                                            ここに過去問PDFファイルをドロップ、またはクリックして選択
+                                            ここに複数の過去問PDFをドロップ、またはクリックして選択
                                         </div>
+                                        <button
+                                            type="button"
+                                            onClick={(event) => {
+                                                event.stopPropagation();
+                                                document.getElementById('pdf-folder-selector').click();
+                                            }}
+                                            style={{
+                                                marginTop: '1rem',
+                                                padding: '0.6rem 1rem',
+                                                border: '1px solid #3182ce',
+                                                borderRadius: '0.375rem',
+                                                background: '#fff',
+                                                color: '#2b6cb0',
+                                                fontWeight: '700',
+                                                cursor: 'pointer'
+                                            }}
+                                        >
+                                            フォルダを選択
+                                        </button>
                                         <input
                                             id="pdf-file-selector"
                                             type="file"
                                             accept=".pdf"
+                                            multiple
+                                            style={{ display: 'none' }}
+                                            onChange={handlePdfImport}
+                                        />
+                                        <input
+                                            id="pdf-folder-selector"
+                                            type="file"
+                                            accept=".pdf"
+                                            multiple
+                                            webkitdirectory=""
                                             style={{ display: 'none' }}
                                             onChange={handlePdfImport}
                                         />
@@ -4986,6 +5058,25 @@ export default function AdminPage() {
                                         </>
                                     )}
                                 </div>
+                                {[...new Set(parsedQuestions.map(question => question.year))].length > 1 ? (
+                                    <div style={{ marginBottom: '1.5rem' }}>
+                                        <div style={{ fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '0.5rem' }}>
+                                            取り込み年度
+                                        </div>
+                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+                                            {[...new Set(parsedQuestions.map(question => question.year))]
+                                                .sort((a, b) => b - a)
+                                                .map(year => (
+                                                    <span key={year} style={{ padding: '0.35rem 0.7rem', borderRadius: '9999px', background: '#ebf8ff', color: '#2b6cb0', fontWeight: '700', fontSize: '0.85rem' }}>
+                                                        {year}年
+                                                    </span>
+                                                ))}
+                                        </div>
+                                        <p style={{ margin: '0.5rem 0 0 0', fontSize: '0.8rem', color: '#718096' }}>
+                                            複数年度を検出したため、PDFごとの年度を維持して保存します。
+                                        </p>
+                                    </div>
+                                ) : (
                                 <div style={{ marginBottom: '1.5rem' }}>
                                     <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '0.4rem' }}>
                                         取り込み年度
@@ -5018,6 +5109,7 @@ export default function AdminPage() {
                                         年度を変更すると、プレビュー中の全問題の年度と問題IDに一括反映されます。
                                     </p>
                                 </div>
+                                )}
                                 <div style={{ display: 'flex', gap: '1rem' }}>
                                     <button
                                         onClick={handleSaveExam}

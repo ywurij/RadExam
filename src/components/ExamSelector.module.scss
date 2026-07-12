@@ -207,8 +207,9 @@
 .startButton {
   display: block;
   width: 100%;
+  max-width: 320px;
   padding: 1rem;
-  margin-top: 3rem;
+  margin: 3rem auto 0;
   background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
   color: #ffffff;
   font-size: 1.25rem;
