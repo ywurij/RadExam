@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import PdfClipper from '@/components/PdfClipper';
+import adminStyles from './AdminEdit.module.scss';
 
 import { initializeLocalExams, getExamTypes } from '@/lib/data';
 import { saveLocalExam, deleteLocalExam, exportAllLocalData, importLocalData, getLocalExam, saveExamPdf, getExamPdfs } from '@/lib/localDb';
@@ -2890,7 +2891,8 @@ export default function AdminPage() {
     const [editingYearFilter, setEditingYearFilter] = useState('all');
     const [editingPdfFiles, setEditingPdfFiles] = useState([]);
     const [selectedEditingPdfKey, setSelectedEditingPdfKey] = useState('');
-    const [pdfModal, setPdfModal] = useState(null);
+    const [activeEditingQuestionIndex, setActiveEditingQuestionIndex] = useState(0);
+    const [pdfClipQuestionIndex, setPdfClipQuestionIndex] = useState(null);
     const [nuclearVlmEnabled, setNuclearVlmEnabled] = useState(true);
     const [nuclearVlmStatus, setNuclearVlmStatus] = useState({
         state: 'unchecked',
@@ -3025,6 +3027,8 @@ export default function AdminPage() {
             setEditingExamId(exam.id);
             setEditingExamName(exam.name);
             setEditingQuestions(normalizedQuestions);
+            setActiveEditingQuestionIndex(0);
+            setPdfClipQuestionIndex(null);
             setEditingPdfFiles(pdfs);
             setSelectedEditingPdfKey(pdfs[0]?.key || '');
             const availableYears = [...new Set(normalizedQuestions.map(q => Number(q.year)).filter(Boolean))].sort((a, b) => b - a);
@@ -3129,22 +3133,30 @@ export default function AdminPage() {
         });
     };
 
+    const selectEditingQuestion = (questionIndex) => {
+        setActiveEditingQuestionIndex(questionIndex);
+        const questionYear = Number(editingQuestions[questionIndex]?.year);
+        const matchingPdf = editingPdfFiles.find(item => Number(item.year) === questionYear);
+        if (matchingPdf) setSelectedEditingPdfKey(matchingPdf.key);
+    };
+
     const openPdfForQuestion = (questionIndex = null) => {
         const pdf = editingPdfFiles.find(item => item.key === selectedEditingPdfKey) || editingPdfFiles[0];
         if (!pdf) {
             setErrorMsg('この試験に保存されているPDFはありません。');
             return;
         }
-        setPdfModal({ pdf, questionIndex });
+        if (questionIndex != null) selectEditingQuestion(questionIndex);
+        setPdfClipQuestionIndex(questionIndex);
     };
 
     const handlePdfClip = (imagePath) => {
-        if (pdfModal?.questionIndex == null) return;
-        updateEditingQuestion(pdfModal.questionIndex, question => ({
+        if (pdfClipQuestionIndex == null) return;
+        updateEditingQuestion(pdfClipQuestionIndex, question => ({
             ...question,
             images: [...question.images, { path: imagePath, legend: `図${question.images.length + 1}` }],
         }));
-        setPdfModal(null);
+        setPdfClipQuestionIndex(null);
         setSuccessMsg('PDFの選択範囲を画像として追加しました。編集内容を保存してください。');
     };
 
@@ -5567,12 +5579,12 @@ export default function AdminPage() {
                     </div>
 
                     {editingExamId && (
-                        <div style={{
+                        <div className={adminStyles.editSection} style={{
                             background: '#fff',
                             padding: '1.5rem',
                             borderRadius: '0.5rem',
                             boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
-                            marginTop: '1.5rem'
+                            marginTop: '1.5rem',
                         }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
                                 <div>
@@ -5633,7 +5645,7 @@ export default function AdminPage() {
                                         <select value={selectedEditingPdfKey} onChange={e => setSelectedEditingPdfKey(e.target.value)} style={{ minWidth: '260px', padding: '0.5rem' }}>
                                             {editingPdfFiles.map(pdf => <option key={pdf.key} value={pdf.key}>{pdf.year ? `${pdf.year}年 — ` : ''}{pdf.name}</option>)}
                                         </select>
-                                        <button type="button" onClick={() => openPdfForQuestion(null)} style={{ padding: '0.5rem 0.8rem', fontWeight: 'bold' }}>PDFを閲覧</button>
+                                        <span style={{ alignSelf: 'center', color: '#4a5568', fontSize: '0.82rem' }}>PDFは編集欄の右側に表示されます。</span>
                                     </div>
                                 )}
                             </div>
@@ -5656,12 +5668,13 @@ export default function AdminPage() {
                                 </div>
                             </div>
 
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                            <div className={editingPdfFiles.length > 0 ? adminStyles.editPanes : undefined} style={editingPdfFiles.length > 0 ? undefined : { display: 'grid', gridTemplateColumns: '1fr' }}>
+                            <div className={editingPdfFiles.length > 0 ? adminStyles.questionScroll : undefined} style={editingPdfFiles.length > 0 ? undefined : { display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                                 {editingQuestions
                                     .map((question, questionIndex) => ({ question, questionIndex }))
                                     .filter(({ question }) => editingYearFilter === 'all' || String(question.year) === editingYearFilter)
                                     .map(({ question, questionIndex }) => (
-                                    <div key={`${question.id}-${questionIndex}`} style={{
+                                    <div key={`${question.id}-${questionIndex}`} onFocusCapture={() => selectEditingQuestion(questionIndex)} onClick={() => selectEditingQuestion(questionIndex)} style={{
                                         border: '1px solid #e2e8f0',
                                         borderRadius: '0.5rem',
                                         padding: '1rem',
@@ -5775,23 +5788,31 @@ export default function AdminPage() {
                                     </div>
                                 ))}
                             </div>
+                            {editingPdfFiles.length > 0 && (() => {
+                                const selectedPdf = editingPdfFiles.find(item => item.key === selectedEditingPdfKey) || editingPdfFiles[0];
+                                const activeQuestion = editingQuestions[activeEditingQuestionIndex];
+                                return (
+                                    <aside className={adminStyles.pdfPane}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', marginBottom: '0.6rem' }}>
+                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
+                                                <strong>登録元PDF</strong>
+                                                <span style={{ color: '#718096', fontSize: '0.78rem' }}>
+                                                    {pdfClipQuestionIndex != null ? `問題 ${editingQuestions[pdfClipQuestionIndex]?.id} の追加範囲を選択中` : `問題 ${activeQuestion?.id || ''} を参照中`}
+                                                </span>
+                                            </div>
+                                            {pdfClipQuestionIndex != null && <button type="button" onClick={() => setPdfClipQuestionIndex(null)} style={{ padding: '0.4rem 0.6rem', border: '1px solid #e53e3e', borderRadius: '0.3rem', background: '#fff', color: '#c53030', cursor: 'pointer' }}>切り抜きを解除</button>}
+                                        </div>
+                                        <PdfClipper pdfBlob={selectedPdf.blob} initialSearchText={activeQuestion?.question || ''} scrollHeight="calc(min(900px, max(600px, 100vh - 260px)) - 135px)" onClip={pdfClipQuestionIndex != null ? handlePdfClip : undefined} />
+                                    </aside>
+                                );
+                            })()}
+                            </div>
                         </div>
                     )}
                 </div>
             )}
 
         </div>
-        {pdfModal && (
-            <div onClick={() => setPdfModal(null)} style={{ position: 'fixed', inset: 0, zIndex: 2100, background: 'rgba(15,23,42,0.82)', padding: '2rem', overflow: 'auto' }}>
-                <div onClick={e => e.stopPropagation()} style={{ maxWidth: '1200px', margin: '0 auto', background: '#edf2f7', borderRadius: '0.6rem', padding: '1rem' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'center', marginBottom: '0.75rem' }}>
-                        <strong>{pdfModal.pdf.name}{pdfModal.questionIndex != null ? ` — 問題 ${editingQuestions[pdfModal.questionIndex]?.id} に画像追加` : ''}</strong>
-                        <button type="button" onClick={() => setPdfModal(null)}>閉じる</button>
-                    </div>
-                    <PdfClipper pdfBlob={pdfModal.pdf.blob} onClip={pdfModal.questionIndex != null ? handlePdfClip : undefined} />
-                </div>
-            </div>
-        )}
         {previewImageModal && (
             <div
                 onClick={() => setPreviewImageModal(null)}

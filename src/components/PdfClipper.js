@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 
-function PdfPage({ pdf, pageNumber, active, onClip }) {
+function PdfPage({ pdf, pageNumber, active, onClip, onClipReady }) {
     const canvasRef = useRef(null);
     const dragStartRef = useRef(null);
     const [selection, setSelection] = useState(null);
@@ -33,6 +33,10 @@ function PdfPage({ pdf, pageNumber, active, onClip }) {
         };
     }, [pdf, pageNumber, active]);
 
+    useEffect(() => {
+        if (!active && selection) onClipReady?.(null);
+    }, [active, selection, onClipReady]);
+
     const pointFromEvent = event => {
         const canvas = canvasRef.current;
         const rect = canvas.getBoundingClientRect();
@@ -46,22 +50,35 @@ function PdfPage({ pdf, pageNumber, active, onClip }) {
         width: Math.abs(end.x - start.x), height: Math.abs(end.y - start.y),
     });
     const pointerDown = event => {
+        onClipReady?.(null);
         event.currentTarget.setPointerCapture(event.pointerId);
         dragStartRef.current = pointFromEvent(event);
         updateSelection(dragStartRef.current, dragStartRef.current);
     };
     const pointerMove = event => dragStartRef.current && updateSelection(dragStartRef.current, pointFromEvent(event));
     const pointerUp = event => {
-        if (dragStartRef.current) updateSelection(dragStartRef.current, pointFromEvent(event));
+        if (dragStartRef.current) {
+            const end = pointFromEvent(event);
+            const start = dragStartRef.current;
+            const finalSelection = {
+                x: Math.min(start.x, end.x), y: Math.min(start.y, end.y),
+                width: Math.abs(end.x - start.x), height: Math.abs(end.y - start.y),
+            };
+            setSelection(finalSelection);
+            if (finalSelection.width >= 8 && finalSelection.height >= 8) {
+                onClipReady?.(() => clipSelection(finalSelection), pageNumber);
+            }
+        }
         dragStartRef.current = null;
     };
-    const clip = () => {
-        if (!selection || selection.width < 8 || selection.height < 8) return;
+    const clipSelection = selectedArea => {
+        if (!selectedArea || selectedArea.width < 8 || selectedArea.height < 8 || !canvasRef.current) return;
         const output = document.createElement('canvas');
-        output.width = Math.round(selection.width);
-        output.height = Math.round(selection.height);
-        output.getContext('2d').drawImage(canvasRef.current, selection.x, selection.y, selection.width, selection.height, 0, 0, output.width, output.height);
+        output.width = Math.round(selectedArea.width);
+        output.height = Math.round(selectedArea.height);
+        output.getContext('2d').drawImage(canvasRef.current, selectedArea.x, selectedArea.y, selectedArea.width, selectedArea.height, 0, 0, output.width, output.height);
         onClip?.(output.toDataURL('image/png'));
+        onClipReady?.(null);
     };
 
     return (
@@ -71,14 +88,11 @@ function PdfPage({ pdf, pageNumber, active, onClip }) {
                 {active && <canvas ref={canvasRef} onPointerDown={onClip ? pointerDown : undefined} onPointerMove={onClip ? pointerMove : undefined} onPointerUp={onClip ? pointerUp : undefined} style={{ display: 'block', width: '100%', height: '100%' }} />}
                 {selection && active && <div style={{ position: 'absolute', left: `${selection.x / size.width * 100}%`, top: `${selection.y / size.height * 100}%`, width: `${selection.width / size.width * 100}%`, height: `${selection.height / size.height * 100}%`, border: '2px solid #e53e3e', background: 'rgba(229,62,62,0.12)', pointerEvents: 'none' }} />}
             </div>
-            {onClip && selection && selection.width >= 8 && selection.height >= 8 && (
-                <div style={{ textAlign: 'center', marginTop: '0.4rem' }}><button type="button" onClick={clip} style={{ background: '#3182ce', color: '#fff', border: 0, borderRadius: '0.35rem', padding: '0.45rem 0.8rem', fontWeight: 'bold' }}>この範囲を画像登録</button></div>
-            )}
         </section>
     );
 }
 
-export default function PdfClipper({ pdfBlob, onClip, initialSearchText = '' }) {
+export default function PdfClipper({ pdfBlob, onClip, initialSearchText = '', scrollHeight = 'calc(90vh - 175px)' }) {
     const scrollRef = useRef(null);
     const [pdf, setPdf] = useState(null);
     const [pageCount, setPageCount] = useState(0);
@@ -86,6 +100,8 @@ export default function PdfClipper({ pdfBlob, onClip, initialSearchText = '' }) 
     const [activePages, setActivePages] = useState(new Set([1, 2]));
     const [error, setError] = useState('');
     const [initialPage, setInitialPage] = useState(null);
+    const clipActionRef = useRef(null);
+    const [clipReadyPage, setClipReadyPage] = useState(null);
 
     useEffect(() => {
         let cancelled = false;
@@ -156,6 +172,10 @@ export default function PdfClipper({ pdfBlob, onClip, initialSearchText = '' }) 
         const next = Math.max(1, Math.min(pageCount, pageNumber));
         scrollRef.current?.querySelector(`[data-pdf-page="${next}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     };
+    const handleClipReady = (action, pageNumber = null) => {
+        clipActionRef.current = action;
+        setClipReadyPage(action ? pageNumber : null);
+    };
 
     if (error) return <div style={{ color: '#c53030' }}>{error}</div>;
     return (
@@ -164,14 +184,15 @@ export default function PdfClipper({ pdfBlob, onClip, initialSearchText = '' }) 
                 <button type="button" disabled={currentPage <= 1} onClick={() => moveToPage(currentPage - 1)}>前のページ</button>
                 <strong>{pageCount ? `${currentPage} / ${pageCount}` : '読込中…'}</strong>
                 <button type="button" disabled={!pageCount || currentPage >= pageCount} onClick={() => moveToPage(currentPage + 1)}>次のページ</button>
+                {onClip && <button type="button" disabled={!clipActionRef.current} onClick={() => clipActionRef.current?.()} style={{ marginLeft: '0.8rem', background: clipActionRef.current ? '#3182ce' : '#a0aec0', color: '#fff', border: 0, borderRadius: '0.35rem', padding: '0.45rem 0.8rem', fontWeight: 'bold', cursor: clipActionRef.current ? 'pointer' : 'default' }}>{clipReadyPage ? `${clipReadyPage}ページの選択範囲を画像登録` : 'PDF上で範囲を選択'}</button>}
             </div>
             <p style={{ margin: '0 0 0.5rem', textAlign: 'center', color: '#4a5568', fontSize: '0.85rem' }}>
                 {onClip ? '上下にスクロールできます。PDF上をドラッグして登録範囲を選択してください。' : '上下にスクロールしてPDFを連続閲覧できます。'}
             </p>
-            <div ref={scrollRef} onScroll={handleScroll} style={{ height: 'calc(90vh - 175px)', minHeight: '420px', overflowY: 'scroll', overflowX: 'hidden', padding: '0.75rem', background: '#cbd5e0', border: '1px solid #a0aec0', borderRadius: '0.4rem', scrollbarGutter: 'stable' }}>
+            <div ref={scrollRef} onScroll={handleScroll} style={{ height: scrollHeight, minHeight: '360px', overflowY: 'scroll', overflowX: 'hidden', padding: '0.75rem', background: '#cbd5e0', border: '1px solid #a0aec0', borderRadius: '0.4rem', scrollbarGutter: 'stable' }}>
                 {pdf && Array.from({ length: pageCount }, (_, index) => {
                     const pageNumber = index + 1;
-                    return <PdfPage key={pageNumber} pdf={pdf} pageNumber={pageNumber} active={activePages.has(pageNumber)} onClip={onClip} />;
+                    return <PdfPage key={pageNumber} pdf={pdf} pageNumber={pageNumber} active={activePages.has(pageNumber)} onClip={onClip} onClipReady={handleClipReady} />;
                 })}
             </div>
         </div>

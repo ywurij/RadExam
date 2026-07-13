@@ -47,6 +47,13 @@
   gap: 1.5rem;
 }
 
+.orderHint {
+  margin: -0.55rem 0 1rem;
+  color: #718096;
+  font-size: 0.82rem;
+  text-align: center;
+}
+
 .examCard {
   display: flex;
   flex-direction: column;
@@ -58,6 +65,8 @@
   transition: all 0.2s ease;
   position: relative;
   overflow: hidden;
+  user-select: none;
+  touch-action: pan-y;
 
   &:hover {
     transform: translateY(-4px);
@@ -73,6 +82,24 @@
       color: #1e40af;
     }
   }
+
+  &.dragging {
+    z-index: 5;
+    transform: scale(1.035);
+    border-color: #805ad5;
+    box-shadow: 0 14px 28px rgba(76, 29, 149, 0.2);
+    cursor: grabbing;
+    opacity: 0.9;
+  }
+}
+
+.dragHandle {
+  position: absolute;
+  top: 0.45rem;
+  right: 0.65rem;
+  color: #a0aec0;
+  font-size: 1.1rem;
+  line-height: 1;
 }
 
 .examName {

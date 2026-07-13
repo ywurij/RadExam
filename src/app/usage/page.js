@@ -130,8 +130,8 @@ export default function UsagePage() {
                         </h4>
                     </div>
                     <p style={{ margin: 0, fontSize: '0.92rem', color: '#4a5568' }}>
-                        「<b>放射線科専門医試験</b>」「<b>放射線診断専門医試験</b>」「<b>IVR専門医試験</b>」など対象の試験を選択し、過去問PDFファイルをドロップするかクリックして選択します。<br />
-                        アプリがPDFを解析し、問題文、選択肢、埋め込み画像を自動で抽出します。
+                        対象の試験を選択し、複数年度のPDFをまとめてドロップするか、ファイル・フォルダ選択で読み込みます。<br />
+                        アプリが年度ごとに問題文、選択肢、埋め込み画像を抽出します。登録に使用したPDF自体も端末内へ保存され、後から参照できます。
                     </p>
                 </div>
 
@@ -158,8 +158,8 @@ export default function UsagePage() {
                         </h4>
                     </div>
                     <p style={{ margin: 0, fontSize: '0.92rem', color: '#4a5568' }}>
-                        自動抽出された問題文、選択肢、画像、レジェンドを一覧で確認します。<br />
-                        問題番号や本文、選択肢に気になる点があれば、この画面でそのまま修正できます。
+                        自動抽出された問題文、選択肢、画像、レジェンドを一覧で確認します。画像は追加・削除・表示順変更が可能です。<br />
+                        保存後の詳細な修正は「データ管理 / バックアップ」の試験編集から行えます。
                     </p>
                 </div>
 
@@ -214,10 +214,33 @@ export default function UsagePage() {
                         </h4>
                     </div>
                     <p style={{ margin: 0, fontSize: '0.92rem', color: '#4a5568' }}>
-                        画面下部の「<b>保存する</b>」ボタンをクリックします。保存が完了すると、トップ画面（ホーム）に新しく登録した試験カードが表示されます。<br />
+                        「<b>この内容で保存</b>」をクリックします。保存が完了すると、トップ画面（ホーム）に新しく登録した試験カードが表示されます。<br />
                         試験カードをクリックし、年度を選択して「<b>演習を開始する</b>」をクリックすると、過去問演習が始まります。
                     </p>
                 </div>
+            </div>
+
+            <h2 style={{ fontSize: '1.4rem', fontWeight: 700, color: '#2d3748', marginBottom: '1.2rem' }}>🏠 ホーム画面と演習設定</h2>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '1rem', marginBottom: '2.5rem' }}>
+                {[
+                    ['試験カードの並べ替え', '試験カードを長押ししてドラッグすると、ホーム画面での表示順を変更できます。並び順は端末内に保存されます。'],
+                    ['出題条件', '年度、出題数、ステータス、ジャンル、ランダム出題を組み合わせて演習を開始できます。'],
+                    ['中断・再開', '演習を中断するとホームに履歴が最大4件表示されます。再開すると保存した問題順と位置から続けられます。'],
+                    ['検索', 'ホームの「問題を検索」から、試験をまたいで問題文や選択肢を検索できます。'],
+                ].map(([title, text]) => <div key={title} style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: '0.65rem', padding: '1.1rem' }}><h3 style={{ margin: '0 0 0.4rem', fontSize: '1rem' }}>{title}</h3><p style={{ margin: 0, color: '#4a5568', fontSize: '0.9rem' }}>{text}</p></div>)}
+            </div>
+
+            <h2 style={{ fontSize: '1.4rem', fontWeight: 700, color: '#2d3748', marginBottom: '1.2rem' }}>✏️ 問題データの修正</h2>
+            <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: '0.75rem', padding: '1.4rem', marginBottom: '2.5rem' }}>
+                <h3 style={{ margin: '0 0 0.5rem', fontSize: '1.05rem' }}>演習画面から修正する</h3>
+                <p style={{ margin: '0 0 1rem', color: '#4a5568', fontSize: '0.92rem' }}>「設問を編集」を押すと、問題文・選択肢・画像・画像レジェンドをまとめて編集できます。登録元PDFがある場合は編集欄の右側に該当設問のページが表示されます。</p>
+                <ul style={{ margin: '0 0 1.2rem', paddingLeft: '1.3rem', color: '#4a5568', fontSize: '0.9rem' }}>
+                    <li>画像カードはドラッグして表示順を変更できます。</li>
+                    <li>PDF上の範囲を選択して、画像の追加や既存画像の差し替えができます。</li>
+                    <li>正解・ジャンル・解説は「回答・解説を見る」の後に個別編集できます。</li>
+                </ul>
+                <h3 style={{ margin: '0 0 0.5rem', fontSize: '1.05rem' }}>試験管理画面から修正する</h3>
+                <p style={{ margin: 0, color: '#4a5568', fontSize: '0.92rem' }}>「データ管理 / バックアップ」で試験の「編集」を選ぶと、問題追加・削除を含めて年度単位で修正できます。編集欄と登録元PDFは左右2ペインで表示され、選択中の問題をPDFと見比べながら修正・画像切り抜きができます。</p>
             </div>
 
             {/* Crucial Backup Guide */}
@@ -239,7 +262,7 @@ export default function UsagePage() {
                     ただし、PC自体の初期化やアプリのデータフォルダの手動削除など、万が一の不測の事態に備えて定期的なバックアップを推奨します。
                 </p>
                 <p style={{ margin: 0, color: '#7b341e' }}>
-                    「試験管理」の「<b>追加済み試験の管理</b>」タブにある「<b>📤 エクスポート (バックアップ)</b>」ボタンより、定期的にバックアップ用のJSONファイルをPC上に保存してください。不測の事態でデータが個人環境から消失した場合や、別のPCへ移行したい場合は、そのバックアップファイルを「<b>インポート (復元)</b>」することで完璧に元の状態に復元可能です。
+                    「試験管理」の「<b>データ管理 / バックアップ</b>」にある「<b>📤 エクスポート (バックアップ)</b>」から、定期的にバックアップ用JSONを保存してください。試験データ、画像、登録元PDF、学習進捗が対象です。「<b>インポート (完全復元)</b>」で別のPCへ移行できます。
                 </p>
             </div>
 

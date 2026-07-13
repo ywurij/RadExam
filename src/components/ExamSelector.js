@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { getExamTypes, getYears, getGenres, initializeLocalExams } from '@/lib/data';
 import styles from './ExamSelector.module.scss';
 import { useRouter } from 'next/navigation';
@@ -23,7 +23,46 @@ export default function ExamSelector() {
      const years = useMemo(() => getYears(selectedExam), [selectedExam]);
      const genres = useMemo(() => getGenres(selectedExam), [selectedExam]);
  
-     const [sessions, setSessions] = useState([]);
+    const [sessions, setSessions] = useState([]);
+    const [draggingExamId, setDraggingExamId] = useState(null);
+    const longPressTimerRef = useRef(null);
+    const pressedExamIdRef = useRef(null);
+    const suppressClickRef = useRef(false);
+
+    const saveExamOrder = (orderedExams) => {
+        localStorage.setItem('radexam_exam_order', JSON.stringify(orderedExams.map(exam => exam.id)));
+    };
+
+    const reorderExams = (sourceId, targetId) => {
+        if (!sourceId || !targetId || sourceId === targetId) return;
+        setExams(previous => {
+            const sourceIndex = previous.findIndex(exam => exam.id === sourceId);
+            const targetIndex = previous.findIndex(exam => exam.id === targetId);
+            if (sourceIndex < 0 || targetIndex < 0) return previous;
+            const ordered = [...previous];
+            const [moved] = ordered.splice(sourceIndex, 1);
+            ordered.splice(targetIndex, 0, moved);
+            saveExamOrder(ordered);
+            return ordered;
+        });
+    };
+
+    const beginExamPress = (examId) => {
+        pressedExamIdRef.current = examId;
+        suppressClickRef.current = false;
+        clearTimeout(longPressTimerRef.current);
+        longPressTimerRef.current = setTimeout(() => {
+            setDraggingExamId(examId);
+            suppressClickRef.current = true;
+        }, 450);
+    };
+
+    const finishExamPress = () => {
+        clearTimeout(longPressTimerRef.current);
+        pressedExamIdRef.current = null;
+        if (draggingExamId) suppressClickRef.current = true;
+        setDraggingExamId(null);
+    };
 
     const visibleSessions = useMemo(() => (
         [...sessions]
@@ -62,7 +101,17 @@ export default function ExamSelector() {
         const init = async () => {
             // ローカルのカスタム試験キャッシュを初期化
             await initializeLocalExams();
-            const types = getExamTypes();
+            const rawTypes = getExamTypes();
+            let types = rawTypes;
+            try {
+                const savedOrder = JSON.parse(localStorage.getItem('radexam_exam_order') || '[]');
+                if (Array.isArray(savedOrder)) {
+                    const orderIndex = new Map(savedOrder.map((id, index) => [id, index]));
+                    types = [...rawTypes].sort((a, b) => (orderIndex.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (orderIndex.get(b.id) ?? Number.MAX_SAFE_INTEGER));
+                }
+            } catch (error) {
+                console.error('Failed to load exam card order:', error);
+            }
             setExams(types);
 
             const sessionsKey = 'radexam_sessions';
@@ -255,13 +304,31 @@ export default function ExamSelector() {
 
             <div className={styles.section}>
                 <h2 className={styles.label}>試験を選択</h2>
-                <div className={styles.examGrid}>
+                <p className={styles.orderHint}>カードを長押ししてドラッグすると表示順を変更できます。</p>
+                <div className={styles.examGrid} onPointerMove={(event) => {
+                    if (!draggingExamId) return;
+                    event.preventDefault();
+                    const target = document.elementFromPoint(event.clientX, event.clientY)?.closest('[data-exam-id]');
+                    if (target?.dataset.examId) reorderExams(draggingExamId, target.dataset.examId);
+                }} onPointerUp={finishExamPress} onPointerCancel={finishExamPress}>
                     {exams.map(exam => (
                         <button
                             key={exam.id}
-                            className={`${styles.examCard} ${selectedExam === exam.id ? styles.active : ''}`}
-                            onClick={() => applyExamSelection(exam.id)}
+                            data-exam-id={exam.id}
+                            className={`${styles.examCard} ${selectedExam === exam.id ? styles.active : ''} ${draggingExamId === exam.id ? styles.dragging : ''}`}
+                            onPointerDown={() => beginExamPress(exam.id)}
+                            onPointerLeave={() => { if (!draggingExamId) clearTimeout(longPressTimerRef.current); }}
+                            onContextMenu={(event) => event.preventDefault()}
+                            onClick={(event) => {
+                                if (suppressClickRef.current) {
+                                    event.preventDefault();
+                                    suppressClickRef.current = false;
+                                    return;
+                                }
+                                applyExamSelection(exam.id);
+                            }}
                         >
+                            <span className={styles.dragHandle} aria-hidden="true">⠿</span>
                             <span className={styles.examName}>{exam.name}</span>
                             <span className={styles.examCount}>{exam.count} 問</span>
                         </button>
