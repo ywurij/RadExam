@@ -30,6 +30,7 @@ import {
     isPairedOptionHeader,
     isRepeatedOptionOrFigureLabel,
     removeContainedImageRects,
+    restoreTruncatedOptionText,
     splitOptionItemsByColumns,
 } from '@/lib/pdfImportText';
 
@@ -4397,7 +4398,7 @@ export default function AdminPage() {
 
                  q.question = [cleanQuestionLines.join('\n').trim(), detectedTable.html].filter(Boolean).join('\n');
                  q.options = getFilledOptionCount(rebuiltOptions) > 0
-                     ? normalizeQuestionOptions(rebuiltOptions)
+                     ? normalizeQuestionOptions(restoreTruncatedOptionText(rebuiltOptions, originalOptions))
                      : originalOptions;
                  q.finalUsedLines = rebuiltUsedLines;
              });

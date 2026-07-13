@@ -166,6 +166,39 @@ export const isRepeatedOptionOrFigureLabel = (optionKey, parsedOptions, optionsS
     )
 );
 
+export const restoreTruncatedOptionText = (rebuiltOptions, originalOptions) => {
+    const restored = { ...(rebuiltOptions || {}) };
+
+    Object.entries(originalOptions || {}).forEach(([key, originalText]) => {
+        const rebuiltText = String(restored[key] || '').trim();
+        const fullText = String(originalText || '').trim();
+
+        // 画像領域を除外して選択肢を再構築する際、PDF上で別テキスト要素に
+        // 分かれた末尾（例: 「≧」に続く数字）だけが失われることがある。
+        // 初回抽出結果が再構築結果の完全な続きになっている場合に限り復元する。
+        if (rebuiltText && fullText.length > rebuiltText.length && fullText.startsWith(rebuiltText)) {
+            restored[key] = fullText;
+        }
+    });
+
+    return restored;
+};
+
+export const repairLegacySequentialComparisonOptions = (options) => {
+    const optionKeys = ['a', 'b', 'c', 'd', 'e'];
+    const values = optionKeys.map(key => String(options?.[key] || '').trim());
+    const comparisonMark = values[0];
+
+    if (!/^[≧≥≦≤]$/.test(comparisonMark) || !values.every(value => value === comparisonMark)) {
+        return options;
+    }
+
+    return optionKeys.reduce((repaired, key, index) => ({
+        ...repaired,
+        [key]: `${comparisonMark}${index + 1}`,
+    }), { ...(options || {}) });
+};
+
 const setLegends = (images, legends) => images.map((image, index) => ({
     ...image,
     legend: legends[index] ?? image.legend,

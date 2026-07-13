@@ -35,6 +35,7 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveQ
     const maxSelection = getSelectionCount(question.question || '', currentAnswer);
     const slides = useMemo(() => currentImages.map(img => ({ src: img.path?.startsWith('data:') ? img.path : `/${img.path}` })), [currentImages]);
     const selectedPdf = pdfFiles.find(pdf => pdf.key === selectedPdfKey) || pdfFiles[0];
+    const questionPdfKey = pdfFiles.find(pdf => Number(pdf.year) === Number(question.year))?.key || pdfFiles[0]?.key || '';
 
     useEffect(() => {
         setSelectedOptions([]);
@@ -46,8 +47,8 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveQ
         setIsEditingExplanation(false);
         setDraft(null);
         setPdfTarget(null);
-        setSelectedPdfKey(pdfFiles[0]?.key || '');
-    }, [question.id, pdfFiles, onEditingChange]);
+        setSelectedPdfKey(questionPdfKey);
+    }, [question.id, questionPdfKey, onEditingChange]);
 
     useEffect(() => {
         if (!showAnswer) return;
@@ -65,7 +66,7 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveQ
             options: { ...currentOptions },
             images: currentImages.map(image => ({ ...image })),
         });
-        setSelectedPdfKey(pdfFiles[0]?.key || '');
+        setSelectedPdfKey(questionPdfKey);
         setIsEditing(true);
         onEditingChange?.(true);
     };
@@ -215,7 +216,7 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveQ
                 ) : (
                     <>
                         <div className={styles.questionSection} style={{ marginBottom: '1.5rem' }}><div className={styles.questionText} dangerouslySetInnerHTML={{ __html: question.question || '' }} /></div>
-                        {currentImages.length > 0 && <div className={`${styles.imageGrid} ${currentImages.length === 1 ? styles.singleGrid : ''}`}>{currentImages.map((img, idx) => <div key={idx} className={styles.imageWrapper} onClick={() => { setLightboxIndex(idx); setLightboxOpen(true); }}><img src={img.path?.startsWith('data:') ? img.path : `/${img.path}`} alt={img.legend || `Image ${idx + 1}`} className={styles.thumbnail} /><div className={styles.legend} dangerouslySetInnerHTML={{ __html: img.legend || '凡例なし' }} /></div>)}</div>}
+                        {currentImages.length > 0 && <div className={`${styles.imageGrid} ${currentImages.length === 1 ? styles.singleGrid : ''}`}>{currentImages.map((img, idx) => <div key={idx} className={styles.imageWrapper} onClick={() => { setLightboxIndex(idx); setLightboxOpen(true); }}><img src={img.path?.startsWith('data:') ? img.path : `/${img.path}`} alt={img.legend || `Image ${idx + 1}`} className={styles.thumbnail} />{img.legend && <div className={styles.legend} dangerouslySetInnerHTML={{ __html: img.legend }} />}</div>)}</div>}
                         <div className={styles.optionsSection} style={{ marginBottom: '2rem' }}><h4>選択肢</h4><div className={styles.options}>{Object.entries(currentOptions).sort((a, b) => a[0].localeCompare(b[0])).map(([key, text]) => { const selected = selectedOptions.includes(key); const answer = normalizeAnswer(currentAnswer).includes(key); let className = styles.optionBtn; if (selected) className += ` ${styles.selected}`; if (showAnswer && answer) className += ` ${styles.correct}`; if (showAnswer && selected && !answer) className += ` ${styles.wrong}`; return <button key={key} className={className} onClick={() => toggleOption(key)}><span className={styles.optionKey}>{key}</span><span dangerouslySetInnerHTML={{ __html: text }} /></button>; })}</div></div>
                         <div className={styles.actionRow}>{!showAnswer ? <button className={styles.revealBtn} onClick={revealAnswer}>回答・解説を見る</button> : <div className={`${styles.explicitAnswer} ${isCorrect ? styles.correct : ''}`}><div className={styles.answerBlock}>{isEditingAnswer ? <div className={styles.inlineEditAnswer}><span className={styles.label}>正解を選択:</span><div className={styles.answerSelectionGrid}>{Object.keys(currentOptions).sort().map(key => <button type="button" key={key} className={editAnswer.includes(key) ? styles.draftAnswerActive : ''} onClick={() => setEditAnswer(previous => previous.includes(key) ? previous.filter(item => item !== key) : [...previous, key].sort())}>{key}</button>)}</div><div className={styles.editActions}><button onClick={() => setIsEditingAnswer(false)} className={styles.cancelBtn}>キャンセル</button><button onClick={saveAnswer} className={styles.saveBtn}>保存</button></div></div> : <><div className={styles.answerText}><span className={styles.label}>正解は</span><span className={styles.value}>{normalizeAnswer(currentAnswer).join(', ')} です</span></div><button onClick={() => { setEditAnswer(normalizeAnswer(currentAnswer)); setIsEditingAnswer(true); }} className={styles.iconEditBtn} title="正解を編集">✎</button></>}</div></div>}</div>
                     </>

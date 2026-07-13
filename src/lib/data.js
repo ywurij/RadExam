@@ -1,5 +1,6 @@
 import Fuse from 'fuse.js';
 import metadata from '@/data/metadata.json';
+import { repairLegacySequentialComparisonOptions } from '@/lib/pdfImportText';
 import { 
     getLocalProgress, 
     getAllLocalExams, 
@@ -72,7 +73,11 @@ export const getExamData = async (examId) => {
     try {
         const localQuestions = await getLocalExam(examId);
         if (localQuestions && localQuestions.length > 0) {
-            const data = localQuestions.map(q => ({ ...q, examId }));
+            const data = localQuestions.map(q => ({
+                ...q,
+                options: repairLegacySequentialComparisonOptions(q.options),
+                examId,
+            }));
             CACHE[examId] = data;
             return data;
         }

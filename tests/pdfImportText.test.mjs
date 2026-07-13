@@ -9,9 +9,32 @@ import {
     findNearestPrecedingQuestion,
     isPairedOptionHeader,
     isRepeatedOptionOrFigureLabel,
+    repairLegacySequentialComparisonOptions,
     removeContainedImageRects,
+    restoreTruncatedOptionText,
     splitOptionItemsByColumns,
 } from '../src/lib/pdfImportText.js';
+
+test('restores option suffixes removed while excluding image-contained text', () => {
+    assert.deepEqual(
+        restoreTruncatedOptionText(
+            { a: '≧', b: '≧', c: '≧', d: '≧', e: '≧' },
+            { a: '≧1', b: '≧2', c: '≧3', d: '≧4', e: '≧5' }
+        ),
+        { a: '≧1', b: '≧2', c: '≧3', d: '≧4', e: '≧5' }
+    );
+});
+
+test('repairs already imported options containing only sequential comparison marks', () => {
+    assert.deepEqual(
+        repairLegacySequentialComparisonOptions({ a: '≧', b: '≧', c: '≧', d: '≧', e: '≧' }),
+        { a: '≧1', b: '≧2', c: '≧3', d: '≧4', e: '≧5' }
+    );
+    assert.deepEqual(
+        repairLegacySequentialComparisonOptions({ a: '≧1', b: '≧2', c: '≧3', d: '≧4', e: '≧5' }),
+        { a: '≧1', b: '≧2', c: '≧3', d: '≧4', e: '≧5' }
+    );
+});
 
 const item = (text, x, width = 10) => ({ text, x, width });
 
