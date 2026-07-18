@@ -21,6 +21,7 @@ import {
     normalizeNuclearTextItemGeometry,
     resolveNuclearDisplayLegend
 } from '@/lib/nuclearFigureGeometry.mjs';
+import { buildNuclearSourcePageAssignments } from '@/lib/nuclearSourcePages.mjs';
 import {
     applyDiagnosticImportCorrection,
     buildPairedOptionText,
@@ -2895,6 +2896,7 @@ export default function AdminPage() {
     const [activeEditingQuestionIndex, setActiveEditingQuestionIndex] = useState(0);
     const [pdfClipQuestionIndex, setPdfClipQuestionIndex] = useState(null);
     const [nuclearVlmEnabled, setNuclearVlmEnabled] = useState(true);
+    const [nuclearImportMode, setNuclearImportMode] = useState('pages');
     const [nuclearVlmStatus, setNuclearVlmStatus] = useState({
         state: 'unchecked',
         providerLabel: 'ローカルVLM',
@@ -3321,7 +3323,7 @@ export default function AdminPage() {
             let nuclearRuleFallbackPageCount = 0;
             let nuclearStructuralPageCount = 0;
 
-            if (parserProfile.name === 'nuclear' && nuclearVlmEnabled) {
+            if (parserProfile.name === 'nuclear' && nuclearImportMode === 'figures' && nuclearVlmEnabled) {
                 setPdfProgress({ current: 0, total: 0, status: 'ローカルVLMの接続とモデルを確認中...' });
                 const status = await checkNuclearVlmStatus();
                 nuclearVlmReady = Boolean(status.available);
@@ -3406,6 +3408,7 @@ export default function AdminPage() {
                     : 0;
                 nuclearPageAnalysisRotations.set(pageNum, analysisRotation);
                 const pageHeight = page.view[3] - page.view[1];
+                const pageWidth = page.view[2] - page.view[0];
                 const textItems = textContent.items.map(item => (
                     parserProfile.name === 'nuclear'
                         ? normalizeNuclearTextItemGeometry(item, pageHeight, analysisRotation, pageNum)
@@ -3421,7 +3424,10 @@ export default function AdminPage() {
 
                 rawPagesTextData.push({
                     pageNum,
-                    textItems
+                    textItems,
+                    width: analysisRotation % 180 === 0 ? pageWidth : pageHeight,
+                    height: analysisRotation % 180 === 0 ? pageHeight : pageWidth,
+                    rotation: analysisRotation
                 });
             }
             // 2. 問題分割ロジック
@@ -3799,7 +3805,17 @@ export default function AdminPage() {
                         });
                     });
                 }
-            });
+             });
+
+            const nuclearSourcePagesByQuestion = parserProfile.name === 'nuclear' && nuclearImportMode === 'pages'
+                ? new Map(buildNuclearSourcePageAssignments({
+                    questions: parsedQuestionsList,
+                    pages: rawPagesTextData,
+                    pdfName: file.name,
+                    pdfYear: detectedYear,
+                    totalPages
+                }).map(entry => [entry.questionNumber, entry.sourcePages]))
+                : new Map();
 
             // 2.4 【第2パス】各ページから画像を抽出し、確定したテキストを除外してレジェンド探索
             const allExtractedImagesPool = [];
@@ -3819,6 +3835,11 @@ export default function AdminPage() {
                      // ページ最下部のフッター領域（y < 60）のテキストアイテムは探索前に除外する
                      return !assignedTextKeys.has(key) && item.y >= parserProfile.footerMinY;
                  });
+
+                 if (parserProfile.name === 'nuclear' && nuclearImportMode === 'pages') {
+                     setPdfProgress(prev => ({ ...prev, status: `ページ ${pageNum}/${totalPages} の巻末図参照を登録中...` }));
+                     continue;
+                 }
 
                  // 画像オブジェクトの位置情報を収集
                  const opList = await page.getOperatorList();
@@ -4660,6 +4681,7 @@ export default function AdminPage() {
                     options: normalizeQuestionOptions(q.options),
                     answer: '',
                     explanation: '',
+                    sourcePages: nuclearSourcePagesByQuestion.get(q.questionNumber) || [],
                     images: q.pageImages.map((img, imgIdx) => ({
                         path: 'image_placeholder',
                         legend: img.legend ?? `図${imgIdx + 1}`
@@ -4679,7 +4701,9 @@ export default function AdminPage() {
             Object.entries(finalImageMap).forEach(([questionIndex, images]) => {
                 combinedImageMap[questionOffset + Number(questionIndex)] = images;
             });
-            const vlmSummary = parserProfile.name === 'nuclear' && nuclearVlmEnabled
+            const vlmSummary = parserProfile.name === 'nuclear' && nuclearImportMode === 'pages'
+                ? ' 元PDFの巻末図ページ参照方式で登録しました。'
+                : parserProfile.name === 'nuclear' && nuclearVlmEnabled
                 ? ` 構造アンカー採用: ${nuclearStructuralPageCount}ページ、VLM採用: ${nuclearVlmPageCount}ページ（部分採用: ${nuclearVlmPartialPageCount}ページ）、従来方式併用: ${nuclearRuleFallbackPageCount}ページ、VLM応答不採用: ${nuclearVlmFailureCount}ページ。`
                 : '';
             importSummaries.push(`${file.name}: ${detectedYear}年・${finalQuestions.length}問${vlmSummary}`);
@@ -4979,19 +5003,38 @@ export default function AdminPage() {
                                             borderRadius: '0.375rem',
                                             border: '1px solid #fbd38d'
                                         }}>
+                                            <div style={{ marginBottom: '0.8rem' }}>
+                                                <div style={{ fontWeight: 800, color: '#7b341e', marginBottom: '0.45rem' }}>核医学画像の登録方式</div>
+                                                <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+                                                    <label style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', cursor: 'pointer' }}>
+                                                        <input type="radio" name="nuclearImportMode" checked={nuclearImportMode === 'pages'} onChange={() => setNuclearImportMode('pages')} />
+                                                        巻末図ページを参照（推奨）
+                                                    </label>
+                                                    <label style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', cursor: 'pointer' }}>
+                                                        <input type="radio" name="nuclearImportMode" checked={nuclearImportMode === 'figures'} onChange={() => setNuclearImportMode('figures')} />
+                                                        個別図を抽出（従来方式）
+                                                    </label>
+                                                </div>
+                                                <p style={{ margin: '0.4rem 0 0', color: '#975a16', fontSize: '0.8rem', lineHeight: 1.5 }}>
+                                                    {nuclearImportMode === 'pages'
+                                                        ? '問題文中の別紙No.と一致する巻末図ページを紐付けます。問題文・選択肢のページは表示せず、VLMも使用しません。'
+                                                        : 'PDF内部の画像を個別に切り出します。複雑な配置では取り違えが起こる場合があります。'}
+                                                </p>
+                                            </div>
                                             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
                                                 <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: '700', color: '#7b341e', cursor: 'pointer' }}>
                                                     <input
                                                         type="checkbox"
                                                         checked={nuclearVlmEnabled}
                                                         onChange={(event) => setNuclearVlmEnabled(event.target.checked)}
+                                                        disabled={nuclearImportMode === 'pages'}
                                                     />
-                                                    Qwen3-VLによる図グルーピングを使用
+                                                    従来方式でQwen3-VLによる図グルーピングを使用
                                                 </label>
                                                 <button
                                                     type="button"
                                                     onClick={checkNuclearVlmStatus}
-                                                    disabled={nuclearVlmStatus.state === 'checking'}
+                                                    disabled={nuclearImportMode === 'pages' || nuclearVlmStatus.state === 'checking'}
                                                     style={{
                                                         padding: '0.45rem 0.8rem',
                                                         border: '1px solid #dd6b20',
@@ -5011,12 +5054,16 @@ export default function AdminPage() {
                                                 fontSize: '0.82rem',
                                                 lineHeight: 1.5
                                             }}>
-                                                実行方式: {nuclearVlmStatus.providerLabel} / モデル: {nuclearVlmStatus.model} / {nuclearVlmStatus.message}
+                                                {nuclearImportMode === 'pages'
+                                                    ? '巻末図ページ参照方式ではVLM接続は不要です。'
+                                                    : `実行方式: ${nuclearVlmStatus.providerLabel} / モデル: ${nuclearVlmStatus.model} / ${nuclearVlmStatus.message}`}
                                             </p>
                                             <p style={{ margin: '0.35rem 0 0', color: '#975a16', fontSize: '0.78rem', lineHeight: 1.5 }}>
-                                                VLMが利用できない場合や応答検証に失敗したページは、従来のアルゴリズムで処理します。
+                                                {nuclearImportMode === 'pages'
+                                                    ? '元PDFは一度だけ保存され、同じ巻末図ページを複数設問から共有参照できます。'
+                                                    : 'VLMが利用できない場合や応答検証に失敗したページは、従来のアルゴリズムで処理します。'}
                                             </p>
-                                            {embeddedVlmManager && (
+                                            {embeddedVlmManager && nuclearImportMode === 'figures' && (
                                                 <div style={{
                                                     marginTop: '0.65rem',
                                                     paddingTop: '0.65rem',
@@ -5493,8 +5540,15 @@ export default function AdminPage() {
                                                 flexDirection: 'column',
                                                 gap: '0.5rem'
                                             }}>
+                                                {Array.isArray(q.sourcePages) && q.sourcePages.length > 0 && (
+                                                    <div style={{ padding: '0.65rem', border: '1px solid #90cdf4', borderRadius: '0.375rem', background: '#ebf8ff', color: '#2c5282', fontSize: '0.8rem', lineHeight: 1.5 }}>
+                                                        <strong>📄 巻末図（別紙）ページ</strong>
+                                                        <div>{q.sourcePages.map(page => `${page.pageNumber}ページ`).join('、')}</div>
+                                                        <div>保存後の演習画面にページ全体を表示します。</div>
+                                                    </div>
+                                                )}
                                                 <div style={{ fontWeight: 'bold', fontSize: '0.8rem', color: '#4a5568' }}>
-                                                    🖼 この問題の画像
+                                                    🖼 追加の個別画像
                                                 </div>
                                                 
                                                 {/* File Upload Drop Area */}
