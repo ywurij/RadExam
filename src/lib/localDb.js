@@ -37,10 +37,10 @@ const buildLocalImageRef = (key) => `${LOCAL_IMAGE_PREFIX}${key}`;
 const extractLocalImageKey = (value) => isLocalImageRef(value) ? value.slice(LOCAL_IMAGE_PREFIX.length) : '';
 const buildExamImageKeyPrefix = (examId) => `${examId}::`;
 const buildExamPdfKeyPrefix = (examId) => `${examId}::`;
-const resolveImageLegend = (source, imageIndex) => (
+const resolveImageLegend = (source) => (
     Object.prototype.hasOwnProperty.call(source, 'legend')
         ? String(source.legend ?? '')
-        : `図${imageIndex + 1}`
+        : ''
 );
 const buildExamImageKey = (examId, questionId, imageIndex) => {
     const suffix = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
@@ -92,7 +92,7 @@ const normalizeQuestionId = (question) => {
 
 const normalizeStoredImage = async (examId, questionId, image, imageIndex) => {
     const source = image && typeof image === 'object' ? image : {};
-    const legend = resolveImageLegend(source, imageIndex);
+    const legend = resolveImageLegend(source);
     const storageKey = source.storageKey || extractLocalImageKey(source.path);
     const originalPath = typeof source.path === 'string' ? source.path : '';
 
@@ -166,13 +166,13 @@ const cleanupOrphanExamImages = async (examId, usedImageKeys) => {
 const hydrateQuestionImages = async (question) => {
     const images = Array.isArray(question.images) ? question.images : [];
 
-    const hydratedImages = await Promise.all(images.map(async (image, imageIndex) => {
+    const hydratedImages = await Promise.all(images.map(async (image) => {
         const source = image && typeof image === 'object' ? image : {};
         const storageKey = extractLocalImageKey(source.path);
         if (!storageKey) {
             return {
                 path: source.path || '',
-                legend: resolveImageLegend(source, imageIndex)
+                legend: resolveImageLegend(source)
             };
         }
 
@@ -180,7 +180,7 @@ const hydrateQuestionImages = async (question) => {
         if (!blob) {
             return {
                 path: '',
-                legend: resolveImageLegend(source, imageIndex),
+                legend: resolveImageLegend(source),
                 storageKey
             };
         }
@@ -188,7 +188,7 @@ const hydrateQuestionImages = async (question) => {
         const path = await blobToDataUrl(blob);
         return {
             path,
-            legend: resolveImageLegend(source, imageIndex),
+            legend: resolveImageLegend(source),
             storageKey
         };
     }));

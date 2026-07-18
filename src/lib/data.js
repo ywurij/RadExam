@@ -1,6 +1,8 @@
 import Fuse from 'fuse.js';
 import metadata from '@/data/metadata.json';
+import imageManifest from '../../public/data/image-manifest.json';
 import { repairLegacySequentialComparisonOptions } from '@/lib/pdfImportText';
+import { filterUnavailableStaticImages } from '@/lib/staticImageReferences.mjs';
 import { 
     getLocalProgress, 
     getAllLocalExams, 
@@ -23,6 +25,9 @@ const EXAM_NAMES = {
 
 // メモリ上のキャッシュ
 const CACHE = {};
+const STATIC_IMAGE_PATHS = Object.fromEntries(
+    Object.entries(imageManifest).map(([examId, paths]) => [examId, new Set(paths)])
+);
 let LOCAL_METADATA = {};
 let IS_INITIALIZED = false;
 
@@ -93,7 +98,11 @@ export const getExamData = async (examId) => {
             const rawData = loadedModule.default || loadedModule;
 
             // examId を各問題オブジェクトに注入
-            const data = rawData.map(q => ({ ...q, examId }));
+            const availableImagePaths = STATIC_IMAGE_PATHS[examId] || new Set();
+            const data = rawData.map(q => ({
+                ...filterUnavailableStaticImages(q, availableImagePaths),
+                examId
+            }));
 
             CACHE[examId] = data;
             return data;

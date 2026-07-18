@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
     applyDiagnosticImportCorrection,
+    assignNearestUniqueLabels,
     buildPairedOptionText,
     extractQuestionTable,
     extractOptionColumnHeaders,
@@ -14,6 +15,21 @@ import {
     restoreTruncatedOptionText,
     splitOptionItemsByColumns,
 } from '../src/lib/pdfImportText.js';
+
+test('assigns stacked image legends one-to-one by spatial distance', () => {
+    const assignments = assignNearestUniqueLabels([
+        { minX: 100, maxX: 400, minY: 500, maxY: 700 },
+        { minX: 100, maxX: 400, minY: 200, maxY: 400 }
+    ], [
+        { text: '冠状断', x: 420, y: 300, width: 40, height: 12 },
+        { text: '軸位断', x: 420, y: 600, width: 40, height: 12 }
+    ]);
+
+    assert.deepEqual(assignments.map(({ rectIndex, labelIndex }) => [rectIndex, labelIndex]), [
+        [0, 1],
+        [1, 0]
+    ]);
+});
 
 test('restores option suffixes removed while excluding image-contained text', () => {
     assert.deepEqual(

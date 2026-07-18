@@ -24,6 +24,7 @@ import {
 import { buildNuclearSourcePageAssignments } from '@/lib/nuclearSourcePages.mjs';
 import {
     applyDiagnosticImportCorrection,
+    assignNearestUniqueLabels,
     buildPairedOptionText,
     extractQuestionTable,
     extractOptionColumnHeaders,
@@ -39,10 +40,25 @@ const FOOTER_DASH_CLASS = 'ー―－\\-−–—';
 const FOOTER_PAGE_PATTERN = new RegExp(`^[${FOOTER_DASH_CLASS}]?\\s*[0-9０-９]+\\s*[${FOOTER_DASH_CLASS}]?$`);
 const FOOTER_PAGE_SUFFIX_PATTERN = new RegExp(`\\s*[${FOOTER_DASH_CLASS}]?\\s*[0-9０-９]+\\s*[${FOOTER_DASH_CLASS}]?\\s*$`, 'g');
 const FOOTER_DASH_ONLY_PATTERN = new RegExp(`^[${FOOTER_DASH_CLASS}]+$`);
-const IMAGE_ORIENTATION_LABEL_PATTERN = /^(?:右前斜位|左前斜位|右後斜位|左後斜位|前斜位|後斜位|正面|前面|後面|側面|右側面|左側面|右|左|前|後|上|下|矢状|冠状|横断|軸位|長軸|短軸)(?:像|位)?$/i;
+const IMAGE_ORIENTATION_LABEL_PATTERN = /^(?:右前斜位|左前斜位|右後斜位|左後斜位|前斜位|後斜位|正面|前面|後面|側面|右側面|左側面|右|左|前|後|上|下|矢状|冠状|横断|軸位|長軸|短軸)(?:像|位|断)?$/i;
 const WEAK_IMAGE_DESCRIPTOR_PATTERN = /^(?:[①-⑳]|\(?\s*[0-9０-９]+\s*\)?|[0-9０-９]+(?:\.[0-9０-９]+)?)$/;
 const TEMPORAL_IMAGE_LABEL_PATTERN = /^(?:入院直後|初診時|来院時|治療前|治療後|術前|術後|退院時|発症時|当日|翌日|前回|今回|現在|過去|[0-9０-９]+\s*(?:日|週|か月|ヶ月|月|年)(?:前|後)?|[0-9０-９]+\s*(?:時間|min|hr)\s*(?:前|後)?)$/i;
 const DEFAULT_IMAGE_QUESTION_LABEL_PATTERN = /(?:問|問題)\s*(?:番号)?\s*(\d{1,3})/i;
+const PDF_IMAGE_RENDER_SCALE = 200 / 72;
+
+const getSrgbCanvasContext = canvas => {
+    let context;
+    try {
+        context = canvas.getContext('2d', { colorSpace: 'srgb' });
+    } catch {
+        context = canvas.getContext('2d');
+    }
+    if (context) {
+        context.imageSmoothingEnabled = true;
+        context.imageSmoothingQuality = 'high';
+    }
+    return context;
+};
 const NO_QUESTION_LABEL_PATTERN = /^[\s\[\]［］【】]*(?:No\.?|NO\.?)\s*[0-9０-９]{1,3}[\s\[\]［］【】]*$/i;
 const FIGURE_HEADER_PATTERN = /図\s*[0-9０-９]+/;
 const INLINE_NO_QUESTION_PREFIX_PATTERN = /^[\s\[\]［］【】]*(?:No\.?|NO\.?)\s*[0-9０-９]{1,3}(?:\s*[-ー−‐–―]\s*[0-9０-９A-Za-z]+)?\s*/i;
@@ -207,7 +223,7 @@ const compareImportedImages = (a, b) => {
     return a.x - b.x;
 };
 
-const resolveImportedImageLegend = (img, idx) => {
+const resolveImportedImageLegend = (img) => {
     if (img.legendResolved) {
         return String(img.displayLegend ?? img.detectedLegend ?? '');
     }
@@ -218,7 +234,7 @@ const resolveImportedImageLegend = (img, idx) => {
     }
 
     const cleaned = cleanLegendPrefix(img.detectedLegend);
-    return cleaned || `図${idx + 1}`;
+    return cleaned || '';
 };
 
 const buildViewportFigureAnchors = (anchors, viewport) => (
@@ -3025,7 +3041,7 @@ export default function AdminPage() {
                         ...currentImages,
                         {
                             path: imagePath,
-                            legend: `図${currentImages.length + 1}`,
+                            legend: '',
                         },
                     ],
                 };
@@ -3079,9 +3095,9 @@ export default function AdminPage() {
                     options: normalizeQuestionOptions(q.options),
                     answer: q.answer || '',
                     explanation: q.explanation || '',
-                    images: Array.isArray(q.images) ? q.images.map((img, imgIdx) => ({
+                    images: Array.isArray(q.images) ? q.images.map((img) => ({
                         path: img.path || 'image_placeholder',
-                        legend: img.legend ?? `図${imgIdx + 1}`,
+                        legend: img.legend ?? '',
                         storageKey: img.storageKey || '',
                     })) : [],
                 };
@@ -3167,7 +3183,7 @@ export default function AdminPage() {
                     ...question.images,
                     {
                         path: imagePath,
-                        legend: `図${question.images.length + 1}`,
+                        legend: '',
                     },
                 ],
             }));
@@ -3217,7 +3233,7 @@ export default function AdminPage() {
         if (pdfClipQuestionIndex == null) return;
         updateEditingQuestion(pdfClipQuestionIndex, question => ({
             ...question,
-            images: [...question.images, { path: imagePath, legend: `図${question.images.length + 1}` }],
+            images: [...question.images, { path: imagePath, legend: '' }],
         }));
         setPdfClipQuestionIndex(null);
         setSuccessMsg('PDFの選択範囲を画像として追加しました。編集内容を保存してください。');
@@ -4032,7 +4048,7 @@ export default function AdminPage() {
                       }
 
                       if (nuclearGroups.length > 0) {
-                          nuclearGroups.forEach((group, idx) => {
+                          nuclearGroups.forEach((group) => {
                               const currentGroupContainedTextKeys = buildTextItemKeySet(group.textItems || []);
                               const bounds = group.bounds;
                               const rawPt1 = viewport.convertToViewportPoint(bounds.x, bounds.y);
@@ -4104,7 +4120,7 @@ export default function AdminPage() {
                                   path: cropCanvas.toDataURL('image/png'),
                                   x: origMinX,
                                   y: origMinY,
-                                  legend: legendResolved ? displayLegend : (group.figureLabel || detectedLegend || `図${idx + 1}`),
+                                  legend: legendResolved ? displayLegend : (group.figureLabel || detectedLegend || ''),
                                   detectedLegend: legendResolved ? displayLegend : (detectedLegend || null),
                                   detectedLegendRaw: group.legendRaw || '',
                                   figureNumber: group.figureNumber ?? extractFigureNumber(group.legendRaw || group.legend || ''),
@@ -4123,8 +4139,8 @@ export default function AdminPage() {
                           assignFigureAnchorsToNuclearImages(pageImages, pageFigureAnchors, viewport);
                           pageImages.sort(compareImportedImages);
 
-                          pageImages.forEach((img, idx) => {
-                              img.legend = resolveImportedImageLegend(img, idx);
+                          pageImages.forEach((img) => {
+                              img.legend = resolveImportedImageLegend(img);
                               delete img.viewportBounds;
                           });
 
@@ -4188,6 +4204,8 @@ export default function AdminPage() {
                           // Find adjacent limits
                           let leftLimit = undefined;
                           let rightLimit = undefined;
+                          let bottomLimit = undefined;
+                          let topLimit = undefined;
 
                           effectiveRects.forEach(other => {
                               if (other === rect) return;
@@ -4197,6 +4215,7 @@ export default function AdminPage() {
                               const otherMaxY = other.y + other.h;
 
                               const yOverlaps = Math.max(origMinY, otherMinY) <= Math.min(origMaxY, otherMaxY);
+                              const xOverlaps = Math.max(origMinX, otherMinX) <= Math.min(origMaxX, otherMaxX);
                               if (yOverlaps) {
                                   if (otherMaxX <= origMinX) {
                                       const mid = (otherMaxX + origMinX) / 2;
@@ -4206,9 +4225,18 @@ export default function AdminPage() {
                                       rightLimit = rightLimit === undefined ? mid : Math.min(rightLimit, mid);
                                   }
                               }
+                              if (xOverlaps) {
+                                  if (otherMaxY <= origMinY) {
+                                      const mid = (otherMaxY + origMinY) / 2;
+                                      bottomLimit = bottomLimit === undefined ? mid : Math.max(bottomLimit, mid);
+                                  } else if (otherMinY >= origMaxY) {
+                                      const mid = (origMaxY + otherMinY) / 2;
+                                      topLimit = topLimit === undefined ? mid : Math.min(topLimit, mid);
+                                  }
+                              }
                           });
 
-                          const limits = { leftLimit, rightLimit };
+                          const limits = { leftLimit, rightLimit, bottomLimit, topLimit };
 
                           const availableTextItems = filteredTextItems.filter(item => {
                               const key = buildTextItemKey(item);
@@ -4234,6 +4262,19 @@ export default function AdminPage() {
                              matchedQNum
                          });
                      });
+
+                      const orientationLabelItems = filteredTextItems.filter(item => (
+                          IMAGE_ORIENTATION_LABEL_PATTERN.test(String(item.text || '').trim())
+                          && !pageImageContainedTextKeys.has(buildTextItemKey(item))
+                      ));
+                      assignNearestUniqueLabels(combinedCrops, orientationLabelItems).forEach(({ rectIndex, labelIndex }) => {
+                          const crop = combinedCrops[rectIndex];
+                          const label = String(orientationLabelItems[labelIndex]?.text || '').trim();
+                          const currentLegend = String(crop?.legendStr || '').trim();
+                          if (crop && label && (!currentLegend || IMAGE_ORIENTATION_LABEL_PATTERN.test(currentLegend))) {
+                              crop.legendStr = label;
+                          }
+                      });
 
                       // Share column legends for grid-arranged images
                       if (combinedCrops.length >= 2) {
@@ -4316,12 +4357,12 @@ export default function AdminPage() {
                       }
 
                      // ページ全体のレンダリングを実行（Canvas切り出し用）
-                     const scale = 1.5;
+                     const scale = PDF_IMAGE_RENDER_SCALE;
                      const viewport = page.getViewport({ scale });
                      const pageCanvas = document.createElement('canvas');
                      pageCanvas.width = viewport.width;
                      pageCanvas.height = viewport.height;
-                     const canvasCtx = pageCanvas.getContext('2d');
+                     const canvasCtx = getSrgbCanvasContext(pageCanvas);
                      
                      await page.render({
                          canvasContext: canvasCtx,
@@ -4329,7 +4370,7 @@ export default function AdminPage() {
                      }).promise;
 
                      // 統合バウンディングボックスに基づいて Canvas からクロップ実行
-                     combinedCrops.forEach((crop, idx) => {
+                     combinedCrops.forEach((crop) => {
                          const pt1 = viewport.convertToViewportPoint(crop.minX, crop.minY);
                          const pt2 = viewport.convertToViewportPoint(crop.maxX, crop.maxY);
 
@@ -4346,7 +4387,7 @@ export default function AdminPage() {
                          const cropCanvas = document.createElement('canvas');
                          cropCanvas.width = safeW;
                          cropCanvas.height = safeH;
-                         const cropCtx = cropCanvas.getContext('2d');
+                         const cropCtx = getSrgbCanvasContext(cropCanvas);
                          cropCtx.drawImage(pageCanvas, safeX, safeY, safeW, safeH, 0, 0, safeW, safeH);
 
                          const base64Data = cropCanvas.toDataURL('image/png');
@@ -4359,7 +4400,7 @@ export default function AdminPage() {
                              y: crop.minY,
                              w: crop.w,
                              h: crop.h,
-                             legend: crop.legendStr || `図${idx + 1}`,
+                             legend: crop.legendStr || '',
                              detectedLegend: crop.legendStr || null,
                              page: pageNum,
                              matchedQNum: crop.matchedQNum
@@ -4377,9 +4418,9 @@ export default function AdminPage() {
                      return a.x - b.x;
                  });
 
-                 pageImages.forEach((img, idx) => {
+                 pageImages.forEach((img) => {
                      const cleaned = cleanLegendPrefix(img.detectedLegend);
-                     img.legend = cleaned || `図${idx + 1}`;
+                     img.legend = cleaned || '';
                  });
              }
 
@@ -4549,8 +4590,8 @@ export default function AdminPage() {
              // 各問題ごとに紐づいた画像を位置順（ページ順 -> Y座標降順 -> X座標昇順）にソートし、legendを再設定
              parsedQuestionsList.forEach(q => {
                  q.pageImages.sort(compareImportedImages);
-                 q.pageImages.forEach((img, idx) => {
-                     img.legend = resolveImportedImageLegend(img, idx);
+                 q.pageImages.forEach((img) => {
+                     img.legend = resolveImportedImageLegend(img);
                  });
              });
 
@@ -4574,12 +4615,12 @@ export default function AdminPage() {
                      let rendered = renderedPageCache.get(pageNum);
                      if (!rendered) {
                          const page = await pdf.getPage(pageNum);
-                         const scale = 1.5;
+                         const scale = PDF_IMAGE_RENDER_SCALE;
                          const viewport = page.getViewport({ scale });
                          const pageCanvas = document.createElement('canvas');
                          pageCanvas.width = viewport.width;
                          pageCanvas.height = viewport.height;
-                         const canvasCtx = pageCanvas.getContext('2d');
+                         const canvasCtx = getSrgbCanvasContext(pageCanvas);
 
                          await page.render({
                              canvasContext: canvasCtx,
@@ -4635,7 +4676,7 @@ export default function AdminPage() {
                          const cropCanvas = document.createElement('canvas');
                          cropCanvas.width = cropW;
                          cropCanvas.height = cropH;
-                         const cropCtx = cropCanvas.getContext('2d');
+                         const cropCtx = getSrgbCanvasContext(cropCanvas);
                          cropCtx.drawImage(pageCanvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
 
                          const pdfPoint1 = viewport.convertToPdfPoint(cropX, cropY);
@@ -4647,7 +4688,7 @@ export default function AdminPage() {
                              path: cropCanvas.toDataURL('image/png'),
                              x: minPdfX,
                              y: minPdfY,
-                             legend: `図${q.pageImages.length + 1}`,
+                             legend: '',
                              detectedLegend: null,
                              page: pageNum,
                              matchedQNum: q.questionNumber
@@ -4658,8 +4699,8 @@ export default function AdminPage() {
 
              parsedQuestionsList.forEach(q => {
                  q.pageImages.sort(compareImportedImages);
-                 q.pageImages.forEach((img, idx) => {
-                     img.legend = resolveImportedImageLegend(img, idx);
+                 q.pageImages.forEach((img) => {
+                     img.legend = resolveImportedImageLegend(img);
                  });
              });
 
@@ -4682,16 +4723,16 @@ export default function AdminPage() {
                     answer: '',
                     explanation: '',
                     sourcePages: nuclearSourcePagesByQuestion.get(q.questionNumber) || [],
-                    images: q.pageImages.map((img, imgIdx) => ({
+                    images: q.pageImages.map((img) => ({
                         path: 'image_placeholder',
-                        legend: img.legend ?? `図${imgIdx + 1}`
+                        legend: img.legend ?? ''
                     }))
                 };
 
                 if (q.pageImages.length > 0) {
-                    finalImageMap[idx] = q.pageImages.map((img, imgIdx) => ({
+                    finalImageMap[idx] = q.pageImages.map((img) => ({
                         path: img.path,
-                        legend: img.legend ?? `図${imgIdx + 1}`
+                        legend: img.legend ?? ''
                     }));
                 }
             });

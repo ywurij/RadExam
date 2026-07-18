@@ -63,3 +63,37 @@ test('supports shared pages, repeated figure pages, full-width digits and rotate
     assert.equal(assignments[0].sourcePages[1].rotation, 90);
     assert.equal(assignments[0].sourcePages[0].pdfName, 'exam.pdf');
 });
+
+test('rejoins split appendix digits and falls back from a corrupt reference to the question number', () => {
+    const assignments = buildNuclearSourcePageAssignments({
+        questions: [
+            { questionNumber: 48, startPage: 2, question: '図（別紙 No.48）を示す。' },
+            { questionNumber: 59, startPage: 3, question: '別紙 No.422 の画像を示す。' }
+        ],
+        pages: [
+            page(2, '48. 図（別紙 No.48）を示す。'),
+            page(3, '59. 別紙 No.59 の画像を示す。'),
+            {
+                pageNum: 4,
+                width: 600,
+                height: 800,
+                rotation: 0,
+                textItems: [{ text: '核医学専門医試験 別紙 設問 ' }, { text: 'No.' }, { text: ' ' }, { text: '4' }, { text: '8' }]
+            },
+            {
+                pageNum: 5,
+                width: 600,
+                height: 800,
+                rotation: 0,
+                textItems: [{ text: 'No.59' }, { text: '' }, { text: '123' }]
+            }
+        ],
+        pdfName: 'exam.pdf',
+        pdfYear: 2022,
+        totalPages: 5
+    });
+
+    assert.deepEqual(assignments[0].sourcePages.map(source => source.pageNumber), [4]);
+    assert.deepEqual(assignments[1].sourcePages.map(source => source.pageNumber), [5]);
+    assert.deepEqual(assignments[1].sourcePages[0].referenceNumbers, [59]);
+});

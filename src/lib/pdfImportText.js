@@ -159,6 +159,42 @@ export const removeContainedImageRects = (rects) => (rects || []).filter((rect, 
     });
 });
 
+const distanceFromPointToRect = (point, rect) => {
+    const minX = Number(rect.minX ?? rect.x) || 0;
+    const minY = Number(rect.minY ?? rect.y) || 0;
+    const maxX = Number(rect.maxX ?? (minX + (Number(rect.w) || 0))) || minX;
+    const maxY = Number(rect.maxY ?? (minY + (Number(rect.h) || 0))) || minY;
+    const x = Number(point.x) + (Number(point.width) || 0) / 2;
+    const y = Number(point.y) + (Number(point.height) || 0) / 2;
+    const dx = x < minX ? minX - x : x > maxX ? x - maxX : 0;
+    const dy = y < minY ? minY - y : y > maxY ? y - maxY : 0;
+    return Math.hypot(dx, dy);
+};
+
+export const assignNearestUniqueLabels = (rects = [], labels = [], maxDistance = 180) => {
+    const candidates = [];
+    rects.forEach((rect, rectIndex) => {
+        labels.forEach((label, labelIndex) => {
+            const distance = distanceFromPointToRect(label, rect);
+            if (distance <= maxDistance) candidates.push({ rectIndex, labelIndex, distance });
+        });
+    });
+    candidates.sort((first, second) => (
+        first.distance - second.distance
+        || first.rectIndex - second.rectIndex
+        || first.labelIndex - second.labelIndex
+    ));
+
+    const usedRects = new Set();
+    const usedLabels = new Set();
+    return candidates.filter(candidate => {
+        if (usedRects.has(candidate.rectIndex) || usedLabels.has(candidate.labelIndex)) return false;
+        usedRects.add(candidate.rectIndex);
+        usedLabels.add(candidate.labelIndex);
+        return true;
+    });
+};
+
 export const isRepeatedOptionOrFigureLabel = (optionKey, parsedOptions, optionsStarted) => (
     Boolean(optionsStarted) && (
         Object.prototype.hasOwnProperty.call(parsedOptions || {}, optionKey)

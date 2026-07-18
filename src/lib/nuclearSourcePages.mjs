@@ -8,12 +8,39 @@ const buildPageText = page => (page?.textItems || [])
 
 const extractNoNumbers = text => {
     const numbers = [];
-    const pattern = /(?:^|[^A-Za-z])No\.?\s*([0-9０-９]{1,3})/gi;
+    const pattern = /No\.?\s*([0-9０-９]{1,3})/gi;
     let match;
     while ((match = pattern.exec(normalizeFullWidthAscii(text))) !== null) {
         const number = Number(match[1]);
         if (Number.isInteger(number) && !numbers.includes(number)) numbers.push(number);
     }
+    return numbers;
+};
+
+const extractNoNumbersFromPage = page => {
+    const items = page?.textItems || [];
+    const numbers = [];
+
+    items.forEach((item, itemIndex) => {
+        const text = normalizeFullWidthAscii(item?.text || item?.str || '');
+        const directNumbers = extractNoNumbers(text);
+        directNumbers.forEach(number => {
+            if (!numbers.includes(number)) numbers.push(number);
+        });
+        if (directNumbers.length > 0 || !/No\.?\s*$/i.test(text)) return;
+
+        let joinedDigits = '';
+        for (let nextIndex = itemIndex + 1; nextIndex < Math.min(items.length, itemIndex + 6); nextIndex += 1) {
+            const nextText = normalizeFullWidthAscii(items[nextIndex]?.text || items[nextIndex]?.str || '').trim();
+            if (!nextText) continue;
+            if (!/^\d{1,2}$/.test(nextText)) break;
+            joinedDigits += nextText;
+            if (joinedDigits.length >= 2 || nextText.length >= 2) break;
+        }
+        const number = Number(joinedDigits);
+        if (Number.isInteger(number) && number > 0 && !numbers.includes(number)) numbers.push(number);
+    });
+
     return numbers;
 };
 
@@ -64,7 +91,7 @@ export const buildNuclearSourcePageAssignments = ({
     const pagesByFigureNumber = new Map();
 
     appendixPages.forEach(page => {
-        extractNoNumbers(buildPageText(page)).forEach(figureNumber => {
+        extractNoNumbersFromPage(page).forEach(figureNumber => {
             const matchedPages = pagesByFigureNumber.get(figureNumber) || [];
             matchedPages.push(page);
             pagesByFigureNumber.set(figureNumber, matchedPages);
@@ -73,7 +100,16 @@ export const buildNuclearSourcePageAssignments = ({
 
     return (questions || []).map(question => {
         const explicitReferences = extractQuestionReferences(question);
-        const referenceNumbers = explicitReferences;
+        const matchedExplicitReferences = explicitReferences.filter(referenceNumber => (
+            pagesByFigureNumber.has(referenceNumber)
+        ));
+        const questionNumber = Number(question.questionNumber);
+        const hasAppendixReference = /別紙/.test(normalizeFullWidthAscii(question.question || ''));
+        const referenceNumbers = matchedExplicitReferences.length > 0
+            ? matchedExplicitReferences
+            : hasAppendixReference && pagesByFigureNumber.has(questionNumber)
+                ? [questionNumber]
+                : [];
         const matchedPages = referenceNumbers
             .flatMap(referenceNumber => pagesByFigureNumber.get(referenceNumber) || [])
             .filter((page, index, allPages) => (

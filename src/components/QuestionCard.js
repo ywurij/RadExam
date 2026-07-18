@@ -102,7 +102,7 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveQ
         const reader = new FileReader();
         reader.onload = event => setDraft(previous => ({
             ...previous,
-            images: [...previous.images, { path: event.target.result, legend: `図${previous.images.length + 1}` }],
+            images: [...previous.images, { path: event.target.result, legend: '' }],
         }));
         reader.readAsDataURL(file);
     };
@@ -125,7 +125,7 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveQ
                 const { storageKey: _oldStorageKey, ...imageWithoutStorageKey } = images[pdfTarget.index];
                 images[pdfTarget.index] = { ...imageWithoutStorageKey, path };
             } else {
-                images.push({ path, legend: `図${images.length + 1}` });
+                images.push({ path, legend: '' });
             }
             return { ...previous, images };
         });
