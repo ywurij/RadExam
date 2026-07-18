@@ -8,8 +8,12 @@ import {
     extractQuestionTable,
     extractOptionColumnHeaders,
     findNearestPrecedingQuestion,
+    hasExplicitFigureCue,
     isPairedOptionHeader,
     isRepeatedOptionOrFigureLabel,
+    isStandaloneImageLegendText,
+    isUsableFallbackFigureCrop,
+    joinOptionContinuation,
     repairLegacySequentialComparisonOptions,
     removeContainedImageRects,
     restoreTruncatedOptionText,
@@ -53,6 +57,36 @@ test('repairs already imported options containing only sequential comparison mar
 });
 
 const item = (text, x, width = 10) => ({ text, x, width });
+
+test('requires an explicit visual reference before rendering a fallback figure', () => {
+    assert.equal(hasExplicitFigureCue('エックス線管の図について、正しい組み合わせはどれか。'), true);
+    assert.equal(hasExplicitFigureCue('腹部CT画像を示す。診断はどれか。'), true);
+    assert.equal(hasExplicitFigureCue('次の画像で認められる所見はどれか。'), true);
+    assert.equal(hasExplicitFigureCue('脳の灌流画像について正しいのはどれか。'), false);
+    assert.equal(hasExplicitFigureCue('放射線画像診断補助ソフトウェアについて正しいのはどれか。'), false);
+});
+
+test('rejects tiny fallback crops while preserving meaningful thin figures', () => {
+    assert.equal(isUsableFallbackFigureCrop(43, 42), false);
+    assert.equal(isUsableFallbackFigureCrop(39, 42), false);
+    assert.equal(isUsableFallbackFigureCrop(400, 40), true);
+    assert.equal(isUsableFallbackFigureCrop(240, 180), true);
+});
+
+test('joins wrapped option text for every option including option e', () => {
+    assert.equal(
+        joinOptionContinuation('Dynamic susceptibility contrast（DSC）法は Gd 造影剤の T1 コントラストを利用', 'した撮像法である。'),
+        'Dynamic susceptibility contrast（DSC）法は Gd 造影剤の T1 コントラストを利用 した撮像法である。'
+    );
+    assert.equal(joinOptionContinuation('', '後続行'), '後続行');
+});
+
+test('distinguishes a standalone image legend from wrapped option prose', () => {
+    assert.equal(isStandaloneImageLegendText('FLAIR像'), true);
+    assert.equal(isStandaloneImageLegendText('造影CT'), true);
+    assert.equal(isStandaloneImageLegendText('MRIで高信号を示す。'), false);
+    assert.equal(isStandaloneImageLegendText('この画像で病変を認める。'), false);
+});
 
 test('converts consecutive positioned numeric rows into an HTML table', () => {
     const lines = [

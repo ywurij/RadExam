@@ -5,7 +5,6 @@
   "main": "electron/main.js",
   "scripts": {
     "dev": "next dev --webpack",
-    "prebuild": "node scripts/generate-metadata.mjs",
     "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint",

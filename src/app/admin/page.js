@@ -29,8 +29,12 @@ import {
     extractQuestionTable,
     extractOptionColumnHeaders,
     findNearestPrecedingQuestion,
+    hasExplicitFigureCue,
     isPairedOptionHeader,
     isRepeatedOptionOrFigureLabel,
+    isStandaloneImageLegendText,
+    isUsableFallbackFigureCrop,
+    joinOptionContinuation,
     removeContainedImageRects,
     restoreTruncatedOptionText,
     splitOptionItemsByColumns,
@@ -3571,14 +3575,14 @@ export default function AdminPage() {
 
                         if (optionsStarted) {
                             const isFooter = FOOTER_PAGE_PATTERN.test(trimmed);
-                            const isLegendLike = /(CT|MRI|像|写真|図|シンチ|造影|エコー|DWI|FLAIR|PET)/i.test(trimmed);
+                            const isLegendLike = isStandaloneImageLegendText(trimmed);
 
-                            if (isFooter || isLegendLike || lastOptionKey === 'e') {
+                            if (isFooter || isLegendLike) {
                                 return;
                             }
 
                             if (lastOptionKey) {
-                                q.options[lastOptionKey] += ` ${trimmed}`;
+                                q.options[lastOptionKey] = joinOptionContinuation(q.options[lastOptionKey], trimmed);
                                 if (originalLine) q.finalUsedLines.push(originalLine);
                             }
                             return;
@@ -4501,14 +4505,14 @@ export default function AdminPage() {
                          rebuiltUsedLines.push(sanitizedLineItems);
                      } else if (optionsStarted) {
                          const isFooter = FOOTER_PAGE_PATTERN.test(lineText);
-                         const isLegendLike = /(CT|MRI|像|写真|図|シンチ|造影|エコー|DWI|FLAIR|PET)/i.test(lineText);
+                         const isLegendLike = isStandaloneImageLegendText(lineText);
 
-                         if (isFooter || isLegendLike || lastOptionKey === 'e') {
+                         if (isFooter || isLegendLike) {
                              return;
                          }
 
                          if (lastOptionKey) {
-                             rebuiltOptions[lastOptionKey] += ` ${lineText}`;
+                             rebuiltOptions[lastOptionKey] = joinOptionContinuation(rebuiltOptions[lastOptionKey], lineText);
                              rebuiltUsedLines.push(sanitizedLineItems);
                          }
                      } else {
@@ -4600,14 +4604,13 @@ export default function AdminPage() {
              }
 
              // 2.5.5 ベクタ図形など画像オブジェクトとして検出できない図へのフォールバック
-             const figureCuePattern = /(?:図|画像|写真|シェーマ|模式図|図に示|画像を示|写真を示|造影を示|先端形状)/;
              const renderedPageCache = new Map();
 
              if (parserProfile.imageAssignmentStrategy !== 'label-only') {
                  for (const [pageNumStr, pageQuestions] of Object.entries(questionsByPage)) {
                      const pageNum = parseInt(pageNumStr, 10);
                      const fallbackTargets = pageQuestions
-                         .filter(q => q.pageImages.length === 0 && figureCuePattern.test(q.question))
+                         .filter(q => q.pageImages.length === 0 && hasExplicitFigureCue(q.question))
                          .sort((a, b) => b.anchorY - a.anchorY);
 
                      if (fallbackTargets.length === 0) continue;
@@ -4671,7 +4674,7 @@ export default function AdminPage() {
                          const cropW = Math.min(pageCanvas.width - cropX, inkBounds.w + padding * 2);
                          const cropH = Math.min(pageCanvas.height - cropY, inkBounds.h + padding * 2);
 
-                         if (cropW < 20 || cropH < 20) return;
+                         if (!isUsableFallbackFigureCrop(cropW, cropH)) return;
 
                          const cropCanvas = document.createElement('canvas');
                          cropCanvas.width = cropW;

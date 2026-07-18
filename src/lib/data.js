@@ -1,33 +1,13 @@
 import Fuse from 'fuse.js';
-import metadata from '@/data/metadata.json';
-import imageManifest from '../../public/data/image-manifest.json';
 import { repairLegacySequentialComparisonOptions } from '@/lib/pdfImportText';
-import { filterUnavailableStaticImages } from '@/lib/staticImageReferences.mjs';
 import { 
     getLocalProgress, 
     getAllLocalExams, 
     getLocalExam 
 } from '@/lib/localDb';
 
-const EXAM_LOADERS = {
-    radiology: () => import('@/data/test_radiology.json'),
-    diagnostic: () => import('@/data/test_diagnostic.json'),
-    nuclear: () => import('@/data/test_nuclear.json'),
-    ivr: () => import('@/data/test_ivr.json'),
-};
-
-const EXAM_NAMES = {
-    radiology: '放射線科専門医試験',
-    diagnostic: '診断専門医試験',
-    nuclear: '核医学専門医試験',
-    ivr: 'IVR専門医試験',
-};
-
 // メモリ上のキャッシュ
 const CACHE = {};
-const STATIC_IMAGE_PATHS = Object.fromEntries(
-    Object.entries(imageManifest).map(([examId, paths]) => [examId, new Set(paths)])
-);
 let LOCAL_METADATA = {};
 let IS_INITIALIZED = false;
 
@@ -70,7 +50,7 @@ export const getExamTypes = () => {
     return localTypes;
 };
 
-// 非同期でデータを取得 (静的またはローカルIndexedDB)
+// 非同期でローカルIndexedDBのデータを取得
 export const getExamData = async (examId) => {
     if (CACHE[examId]) return CACHE[examId];
 
@@ -88,27 +68,6 @@ export const getExamData = async (examId) => {
         }
     } catch (e) {
         console.error(`Failed to load local exam data for ${examId}`, e);
-    }
-
-    // ローカルに存在しない（または空）の場合のみ、静的ファイルのローダーを使う
-    const loader = EXAM_LOADERS[examId];
-    if (loader) {
-        try {
-            const loadedModule = await loader();
-            const rawData = loadedModule.default || loadedModule;
-
-            // examId を各問題オブジェクトに注入
-            const availableImagePaths = STATIC_IMAGE_PATHS[examId] || new Set();
-            const data = rawData.map(q => ({
-                ...filterUnavailableStaticImages(q, availableImagePaths),
-                examId
-            }));
-
-            CACHE[examId] = data;
-            return data;
-        } catch (e) {
-            console.error(`Failed to load static data for ${examId}`, e);
-        }
     }
 
     return [];
@@ -156,7 +115,7 @@ export const getGenres = (examId) => {
 };
 
 export const getExamName = (examId) => {
-    return LOCAL_METADATA[examId]?.name || EXAM_NAMES[examId] || examId;
+    return LOCAL_METADATA[examId]?.name || examId;
 };
 
 export const getQuestionsByYear = async (examId, yearFilter) => {

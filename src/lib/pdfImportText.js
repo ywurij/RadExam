@@ -16,6 +16,42 @@ const meaningfulItems = (items = []) => items
 
 const numericCellPattern = /^(?:[0-9]+(?:\.[0-9]+)?|[①-⑳])$/;
 
+export const hasExplicitFigureCue = (questionText) => {
+    const text = String(questionText || '').replace(/[\s　]+/g, ' ');
+    if (!text) return false;
+
+    return /(?:図|シェーマ|模式図|先端形状)/.test(text)
+        || /(?:画像|写真).{0,16}(?:を|に|で)(?:示す|示した|示される|示している)/.test(text)
+        || /(?:この|次の|以下の|上の|下の|右の|左の)(?:画像|写真)/.test(text)
+        || /造影.{0,8}(?:を|に|で)(?:示す|示した|示される)/.test(text);
+};
+
+export const isUsableFallbackFigureCrop = (width, height) => {
+    const cropWidth = Number(width);
+    const cropHeight = Number(height);
+    if (!Number.isFinite(cropWidth) || !Number.isFinite(cropHeight)) return false;
+    if (cropWidth < 20 || cropHeight < 20) return false;
+
+    // 問題番号枠や小さな文字断片だけを拾ったクロップを除外する。
+    // 細長いグラフ・スケールは、十分な面積があれば維持する。
+    return cropWidth * cropHeight >= 10000;
+};
+
+export const joinOptionContinuation = (optionText, continuationText) => (
+    [String(optionText || '').trim(), String(continuationText || '').trim()]
+        .filter(Boolean)
+        .join(' ')
+);
+
+export const isStandaloneImageLegendText = (value) => {
+    const text = String(value || '').replace(/[\s　]+/g, ' ').trim();
+    if (!text || text.length > 50) return false;
+    if (/[。！？!?]$/.test(text)) return false;
+    if (/(?:である|ではない|を示す|がみられる|を認める|を用いる|を行う)$/.test(text)) return false;
+
+    return /(?:CT|MRI|像|写真|図|シンチ|造影|エコー|DWI|FLAIR|PET)/i.test(text);
+};
+
 export const isPairedOptionHeader = (text) => {
     const normalized = String(text || '')
         .replace(/[\s　]/g, '')
