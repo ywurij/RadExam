@@ -68,7 +68,27 @@ OLLAMA_BASE_URL=http://127.0.0.1:11434
 NUCLEAR_VLM_MODEL=qwen3-vl:2b-instruct
 ```
 
+メモリに余裕のあるPCで精度を優先する場合は、`NUCLEAR_VLM_MODEL=qwen3-vl:4b-instruct` を指定すると4Bモデルに切り替えられます。
+
 管理画面で「核医学専門医試験」を選択し、「接続確認」でモデルの準備状態を確認できます。
+
+Electron版の初回配布物にはVLMモデル本体を含めません。管理画面から標準2Bモデル
+（約1.55GB）または精度優先の4Bモデル（約2.95GB）を任意に取得・選択できます。
+取得前に空き容量を確認し、一時停止した場合は次回に続きから再開します。サイズと
+SHA-256を検証できたファイルだけを有効化し、未配置の場合はOllamaまたは従来処理を使用します。組み込みバンドルの開発手順は
+[`resources/vlm/README.md`](resources/vlm/README.md)、段階的な移行計画は
+[`docs/embedded-vlm-plan.md`](docs/embedded-vlm-plan.md)を参照してください。
+
+```bash
+# 現在のOS向けに固定済みllama.cppランタイムを準備
+npm run vlm:prepare-runtime
+
+# 開発用の組み込みランタイムとマニフェストを検証
+npm run vlm:verify
+
+# 明示的にOllamaを使用
+NUCLEAR_VLM_PROVIDER=ollama npm run app:dev
+```
 
 ---
 

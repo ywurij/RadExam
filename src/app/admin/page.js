@@ -2897,9 +2897,11 @@ export default function AdminPage() {
     const [nuclearVlmEnabled, setNuclearVlmEnabled] = useState(true);
     const [nuclearVlmStatus, setNuclearVlmStatus] = useState({
         state: 'unchecked',
+        providerLabel: 'ローカルVLM',
         model: 'qwen3-vl:2b-instruct',
         message: '未確認'
     });
+    const [embeddedVlmManager, setEmbeddedVlmManager] = useState(null);
 
     const loadLocalExams = async () => {
         await initializeLocalExams();
@@ -2909,6 +2911,30 @@ export default function AdminPage() {
 
     useEffect(() => {
         loadLocalExams();
+    }, []);
+
+    useEffect(() => {
+        const api = window.radExamVlm;
+        if (!api) return undefined;
+        let active = true;
+        api.getStatus()
+            .then(status => active && setEmbeddedVlmManager(status))
+            .catch(error => active && setEmbeddedVlmManager({
+                available: false,
+                message: `組み込みVLMの状態確認に失敗しました: ${error.message}`
+            }));
+        const unsubscribe = api.onProgress(progress => {
+            if (!active) return;
+            setEmbeddedVlmManager(previous => ({
+                ...previous,
+                installing: !['complete', 'error', 'paused'].includes(progress.state),
+                progress
+            }));
+        });
+        return () => {
+            active = false;
+            unsubscribe?.();
+        };
     }, []);
 
     useEffect(() => {
@@ -2925,12 +2951,13 @@ export default function AdminPage() {
     }, [previewImageModal]);
 
     const checkNuclearVlmStatus = async () => {
-        setNuclearVlmStatus(prev => ({ ...prev, state: 'checking', message: 'Ollamaを確認中...' }));
+        setNuclearVlmStatus(prev => ({ ...prev, state: 'checking', message: 'ローカルVLMを確認中...' }));
         try {
             const response = await fetch('/api/nuclear-vlm', { cache: 'no-store' });
             const payload = await response.json();
             const nextStatus = {
                 state: payload.available ? 'ready' : 'unavailable',
+                providerLabel: payload.providerLabel || 'ローカルVLM',
                 model: payload.model || 'qwen3-vl:2b-instruct',
                 message: payload.message || 'VLMの状態を確認できませんでした。'
             };
@@ -2939,12 +2966,45 @@ export default function AdminPage() {
         } catch (error) {
             const nextStatus = {
                 state: 'unavailable',
+                providerLabel: 'ローカルVLM',
                 model: 'qwen3-vl:2b-instruct',
                 message: `VLM接続確認に失敗しました: ${error.message}`
             };
             setNuclearVlmStatus(nextStatus);
             return { available: false, ...nextStatus };
         }
+    };
+
+    const installEmbeddedVlmModel = async (modelId) => {
+        if (!window.radExamVlm) return;
+        setEmbeddedVlmManager(previous => ({ ...previous, installing: true, installingModelId: modelId, error: '' }));
+        try {
+            const status = await window.radExamVlm.install(modelId);
+            setEmbeddedVlmManager({ ...status, installing: false });
+        } catch (error) {
+            setEmbeddedVlmManager(previous => ({
+                ...previous,
+                installing: false,
+                error: error.message
+            }));
+        }
+    };
+
+    const pauseEmbeddedVlmDownload = async () => {
+        if (!window.radExamVlm) return;
+        await window.radExamVlm.pause();
+    };
+
+    const selectEmbeddedVlmModel = async (modelId) => {
+        if (!window.radExamVlm) return;
+        const status = await window.radExamVlm.select(modelId);
+        setEmbeddedVlmManager(status);
+    };
+
+    const removeEmbeddedVlmModel = async (modelId, label) => {
+        if (!window.radExamVlm || !window.confirm(`${label}を削除しますか？`)) return;
+        const status = await window.radExamVlm.remove(modelId);
+        setEmbeddedVlmManager(status);
     };
 
     const handleImageChange = (questionIndex, file) => {
@@ -4951,11 +5011,113 @@ export default function AdminPage() {
                                                 fontSize: '0.82rem',
                                                 lineHeight: 1.5
                                             }}>
-                                                モデル: {nuclearVlmStatus.model} / {nuclearVlmStatus.message}
+                                                実行方式: {nuclearVlmStatus.providerLabel} / モデル: {nuclearVlmStatus.model} / {nuclearVlmStatus.message}
                                             </p>
                                             <p style={{ margin: '0.35rem 0 0', color: '#975a16', fontSize: '0.78rem', lineHeight: 1.5 }}>
                                                 VLMが利用できない場合や応答検証に失敗したページは、従来のアルゴリズムで処理します。
                                             </p>
+                                            {embeddedVlmManager && (
+                                                <div style={{
+                                                    marginTop: '0.65rem',
+                                                    paddingTop: '0.65rem',
+                                                    borderTop: '1px solid #fbd38d',
+                                                    color: '#744210',
+                                                    fontSize: '0.78rem'
+                                                }}>
+                                                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                                                        <strong>アプリ内VLMモデル</strong>
+                                                        <span>
+                                                            空き容量: {embeddedVlmManager.freeBytes === null
+                                                                ? '取得できません'
+                                                                : `${(embeddedVlmManager.freeBytes / 1_000_000_000).toFixed(1)} GB`}
+                                                        </span>
+                                                    </div>
+                                                    <div style={{ marginTop: '0.3rem' }}>{embeddedVlmManager.message}</div>
+                                                    <div style={{ display: 'grid', gap: '0.55rem', marginTop: '0.6rem' }}>
+                                                        {(embeddedVlmManager.models || []).map(model => {
+                                                            const isInstalling = embeddedVlmManager.installingModelId === model.id && embeddedVlmManager.installing;
+                                                            return (
+                                                                <div key={model.id} style={{ padding: '0.65rem', border: `1px solid ${model.selected ? '#68d391' : '#fbd38d'}`, borderRadius: '0.4rem', background: model.selected ? '#f0fff4' : '#fffaf0' }}>
+                                                                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', alignItems: 'flex-start', flexWrap: 'wrap' }}>
+                                                                        <div>
+                                                                            <div style={{ fontWeight: 700 }}>
+                                                                                {model.label}
+                                                                                {model.recommended && <span style={{ marginLeft: '0.4rem', color: '#2b6cb0' }}>標準</span>}
+                                                                                {model.selected && <span style={{ marginLeft: '0.4rem', color: '#276749' }}>選択中</span>}
+                                                                            </div>
+                                                                            <div style={{ marginTop: '0.2rem', color: '#975a16' }}>
+                                                                                {model.description} / {(model.totalBytes / 1_000_000_000).toFixed(2)} GB
+                                                                            </div>
+                                                                        </div>
+                                                                        <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+                                                                            {!model.installed && !isInstalling && (
+                                                                                <button
+                                                                                    type="button"
+                                                                                    onClick={() => installEmbeddedVlmModel(model.id)}
+                                                                                    disabled={embeddedVlmManager.installing || !model.canInstall}
+                                                                                    title={!model.enoughSpace ? '空き容量が不足しています' : ''}
+                                                                                    style={{ padding: '0.35rem 0.65rem', border: '1px solid #dd6b20', borderRadius: '0.3rem', background: '#fff', color: model.canInstall ? '#9c4221' : '#a0aec0', cursor: model.canInstall && !embeddedVlmManager.installing ? 'pointer' : 'not-allowed' }}
+                                                                                >
+                                                                                    {model.remainingBytes < model.totalBytes ? '取得を再開' : '取得'}
+                                                                                </button>
+                                                                            )}
+                                                                            {isInstalling && (
+                                                                                <button type="button" onClick={pauseEmbeddedVlmDownload} style={{ padding: '0.35rem 0.65rem', border: '1px solid #c05621', borderRadius: '0.3rem', background: '#fffaf0', color: '#9c4221', cursor: 'pointer' }}>
+                                                                                    一時停止
+                                                                                </button>
+                                                                            )}
+                                                                            {model.installed && !model.selected && (
+                                                                                <button type="button" onClick={() => selectEmbeddedVlmModel(model.id)} disabled={embeddedVlmManager.installing} style={{ padding: '0.35rem 0.65rem', border: '1px solid #2f855a', borderRadius: '0.3rem', background: '#f0fff4', color: '#276749', cursor: 'pointer' }}>
+                                                                                    このモデルを使用
+                                                                                </button>
+                                                                            )}
+                                                                            {model.installed && (
+                                                                                <button type="button" onClick={() => removeEmbeddedVlmModel(model.id, model.label)} disabled={embeddedVlmManager.installing} style={{ padding: '0.35rem 0.65rem', border: '1px solid #cbd5e0', borderRadius: '0.3rem', background: '#fff', color: '#4a5568', cursor: 'pointer' }}>
+                                                                                    削除
+                                                                                </button>
+                                                                            )}
+                                                                        </div>
+                                                                    </div>
+                                                                    {!model.installed && !model.enoughSpace && (
+                                                                        <div style={{ marginTop: '0.35rem', color: '#c53030' }}>
+                                                                            容量不足: 取得には予約領域を含め約{(model.requiredFreeBytes / 1_000_000_000).toFixed(1)} GBの空きが必要です。
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                    {embeddedVlmManager.progress?.totalBytes > 0 && (
+                                                        <div style={{ marginTop: '0.5rem' }}>
+                                                            <div style={{ height: '7px', background: '#feebc8', borderRadius: '999px', overflow: 'hidden' }}>
+                                                                <div style={{
+                                                                    width: `${Math.min(100, Math.round((embeddedVlmManager.progress.downloadedBytes / embeddedVlmManager.progress.totalBytes) * 100))}%`,
+                                                                    height: '100%',
+                                                                    background: '#dd6b20'
+                                                                }} />
+                                                            </div>
+                                                            <div style={{ marginTop: '0.25rem' }}>
+                                                                {embeddedVlmManager.progress.state === 'verifying'
+                                                                    ? 'ファイルを検証中'
+                                                                    : embeddedVlmManager.progress.state === 'complete'
+                                                                        ? '取得完了'
+                                                                        : embeddedVlmManager.progress.state === 'paused'
+                                                                            ? '一時停止'
+                                                                            : 'ダウンロード中'}:
+                                                                {' '}{Math.round((embeddedVlmManager.progress.downloadedBytes / 1024 / 1024))} / {Math.round((embeddedVlmManager.progress.totalBytes / 1024 / 1024))} MB
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                    {embeddedVlmManager.error && (
+                                                        <div style={{ marginTop: '0.4rem', color: '#c53030' }}>{embeddedVlmManager.error}</div>
+                                                    )}
+                                                    {embeddedVlmManager.restartRequired && (
+                                                        <button type="button" onClick={() => window.radExamVlm?.restart()} style={{ marginTop: '0.55rem', padding: '0.4rem 0.7rem', border: '1px solid #2f855a', borderRadius: '0.3rem', background: '#f0fff4', color: '#276749', cursor: 'pointer' }}>
+                                                            変更を反映してアプリを再起動
+                                                        </button>
+                                                    )}
+                                                </div>
+                                            )}
                                         </div>
                                     )}
 

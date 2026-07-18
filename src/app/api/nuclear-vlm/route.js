@@ -1,10 +1,14 @@
 import { NextResponse } from 'next/server';
+import {
+    checkNuclearVlmProvider,
+    DEFAULT_NUCLEAR_VLM_MODEL,
+    requestNuclearVlmCompletion,
+    resolveNuclearVlmProviderConfig
+} from '@/lib/server/nuclearVlmProvider.mjs';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const DEFAULT_OLLAMA_URL = 'http://127.0.0.1:11434';
-const DEFAULT_MODEL = 'qwen3-vl:2b-instruct';
 const REQUEST_TIMEOUT_MS = 180000;
 const HEALTH_TIMEOUT_MS = 3000;
 const MAX_IMAGE_DATA_URL_LENGTH = 18_000_000;
@@ -53,38 +57,6 @@ const VLM_RESPONSE_SCHEMA = {
     },
     required: ['groups'],
     additionalProperties: false
-};
-
-const getOllamaConfig = () => ({
-    baseUrl: String(process.env.OLLAMA_BASE_URL || DEFAULT_OLLAMA_URL).replace(/\/$/, ''),
-    model: process.env.NUCLEAR_VLM_MODEL || DEFAULT_MODEL
-});
-
-const fetchWithTimeout = async (url, options, timeoutMs) => {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
-    try {
-        return await fetch(url, {
-            ...options,
-            signal: controller.signal,
-            cache: 'no-store'
-        });
-    } finally {
-        clearTimeout(timeoutId);
-    }
-};
-
-const normalizeInstalledModelName = (name) => String(name || '').trim().toLowerCase();
-
-const isRequestedModelInstalled = (models, requestedModel) => {
-    const normalizedRequested = normalizeInstalledModelName(requestedModel);
-    return models.some(entry => {
-        const installedName = normalizeInstalledModelName(entry?.name || entry?.model);
-        return installedName === normalizedRequested
-            || installedName.startsWith(`${normalizedRequested}:`)
-            || normalizedRequested.startsWith(`${installedName}:`);
-    });
 };
 
 const validateObjects = (objects) => {
@@ -414,38 +386,34 @@ ${JSON.stringify(objects)}
 `.trim();
 
 export async function GET() {
-    const { baseUrl, model } = getOllamaConfig();
+    const provider = resolveNuclearVlmProviderConfig();
 
     try {
-        const response = await fetchWithTimeout(`${baseUrl}/api/tags`, {}, HEALTH_TIMEOUT_MS);
-        if (!response.ok) {
-            throw new Error(`Ollama returned HTTP ${response.status}`);
-        }
-        const payload = await response.json();
-        const models = Array.isArray(payload.models) ? payload.models : [];
-        const installed = isRequestedModelInstalled(models, model);
+        const status = await checkNuclearVlmProvider(provider, HEALTH_TIMEOUT_MS);
 
         return NextResponse.json({
-            available: installed,
-            serverAvailable: true,
-            model,
-            message: installed
-                ? `${model} is ready`
-                : `${model} is not installed. Run: ollama pull ${model}`
+            ...status,
+            provider: provider.kind,
+            providerLabel: provider.label,
+            managed: provider.managed,
+            model: provider.model
         });
     } catch (error) {
         return NextResponse.json({
             available: false,
             serverAvailable: false,
-            model,
-            message: `Ollama is unavailable: ${error.message}`
+            provider: provider.kind,
+            providerLabel: provider.label,
+            managed: provider.managed,
+            model: provider.model || DEFAULT_NUCLEAR_VLM_MODEL,
+            message: `${provider.label} is unavailable: ${error.message}`
         });
     }
 }
 
 export async function POST(request) {
     const startedAt = Date.now();
-    const { baseUrl, model } = getOllamaConfig();
+    const provider = resolveNuclearVlmProviderConfig();
 
     try {
         const body = await request.json();
@@ -470,47 +438,28 @@ export async function POST(request) {
             bbox: object.bbox.map(value => Math.round(value))
         }));
 
-        const ollamaResponse = await fetchWithTimeout(`${baseUrl}/api/chat`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                model,
-                stream: false,
-                think: false,
-                messages: [{
-                    role: 'user',
-                    content: buildPrompt(publicObjects, body.pageNumber),
-                    images: [imageMatch[1]]
-                }],
-                format: VLM_RESPONSE_SCHEMA,
-                options: {
-                    temperature: 0,
-                    seed: 42,
-                    num_predict: 1200
-                }
-            })
+        const completion = await requestNuclearVlmCompletion(provider, {
+            prompt: buildPrompt(publicObjects, body.pageNumber),
+            imageDataUrl,
+            imageBase64: imageMatch[1],
+            schema: VLM_RESPONSE_SCHEMA
         }, REQUEST_TIMEOUT_MS);
-
-        if (!ollamaResponse.ok) {
-            const detail = await ollamaResponse.text();
-            throw new Error(`Ollama returned HTTP ${ollamaResponse.status}: ${detail.slice(0, 300)}`);
-        }
-
-        const ollamaPayload = await ollamaResponse.json();
-        const content = ollamaPayload?.message?.content;
+        const content = completion.content;
         let parsed = content;
         if (typeof content === 'string') {
             try {
                 parsed = JSON.parse(content);
             } catch {
                 const diagnostic = content.trim().slice(0, 240) || '(empty content)';
-                throw new Error(`VLM returned invalid JSON: ${diagnostic}; done reason: ${ollamaPayload?.done_reason || 'unknown'}`);
+                throw new Error(`VLM returned invalid JSON: ${diagnostic}; done reason: ${completion.doneReason}`);
             }
         }
         const result = validateGroupingResponse(normalizeGroupingResponse(parsed, publicObjects), publicObjects);
 
         return NextResponse.json({
-            model,
+            provider: provider.kind,
+            providerLabel: provider.label,
+            model: provider.model,
             elapsedMs: Date.now() - startedAt,
             result
         });
@@ -518,7 +467,9 @@ export async function POST(request) {
         const isTimeout = error?.name === 'AbortError';
         return NextResponse.json({
             error: isTimeout ? 'VLM request timed out' : error.message,
-            model,
+            provider: provider.kind,
+            providerLabel: provider.label,
+            model: provider.model,
             elapsedMs: Date.now() - startedAt
         }, { status: isTimeout ? 504 : 502 });
     }

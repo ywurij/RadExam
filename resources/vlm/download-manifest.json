@@ -1,0 +1,82 @@
+{
+  "version": 2,
+  "runtimeVersion": "b10019",
+  "runtimeLicense": "MIT",
+  "runtimes": {
+    "darwin-arm64": {
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10019/llama-b10019-bin-macos-arm64.tar.gz",
+      "sha256": "059ba8f859edeb321d45d51caca3adb67571fd5c1a6c1d7d9b42254b68dd943b",
+      "size": 10771363,
+      "archiveRoot": "llama-b10019"
+    },
+    "darwin-x64": {
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10019/llama-b10019-bin-macos-x64.tar.gz",
+      "sha256": "4ccfdfad0933fdc341a6cdccb17ca201a9e8843080c2fd379b7de717283702ff",
+      "size": 11043192,
+      "archiveRoot": "llama-b10019"
+    },
+    "linux-x64": {
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10019/llama-b10019-bin-ubuntu-x64.tar.gz",
+      "sha256": "dca9238166b038ca9144d20952247edacaadc531cd4555e07242185342da3e30",
+      "size": 15874879,
+      "archiveRoot": "llama-b10019"
+    },
+    "win32-x64": {
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10019/llama-b10019-bin-win-cpu-x64.zip",
+      "sha256": "38c073328c63c6103bb8f28f4d426d386852e92af6cff6310fe70759fedbca1f",
+      "size": 18272021,
+      "archiveRoot": ""
+    }
+  },
+  "defaultModelId": "qwen3-vl:2b-instruct",
+  "models": [
+    {
+      "id": "qwen3-vl:2b-instruct",
+      "label": "Qwen3-VL 2B Instruct",
+      "description": "標準・軽量。一般的なPC向け",
+      "recommended": true,
+      "source": "Qwen/Qwen3-VL-2B-Instruct-GGUF",
+      "license": "Apache-2.0",
+      "files": [
+      {
+        "role": "model",
+        "name": "Qwen3VL-2B-Instruct-Q4_K_M.gguf",
+        "url": "https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct-GGUF/resolve/main/Qwen3VL-2B-Instruct-Q4_K_M.gguf?download=true",
+        "sha256": "089d75c52f4b7ffc56ba998ffc50aae89fcafc755f9e7208aacca281dca6c2ae",
+        "size": 1107409952
+      },
+      {
+        "role": "projector",
+        "name": "mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf",
+        "url": "https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct-GGUF/resolve/main/mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf?download=true",
+        "sha256": "f9a68fabba69c3b81e153367b2c7521030b0fa8bb0de400c9599c8e6725f9c82",
+        "size": 445053216
+      }
+      ]
+    },
+    {
+      "id": "qwen3-vl:4b-instruct",
+      "label": "Qwen3-VL 4B Instruct",
+      "description": "精度優先。メモリに余裕のあるPC向け",
+      "recommended": false,
+      "source": "Qwen/Qwen3-VL-4B-Instruct-GGUF",
+      "license": "Apache-2.0",
+      "files": [
+        {
+          "role": "model",
+          "name": "Qwen3VL-4B-Instruct-Q4_K_M.gguf",
+          "url": "https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF/resolve/main/Qwen3VL-4B-Instruct-Q4_K_M.gguf?download=true",
+          "sha256": "66358cb18bb6b3b1b6675aa412c7a88ef01d228f481184d13668e5201c730a0a",
+          "size": 2497281664
+        },
+        {
+          "role": "projector",
+          "name": "mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf",
+          "url": "https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF/resolve/main/mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf?download=true",
+          "sha256": "30ba2c7dd3127a4561b6cba9d13d0f711c91bdb38742e2f56d73c8cb596bd06d",
+          "size": 453974304
+        }
+      ]
+    }
+  ]
+}

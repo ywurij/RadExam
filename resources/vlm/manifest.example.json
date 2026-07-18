@@ -1,0 +1,22 @@
+{
+  "version": 2,
+  "defaultModelId": "qwen3-vl:2b-instruct",
+  "models": {
+    "qwen3-vl:2b-instruct": {
+      "file": "models/Qwen3VL-2B-Instruct-Q4_K_M.gguf",
+      "projector": "models/mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf"
+    },
+    "qwen3-vl:4b-instruct": {
+      "file": "models/Qwen3VL-4B-Instruct-Q4_K_M.gguf",
+      "projector": "models/mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf"
+    }
+  },
+  "runtimes": {
+    "darwin-arm64": "runtime/darwin-arm64/llama-server",
+    "darwin-x64": "runtime/darwin-x64/llama-server",
+    "win32-x64": "runtime/win32-x64/llama-server.exe",
+    "linux-x64": "runtime/linux-x64/llama-server"
+  },
+  "contextSize": 8192,
+  "arguments": []
+}

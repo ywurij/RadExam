@@ -12,7 +12,9 @@
     "test": "node --test tests/*.test.mjs",
     "app:build": "npm run build",
     "app:dev": "electron .",
-    "app:pack": "electron-builder"
+    "app:pack": "electron-builder",
+    "vlm:verify": "node scripts/verify-vlm-bundle.mjs",
+    "vlm:prepare-runtime": "node scripts/prepare-vlm-runtime.mjs"
   },
   "dependencies": {
     "@ducanh2912/next-pwa": "^10.2.9",
@@ -59,11 +61,20 @@
     "files": [
       "package.json",
       "next.config.mjs",
-      "electron/main.js",
+      "electron/**/*",
       ".next/**/*",
       "public/**/*",
       "src/**/*",
       "node_modules/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/vlm",
+        "to": "vlm",
+        "filter": [
+          "**/*"
+        ]
+      }
     ],
     "asar": false,
     "mac": {

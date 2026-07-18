@@ -43,3 +43,7 @@ next-env.d.ts
 
 # local scratch / launcher helpers
 /scratch
+
+# local VLM runtime/model assets (downloaded or added during packaging)
+/resources/vlm/models/
+/resources/vlm/runtime/
