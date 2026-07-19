@@ -42,6 +42,7 @@ import {
     isStandaloneImageLegendText,
     isUsableFallbackFigureCrop,
     joinOptionContinuation,
+    mergeHorizontalImagePairsBySharedLegend,
     mergeVerticallyAdjacentImageRects,
     mergeTwoByTwoImageGridRects,
     removeContainedImageRects,
@@ -4179,16 +4180,28 @@ export default function AdminPage() {
                           if (Math.abs(b.y - a.y) > 20) return b.y - a.y;
                           return a.x - b.x;
                       });
-                      const preMatchedRects = sortedRects.map(rect => ({
-                          ...rect,
-                          matchedQNum: detectImageMatchedQuestionNumber(rect, textItems, parserProfile)
-                      }));
+                      const currentPageQuestions = parsedQuestionsList
+                          .filter(question => Number(question.startPage) === Number(pageNum))
+                          .sort((first, second) => second.anchorY - first.anchorY);
+                      const preMatchedRects = sortedRects.map(rect => {
+                          const detectedQuestionNumber = detectImageMatchedQuestionNumber(rect, textItems, parserProfile);
+                          const precedingQuestion = parserProfile.imageAssignmentStrategy === 'nearest-preceding-question'
+                              ? findNearestPrecedingQuestion(currentPageQuestions, rect.y)
+                              : null;
+                          return {
+                              ...rect,
+                              matchedQNum: detectedQuestionNumber ?? precedingQuestion?.questionNumber ?? null,
+                          };
+                      });
                       const effectiveRects = parserProfile.name === 'nuclear'
                           ? mergeNuclearImageRects(preMatchedRects)
                           : mergeVerticallyAdjacentImageRects(
-                              mergeTwoByTwoImageGridRects(removeContainedImageRects(preMatchedRects), {
-                                  textItems: filteredTextItems,
-                              })
+                              mergeTwoByTwoImageGridRects(
+                                  mergeHorizontalImagePairsBySharedLegend(removeContainedImageRects(preMatchedRects), {
+                                      textItems: filteredTextItems,
+                                  }),
+                                  { textItems: filteredTextItems },
+                              )
                           );
 
                       const usedLegendTextKeys = new Set();

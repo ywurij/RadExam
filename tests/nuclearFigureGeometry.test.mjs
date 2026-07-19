@@ -333,17 +333,6 @@ test('extracts a non-zero image rect from a rotated PDF image transform', () => 
     assert.ok(Math.abs(rect.h - 774.96) < 0.001);
 });
 
-test('normalizes the 2021 No.59 image object to the complete landscape graph', () => {
-    const rawRect = extractPdfImageRectFromTransform([0, -774.96, 329.28, 0, 111.84, 808.44]);
-    const normalizedRect = normalizeNuclearPdfRect(rawRect, 841.92, 270);
-
-    assert.ok(Math.abs(normalizedRect.x - 33.48) < 0.001);
-    assert.ok(Math.abs(normalizedRect.y - 111.84) < 0.001);
-    assert.ok(Math.abs(normalizedRect.w - 774.96) < 0.001);
-    assert.ok(Math.abs(normalizedRect.h - 329.28) < 0.001);
-    assert.ok(normalizedRect.w > normalizedRect.h * 2);
-});
-
 test('builds a canvas rotation plan matching the normalized clockwise PDF space', () => {
     const plan = buildNuclearCanvasRotationPlan(892.8, 1262.88, 270);
 

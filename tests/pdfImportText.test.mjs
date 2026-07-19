@@ -20,6 +20,7 @@ import {
     isStandaloneImageLegendText,
     isUsableFallbackFigureCrop,
     joinOptionContinuation,
+    mergeHorizontalImagePairsBySharedLegend,
     mergeVerticallyAdjacentImageRects,
     mergeTwoByTwoImageGridRects,
     repairLegacySequentialComparisonOptions,
@@ -280,6 +281,58 @@ test('preserves a tall-left and stacked-right source layout with row span', () =
     assert.deepEqual(layouts.map(layout => layout.row), [1, 1, 2]);
     assert.deepEqual(layouts.map(layout => layout.rowSpan), [2, 1, 1]);
     assert.deepEqual(layouts.map(layout => layout.columnStart), [1, 5, 5]);
+});
+
+test('merges a horizontal image pair when one centered legend is shared', () => {
+    const images = [
+        { x: 100, y: 300, w: 150, h: 190, matchedQNum: 1 },
+        { x: 256, y: 300, w: 150, h: 190, matchedQNum: 1 },
+        { x: 175, y: 80, w: 160, h: 180, matchedQNum: 1 },
+    ];
+    const result = mergeHorizontalImagePairsBySharedLegend(images, {
+        textItems: [
+            { text: '拡散強調像', x: 220, y: 280, width: 66, height: 10 },
+            { text: 'FLAIR冠状断像', x: 215, y: 60, width: 90, height: 10 },
+        ],
+    });
+
+    assert.equal(result.length, 2);
+    assert.deepEqual(
+        { x: result[0].x, y: result[0].y, w: result[0].w, h: result[0].h, preserveCompositeRow: result[0].preserveCompositeRow },
+        { x: 100, y: 300, w: 306, h: 190, preserveCompositeRow: true },
+    );
+    assert.equal(mergeVerticallyAdjacentImageRects(result).length, 2);
+});
+
+test('keeps a horizontal image pair separate when each image has a caption', () => {
+    const images = [
+        { x: 100, y: 300, w: 150, h: 190, matchedQNum: 17 },
+        { x: 256, y: 300, w: 150, h: 190, matchedQNum: 17 },
+    ];
+    const result = mergeHorizontalImagePairsBySharedLegend(images, {
+        textItems: [
+            { text: '治療前', x: 148, y: 280, width: 42, height: 10 },
+            { text: '治療後', x: 304, y: 280, width: 42, height: 10 },
+        ],
+    });
+
+    assert.deepEqual(result, images);
+});
+
+test('merges a horizontal pair when one shared caption is split into nearby text groups', () => {
+    const images = [
+        { x: 100, y: 300, w: 150, h: 190, matchedQNum: 66 },
+        { x: 256, y: 300, w: 150, h: 190, matchedQNum: 66 },
+    ];
+    const result = mergeHorizontalImagePairsBySharedLegend(images, {
+        textItems: [
+            { text: 'T2', x: 220, y: 280, width: 15, height: 10 },
+            { text: '強調横断像', x: 263, y: 280, width: 62, height: 10 },
+        ],
+    });
+
+    assert.equal(result.length, 1);
+    assert.equal(result[0].preserveCompositeRow, true);
 });
 
 test('merges an aligned two-by-two image grid into one composite figure', () => {

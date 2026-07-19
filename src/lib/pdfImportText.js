@@ -368,6 +368,84 @@ const unionImageRects = rects => {
     };
 };
 
+export const mergeHorizontalImagePairsBySharedLegend = (
+    rects = [],
+    { textItems = [], rowTolerance = 20, maxGap = 36, legendBand = 60 } = {},
+) => {
+    if (rects.length < 2) return rects;
+
+    const consumed = new Set();
+    const mergedByIndex = new Map();
+    const entries = rects.map((rect, index) => ({ rect, index }));
+
+    entries.forEach(({ rect: left, index: leftIndex }) => {
+        if (consumed.has(leftIndex) || left.preserveCompositeRow || left.preserveGridCell) return;
+
+        const rightEntry = entries
+            .filter(({ rect: candidate, index }) => {
+                if (index === leftIndex || consumed.has(index)) return false;
+                if (candidate.preserveCompositeRow || candidate.preserveGridCell) return false;
+                if (!Number.isFinite(left.matchedQNum) || left.matchedQNum !== candidate.matchedQNum) return false;
+                if ((Number(candidate.x) || 0) <= (Number(left.x) || 0)) return false;
+
+                const sameRow = Math.abs(getImageVisualTop(left) - getImageVisualTop(candidate)) <= rowTolerance
+                    || Math.abs(getImageVisualBottom(left) - getImageVisualBottom(candidate)) <= rowTolerance;
+                const horizontalGap = getRectGap(
+                    left.x,
+                    left.x + left.w,
+                    candidate.x,
+                    candidate.x + candidate.w,
+                );
+                return sameRow && horizontalGap <= maxGap;
+            })
+            .sort((first, second) => first.rect.x - second.rect.x)[0];
+
+        if (!rightEntry) return;
+        const right = rightEntry.rect;
+        const union = unionImageRects([left, right]);
+        const lowerImageBottom = Math.min(getImageVisualBottom(left), getImageVisualBottom(right));
+        const legendItems = textItems.filter(item => {
+            const centerX = (Number(item.x) || 0) + (Number(item.width) || 0) / 2;
+            const centerY = (Number(item.y) || 0) + (Number(item.height) || 0) / 2;
+            return centerX >= union.x
+                && centerX <= union.x + union.w
+                && centerY < lowerImageBottom + 8
+                && centerY >= lowerImageBottom - legendBand;
+        });
+        const legendGroups = groupNearbyLegendItems(legendItems).filter(group => {
+            const text = String(group.text || '').trim();
+            return text && text.length <= 50 && !/^[0-9０-９ー―－\-−–—\s]+$/.test(text);
+        });
+        if (legendGroups.length === 0) return;
+
+        const legendMinX = Math.min(...legendGroups.map(group => group.x));
+        const legendMaxX = Math.max(...legendGroups.map(group => group.x + group.width));
+        const legendCenterYs = legendGroups.map(group => group.y + group.height / 2);
+        const sameLegendLine = Math.max(...legendCenterYs) - Math.min(...legendCenterYs) <= 8;
+        const compactSharedLine = legendGroups.length <= 3
+            && sameLegendLine
+            && legendMaxX - legendMinX <= union.w * 0.42;
+        if (legendGroups.length > 1 && !compactSharedLine) return;
+
+        const legendCenterX = (legendMinX + legendMaxX) / 2;
+        const unionCenterX = union.x + union.w / 2;
+        if (Math.abs(legendCenterX - unionCenterX) > Math.max(24, union.w * 0.18)) return;
+
+        consumed.add(leftIndex);
+        consumed.add(rightEntry.index);
+        mergedByIndex.set(Math.min(leftIndex, rightEntry.index), {
+            ...union,
+            preserveCompositeRow: true,
+        });
+    });
+
+    return rects.flatMap((rect, index) => {
+        if (mergedByIndex.has(index)) return [mergedByIndex.get(index)];
+        if (consumed.has(index)) return [];
+        return [rect];
+    });
+};
+
 export const mergeVerticallyAdjacentImageRects = (
     rects = [],
     { maxGap = 8, minHorizontalOverlapRatio = 0.85 } = {},
