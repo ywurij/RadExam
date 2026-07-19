@@ -93,6 +93,10 @@ const normalizeQuestionId = (question) => {
 const normalizeStoredImage = async (examId, questionId, image, imageIndex) => {
     const source = image && typeof image === 'object' ? image : {};
     const legend = resolveImageLegend(source);
+    const metadata = {
+        ...(source.layout ? { layout: source.layout } : {}),
+        ...(source.legendLayout ? { legendLayout: source.legendLayout } : {})
+    };
     const storageKey = source.storageKey || extractLocalImageKey(source.path);
     const originalPath = typeof source.path === 'string' ? source.path : '';
 
@@ -100,7 +104,8 @@ const normalizeStoredImage = async (examId, questionId, image, imageIndex) => {
         return {
             path: buildLocalImageRef(storageKey),
             legend,
-            storageKey
+            storageKey,
+            ...metadata
         };
     }
 
@@ -111,14 +116,16 @@ const normalizeStoredImage = async (examId, questionId, image, imageIndex) => {
         return {
             path: buildLocalImageRef(imageKey),
             legend,
-            storageKey: imageKey
+            storageKey: imageKey,
+            ...metadata
         };
     }
 
     return {
         path: originalPath,
         legend,
-        storageKey: ''
+        storageKey: '',
+        ...metadata
     };
 };
 
@@ -142,7 +149,7 @@ const prepareQuestionsForStorage = async (examId, questions) => {
 
             return {
                 ...normalizedQuestion,
-                images: preparedImages.map(({ path, legend }) => ({ path, legend }))
+                images: preparedImages.map(({ storageKey: _storageKey, ...image }) => image)
             };
         })
     );
@@ -168,11 +175,16 @@ const hydrateQuestionImages = async (question) => {
 
     const hydratedImages = await Promise.all(images.map(async (image) => {
         const source = image && typeof image === 'object' ? image : {};
+        const metadata = {
+            ...(source.layout ? { layout: source.layout } : {}),
+            ...(source.legendLayout ? { legendLayout: source.legendLayout } : {})
+        };
         const storageKey = extractLocalImageKey(source.path);
         if (!storageKey) {
             return {
                 path: source.path || '',
-                legend: resolveImageLegend(source)
+                legend: resolveImageLegend(source),
+                ...metadata
             };
         }
 
@@ -181,7 +193,8 @@ const hydrateQuestionImages = async (question) => {
             return {
                 path: '',
                 legend: resolveImageLegend(source),
-                storageKey
+                storageKey,
+                ...metadata
             };
         }
 
@@ -189,7 +202,8 @@ const hydrateQuestionImages = async (question) => {
         return {
             path,
             legend: resolveImageLegend(source),
-            storageKey
+            storageKey,
+            ...metadata
         };
     }));
 

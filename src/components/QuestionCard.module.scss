@@ -122,8 +122,68 @@
     margin-bottom: 2rem;
 }
 
+.sourceImageGrid {
+    display: grid;
+    grid-template-columns: repeat(12, minmax(0, 1fr));
+    gap: 1.5rem 0.75rem;
+    align-items: start;
+    margin-bottom: 2rem;
+}
+
+.sourceImageGrid .imageWrapper {
+    min-width: 0;
+}
+
 .imageWrapper {
     cursor: zoom-in;
+}
+
+.structuredFigureBody {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: stretch;
+}
+
+.structuredFigureBody > .thumbnail {
+    grid-column: 2;
+}
+
+.figureSideLabels[data-position='left'] {
+    grid-column: 1;
+}
+
+.figureSideLabels[data-position='right'] {
+    grid-column: 3;
+}
+
+.figureSideLabels {
+    position: relative;
+    min-width: 2.25rem;
+    color: #4a5568;
+    font-size: 0.75rem;
+
+    span {
+        position: absolute;
+        left: 50%;
+        white-space: nowrap;
+        transform: translate(-50%, -50%);
+    }
+}
+
+.figureEdgeLabels {
+    position: relative;
+    height: 1.5rem;
+    margin: 0 2.25rem;
+    color: #4a5568;
+    font-size: 0.75rem;
+    text-align: center;
+
+    span {
+        position: absolute;
+        top: 50%;
+        white-space: nowrap;
+        transform: translate(-50%, -50%);
+    }
 }
 
 /* Single Image Overrides */
@@ -189,6 +249,29 @@
     opacity: 0.35;
     cursor: default;
   }
+}
+
+.flatLegendEditor {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 0.5rem;
+    align-items: center;
+
+    input {
+        min-width: 0;
+    }
+
+    button {
+        padding: 0.5rem 0.65rem;
+        border: 1px solid #63b3ed;
+        border-radius: 0.35rem;
+        background: #fff;
+        color: #2b6cb0;
+        cursor: pointer;
+        font-size: 0.75rem;
+        font-weight: 600;
+        white-space: nowrap;
+    }
 }
 
 .unifiedEditor {

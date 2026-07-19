@@ -5,6 +5,7 @@ import {
     applyDiagnosticImportCorrection,
     assignNearestUniqueLabels,
     buildPairedOptionText,
+    buildSourceGridLayouts,
     compareImageReadingOrder,
     extractQuestionTable,
     extractOptionColumnHeaders,
@@ -12,6 +13,7 @@ import {
     hasExplicitFigureCue,
     isPairedOptionHeader,
     isRepeatedOptionOrFigureLabel,
+    isLikelyOptionContinuationLine,
     isStandaloneImageLegendText,
     isUsableFallbackFigureCrop,
     joinOptionContinuation,
@@ -83,6 +85,22 @@ test('joins wrapped option text for every option including option e', () => {
     assert.equal(joinOptionContinuation('', '後続行'), '後続行');
 });
 
+test('uses line geometry to separate wrapped options from distant image legends', () => {
+    const optionLine = [
+        { text: 'e', x: 90, y: 600, width: 6, height: 11, pageNum: 7 },
+        { text: 'Dynamic susceptibility contrast法は', x: 120, y: 600, width: 180, height: 11, pageNum: 7 },
+    ];
+    const wrappedLine = [
+        { text: 'Gd造影剤を使用する。', x: 120, y: 585, width: 130, height: 11, pageNum: 7 },
+    ];
+    const distantUnknownLegend = [
+        { text: '投与120秒', x: 240, y: 310, width: 60, height: 11, pageNum: 7 },
+    ];
+
+    assert.equal(isLikelyOptionContinuationLine(optionLine, wrappedLine), true);
+    assert.equal(isLikelyOptionContinuationLine(optionLine, distantUnknownLegend), false);
+});
+
 test('distinguishes a standalone image legend from wrapped option prose', () => {
     assert.equal(isStandaloneImageLegendText('FLAIR像'), true);
     assert.equal(isStandaloneImageLegendText('造影CT'), true);
@@ -135,6 +153,32 @@ test('orders bottom-aligned images from left to right regardless of height', () 
     ];
 
     assert.deepEqual([...images].sort(compareImageReadingOrder).map(image => image.legend), ['術前', '術後']);
+});
+
+test('preserves a two-over-one source image layout on a twelve-column grid', () => {
+    const images = [
+        { page: 65, x: 97.8, y: 388.5, w: 198.4, h: 174.2 },
+        { page: 65, x: 299.1, y: 388.5, w: 198.4, h: 177.0 },
+        { page: 65, x: 198.4, y: 184.3, w: 198.4, h: 170.9 },
+    ];
+    const layouts = buildSourceGridLayouts(images);
+
+    assert.deepEqual(layouts.map(layout => layout.row), [1, 1, 2]);
+    assert.deepEqual(layouts.map(layout => layout.columnStart), [1, 7, 4]);
+    assert.deepEqual(layouts.map(layout => layout.columnSpan), [6, 6, 6]);
+});
+
+test('preserves a tall-left and stacked-right source layout with row span', () => {
+    const images = [
+        { page: 73, x: 60, y: 194, w: 165, h: 372 },
+        { page: 73, x: 227, y: 382, w: 308, h: 184 },
+        { page: 73, x: 227, y: 194, w: 308, h: 184 },
+    ];
+    const layouts = buildSourceGridLayouts(images);
+
+    assert.deepEqual(layouts.map(layout => layout.row), [1, 1, 2]);
+    assert.deepEqual(layouts.map(layout => layout.rowSpan), [2, 1, 1]);
+    assert.deepEqual(layouts.map(layout => layout.columnStart), [1, 5, 5]);
 });
 
 test('merges a vertically stacked image series while preserving a separate side image', () => {

@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import PdfClipper from '@/components/PdfClipper';
+import StructuredLegendEditor, { createStructuredLegendFromText } from '@/components/StructuredLegendEditor';
 import adminStyles from './AdminEdit.module.scss';
 
 import { initializeLocalExams, getExamTypes } from '@/lib/data';
@@ -25,6 +26,7 @@ import { buildNuclearSourcePageAssignments } from '@/lib/nuclearSourcePages.mjs'
 import {
     applyDiagnosticImportCorrection,
     assignNearestUniqueLabels,
+    buildSourceGridLayouts,
     buildPairedOptionText,
     compareImageReadingOrder,
     extractQuestionTable,
@@ -33,6 +35,7 @@ import {
     hasExplicitFigureCue,
     isPairedOptionHeader,
     isRepeatedOptionOrFigureLabel,
+    isLikelyOptionContinuationLine,
     isStandaloneImageLegendText,
     isUsableFallbackFigureCrop,
     joinOptionContinuation,
@@ -2836,16 +2839,20 @@ const extractLegendForImage = (rect, textItems, limits = {}, allPageTextItems = 
             const isLabelLike = /^[a-zA-Z0-9-+\s()\/]+$/.test(text) || 
                                 /^(?:右|左|前|後|上|下|側面|正面|前面|後面|造影|シネ|遅延|早期|矢状|横断|冠状|エコー|シンチ|図|表|画像|負荷|安静|運動|ストレス|レスト)(?:時|像)?\d*$/i.test(text) ||
                                 /^(?:anterior|posterior|lateral|coronal|sagittal|transverse|axial|min|hour|hr|sec|iv|pre|post|delay|early|Right|Left|L|R|A|P|H|F|sup|inf)\d*$/i.test(text);
+            const isGeometrySupportedLabel = isValidLegendText(text, item, allPageTextItems)
+                && !/[。！？!?]$/.test(text);
 
             if (NO_QUESTION_LABEL_PATTERN.test(text)) {
                 return;
             }
 
-            if (isLabelLike && !usedWords.includes(text) && !mainTitle.includes(text)) {
+            // 候補はすでに画像四辺の狭い帯に限定され、問題文・選択肢も除外済み。
+            // 語彙リストだけに依存せず、位置が妥当な未知の撮像相・曲線名も受け入れる。
+            if ((isLabelLike || isGeometrySupportedLabel) && !usedWords.includes(text) && !mainTitle.includes(text)) {
                 if (isOrientationLabel) {
-                    orientationDescriptors.push(text);
+                    orientationDescriptors.push({ text, item });
                 } else {
-                    genericDescriptors.push(text);
+                    genericDescriptors.push({ text, item });
                 }
                 usedItems.push(item);
             }
@@ -2853,8 +2860,33 @@ const extractLegendForImage = (rect, textItems, limits = {}, allPageTextItems = 
     });
 
     const descriptorSource = orientationDescriptors.length > 0 ? orientationDescriptors : genericDescriptors;
-    descriptorSource.forEach(text => descriptorsSet.add(text));
+    descriptorSource.forEach(({ text }) => descriptorsSet.add(text));
     const descriptors = Array.from(descriptorsSet);
+
+    const positionedLabels = [...orientationDescriptors, ...genericDescriptors].map(({ text, item }) => {
+        const centerX = item.x + item.width / 2;
+        const centerY = item.y + item.height / 2;
+        let position = 'bottom';
+        let offset = (centerX - origMinX) / Math.max(1, imageWidth);
+
+        if (centerX < origMinX) {
+            position = 'left';
+            offset = (origMaxY - centerY) / Math.max(1, rect.h);
+        } else if (centerX > origMaxX) {
+            position = 'right';
+            offset = (origMaxY - centerY) / Math.max(1, rect.h);
+        } else if (centerY > origMaxY) {
+            position = 'top';
+        }
+
+        return {
+            text,
+            position,
+            offset: Math.max(0, Math.min(1, offset))
+        };
+    }).filter((label, index, labels) => (
+        labels.findIndex(candidate => candidate.text === label.text && candidate.position === label.position) === index
+    ));
 
     let finalLegend = mainTitle.trim();
     if (descriptors.length > 0) {
@@ -2868,7 +2900,11 @@ const extractLegendForImage = (rect, textItems, limits = {}, allPageTextItems = 
 
     return {
         legendStr: finalLegend,
-        usedItems: usedItems
+        usedItems,
+        legendLayout: positionedLabels.length > 0 ? {
+            title: mainTitle.trim(),
+            labels: positionedLabels
+        } : null
     };
 };
 
@@ -3063,7 +3099,10 @@ export default function AdminPage() {
             const nextIndex = imageIndex + direction;
             if (nextIndex < 0 || nextIndex >= images.length) return prev;
             [images[imageIndex], images[nextIndex]] = [images[nextIndex], images[imageIndex]];
-            return { ...prev, [questionIndex]: images };
+            return {
+                ...prev,
+                [questionIndex]: images.map(({ layout: _layout, ...image }) => image)
+            };
         });
     };
 
@@ -3087,6 +3126,8 @@ export default function AdminPage() {
                         path: img.path || 'image_placeholder',
                         legend: img.legend ?? '',
                         storageKey: img.storageKey || '',
+                        ...(img.layout ? { layout: img.layout } : {}),
+                        ...(img.legendLayout ? { legendLayout: img.legendLayout } : {}),
                     })) : [],
                 };
             });
@@ -3157,6 +3198,19 @@ export default function AdminPage() {
         }));
     };
 
+    const handleEditingStructuredLegendChange = (questionIndex, imageIndex, legendLayout, legend) => {
+        updateEditingQuestion(questionIndex, (question) => ({
+            ...question,
+            images: question.images.map((image, idx) => {
+                if (idx !== imageIndex) return image;
+                const { legendLayout: _previousLayout, ...imageWithoutLayout } = image;
+                return legendLayout
+                    ? { ...imageWithoutLayout, legend, legendLayout }
+                    : { ...imageWithoutLayout, legend };
+            }),
+        }));
+    };
+
     const handleEditingImageAdd = (questionIndex, file) => {
         if (!file) return;
 
@@ -3196,7 +3250,10 @@ export default function AdminPage() {
             const nextIndex = imageIndex + direction;
             if (nextIndex < 0 || nextIndex >= images.length) return question;
             [images[imageIndex], images[nextIndex]] = [images[nextIndex], images[imageIndex]];
-            return { ...question, images };
+            return {
+                ...question,
+                images: images.map(({ layout: _layout, ...image }) => image)
+            };
         });
     };
 
@@ -3528,6 +3585,7 @@ export default function AdminPage() {
                 questionList.forEach(q => {
                     let optionsStarted = false;
                     let lastOptionKey = '';
+                    let lastOptionLine = null;
                     const cleanQuestionLines = [];
                     q.options = {};
                     q.finalUsedLines = [];
@@ -3553,6 +3611,7 @@ export default function AdminPage() {
                             const optText = trimmed.substring(match[0].length).trim();
                             q.options[optKey] = optText;
                             lastOptionKey = optKey;
+                            lastOptionLine = originalLine;
                             if (originalLine) q.finalUsedLines.push(originalLine);
                             return;
                         }
@@ -3565,9 +3624,10 @@ export default function AdminPage() {
                                 return;
                             }
 
-                            if (lastOptionKey) {
+                            if (lastOptionKey && isLikelyOptionContinuationLine(lastOptionLine, originalLine)) {
                                 q.options[lastOptionKey] = joinOptionContinuation(q.options[lastOptionKey], trimmed);
                                 if (originalLine) q.finalUsedLines.push(originalLine);
+                                lastOptionLine = originalLine;
                             }
                             return;
                         }
@@ -3824,6 +3884,7 @@ export default function AdminPage() {
             // 2.4 【第2パス】各ページから画像を抽出し、確定したテキストを除外してレジェンド探索
             const allExtractedImagesPool = [];
             const imageContainedTextKeys = new Set();
+            const imageLegendTextKeys = new Set();
             let imageCounter = 0;
 
              for (let pageNum = firstQuestionPage; pageNum <= totalPages; pageNum++) {
@@ -4235,7 +4296,9 @@ export default function AdminPage() {
                           const legendStr = result.legendStr;
 
                           result.usedItems.forEach(item => {
-                              usedLegendTextKeys.add(buildTextItemKey(item));
+                              const key = buildTextItemKey(item);
+                              usedLegendTextKeys.add(key);
+                              imageLegendTextKeys.add(key);
                           });
 
                          combinedCrops.push({
@@ -4247,6 +4310,7 @@ export default function AdminPage() {
                              h: rect.h,
                              text: containedText,
                              legendStr: legendStr,
+                             legendLayout: result.legendLayout,
                              matchedQNum
                          });
                      });
@@ -4390,6 +4454,7 @@ export default function AdminPage() {
                              h: crop.h,
                              legend: crop.legendStr || '',
                              detectedLegend: crop.legendStr || null,
+                             ...(crop.legendLayout ? { legendLayout: crop.legendLayout } : {}),
                              page: pageNum,
                              matchedQNum: crop.matchedQNum
                          };
@@ -4419,13 +4484,15 @@ export default function AdminPage() {
                  let pairedOptionColumns = false;
                  let optionColumnHeaders = [];
                  let lastOptionKey = '';
+                 let lastOptionLine = null;
                  const cleanQuestionLines = [];
                  const rebuiltOptions = {};
                  const rebuiltUsedLines = [];
 
                  const sanitizedEntries = q.usedLines.map(line => {
                      const sanitizedLineItems = line.filter(item => {
-                         if (imageContainedTextKeys.has(buildTextItemKey(item))) return false;
+                         const itemKey = buildTextItemKey(item);
+                         if (imageContainedTextKeys.has(itemKey) || imageLegendTextKeys.has(itemKey)) return false;
                          const trimmed = item.text.trim();
                          const isFooterFragment = item.y < (parserProfile.footerMinY + 8) && (
                              FOOTER_DASH_ONLY_PATTERN.test(trimmed) ||
@@ -4486,6 +4553,7 @@ export default function AdminPage() {
                          const optText = pairedText || columnText || stripFooterSuffix(lineText.substring(match[0].length).trim());
                          rebuiltOptions[optKey] = optText;
                          lastOptionKey = optKey;
+                         lastOptionLine = sanitizedLineItems;
                          rebuiltUsedLines.push(sanitizedLineItems);
                      } else if (optionsStarted) {
                          const isFooter = FOOTER_PAGE_PATTERN.test(lineText);
@@ -4495,9 +4563,10 @@ export default function AdminPage() {
                              return;
                          }
 
-                         if (lastOptionKey) {
+                         if (lastOptionKey && isLikelyOptionContinuationLine(lastOptionLine, sanitizedLineItems)) {
                              rebuiltOptions[lastOptionKey] = joinOptionContinuation(rebuiltOptions[lastOptionKey], lineText);
                              rebuiltUsedLines.push(sanitizedLineItems);
+                             lastOptionLine = sanitizedLineItems;
                          }
                      } else {
                          const parsedStart = parseQuestionStart(lineText);
@@ -4700,6 +4769,16 @@ export default function AdminPage() {
             const finalQuestions = new Array(totalQs);
             const finalImageMap = {};
             parsedQuestionsList.forEach((q, idx) => {
+                const canPreserveSourceLayout = q.pageImages.length > 1 && q.pageImages.every(img => (
+                    Number(img.w) > 0 && Number(img.h) > 0
+                ));
+                const sourceLayouts = canPreserveSourceLayout ? buildSourceGridLayouts(q.pageImages) : [];
+                const buildImportedImage = (img, imageIndex, path) => ({
+                    path,
+                    legend: img.legend ?? '',
+                    ...(sourceLayouts[imageIndex] ? { layout: sourceLayouts[imageIndex] } : {}),
+                    ...(img.legendLayout ? { legendLayout: img.legendLayout } : {})
+                });
                 finalQuestions[idx] = {
                     id: buildQuestionId(detectedYear, q.questionNumber),
                     year: detectedYear,
@@ -4710,17 +4789,15 @@ export default function AdminPage() {
                     answer: '',
                     explanation: '',
                     sourcePages: nuclearSourcePagesByQuestion.get(q.questionNumber) || [],
-                    images: q.pageImages.map((img) => ({
-                        path: 'image_placeholder',
-                        legend: img.legend ?? ''
-                    }))
+                    images: q.pageImages.map((img, imageIndex) => (
+                        buildImportedImage(img, imageIndex, 'image_placeholder')
+                    ))
                 };
 
                 if (q.pageImages.length > 0) {
-                    finalImageMap[idx] = q.pageImages.map((img) => ({
-                        path: img.path,
-                        legend: img.legend ?? ''
-                    }));
+                    finalImageMap[idx] = q.pageImages.map((img, imageIndex) => (
+                        buildImportedImage(img, imageIndex, img.path)
+                    ));
                 }
             });
 
@@ -6006,7 +6083,14 @@ export default function AdminPage() {
                                                     {question.images.map((image, imageIndex) => (
                                                         <div key={`${question.id}-image-${imageIndex}`} style={{ display: 'grid', gridTemplateColumns: '72px 1fr auto auto', gap: '0.75rem', alignItems: 'center', background: '#fff', padding: '0.6rem', borderRadius: '0.375rem', border: '1px solid #e2e8f0' }}>
                                                             <img src={image.path} alt={image.legend || `image-${imageIndex + 1}`} style={{ width: '72px', height: '72px', objectFit: 'cover', borderRadius: '0.25rem', background: '#edf2f7' }} />
-                                                            <input value={image.legend || ''} onChange={(e) => handleEditingImageLegendChange(questionIndex, imageIndex, e.target.value)} placeholder="画像レジェンド" style={{ width: '100%', padding: '0.55rem', borderRadius: '0.375rem', border: '1px solid #cbd5e0' }} />
+                                                            {image.legendLayout ? <StructuredLegendEditor
+                                                                legendLayout={image.legendLayout}
+                                                                onChange={(legendLayout, legend) => handleEditingStructuredLegendChange(questionIndex, imageIndex, legendLayout, legend)}
+                                                                onDisable={legend => handleEditingStructuredLegendChange(questionIndex, imageIndex, null, legend)}
+                                                            /> : <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: '0.5rem', alignItems: 'center' }}>
+                                                                <input value={image.legend || ''} onChange={(e) => handleEditingImageLegendChange(questionIndex, imageIndex, e.target.value)} placeholder="画像レジェンド" style={{ width: '100%', minWidth: 0, padding: '0.55rem', borderRadius: '0.375rem', border: '1px solid #cbd5e0' }} />
+                                                                <button type="button" onClick={() => handleEditingStructuredLegendChange(questionIndex, imageIndex, createStructuredLegendFromText(image.legend), image.legend || '')} style={{ padding: '0.5rem 0.65rem', border: '1px solid #63b3ed', borderRadius: '0.35rem', background: '#fff', color: '#2b6cb0', cursor: 'pointer', fontSize: '0.75rem', fontWeight: 600, whiteSpace: 'nowrap' }}>構造化へ変換</button>
+                                                            </div>}
                                                             <div style={{ display: 'flex', gap: '0.25rem' }}>
                                                                 <button type="button" disabled={imageIndex === 0} onClick={() => handleEditingImageMove(questionIndex, imageIndex, -1)} title="前へ移動" style={{ minWidth: '48px', minHeight: '40px', padding: '0.45rem 0.6rem', fontSize: '1.05rem', fontWeight: 'bold' }}>↑</button>
                                                                 <button type="button" disabled={imageIndex === question.images.length - 1} onClick={() => handleEditingImageMove(questionIndex, imageIndex, 1)} title="後へ移動" style={{ minWidth: '48px', minHeight: '40px', padding: '0.45rem 0.6rem', fontSize: '1.05rem', fontWeight: 'bold' }}>↓</button>

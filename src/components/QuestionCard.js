@@ -6,11 +6,35 @@ import 'yet-another-react-lightbox/styles.css';
 import AnswerEditor from './AnswerEditor';
 import PdfClipper from './PdfClipper';
 import QuestionSourcePages from './QuestionSourcePages';
+import StructuredLegendEditor, { createStructuredLegendFromText } from './StructuredLegendEditor';
 import { getSelectionCount } from '@/lib/utils';
 import styles from './QuestionCard.module.scss';
 import 'katex/dist/katex.min.css';
 
 const normalizeAnswer = value => Array.isArray(value) ? value : String(value || '').split(/[,、\s]+/).filter(Boolean);
+const isStructuredImageLayout = image => (
+    image?.layout?.type === 'source-grid'
+    && Number(image.layout.row) > 0
+    && Number(image.layout.columnStart) > 0
+    && Number(image.layout.columnSpan) > 0
+);
+
+const FigureLabels = ({ labels, position }) => {
+    const matchingLabels = labels.filter(label => label.position === position);
+    if (matchingLabels.length === 0) return null;
+    const isSide = position === 'left' || position === 'right';
+
+    return <div className={isSide ? styles.figureSideLabels : styles.figureEdgeLabels} data-position={position}>
+        {matchingLabels.map((label, index) => {
+            const offset = `${Math.max(0, Math.min(1, Number(label.offset) || 0)) * 100}%`;
+            return <span
+                key={`${position}-${label.text}-${index}`}
+                style={isSide ? { top: offset } : { left: offset }}
+                dangerouslySetInnerHTML={{ __html: label.text }}
+            />;
+        })}
+    </div>;
+};
 
 export default function QuestionCard({ question, userProgress, onAnswer, onSaveQuestionData, onUpdateStatus, availableGenres, pdfFiles = [], onEditingChange }) {
     const [selectedOptions, setSelectedOptions] = useState([]);
@@ -32,6 +56,7 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveQ
 
     const currentAnswer = question.answer || [];
     const currentImages = useMemo(() => question.images || [], [question.images]);
+    const hasStructuredLayout = currentImages.length > 1 && currentImages.every(isStructuredImageLayout);
     const currentOptions = question.options || {};
     const maxSelection = getSelectionCount(question.question || '', currentAnswer);
     const slides = useMemo(() => currentImages.map(img => ({ src: img.path?.startsWith('data:') ? img.path : `/${img.path}` })), [currentImages]);
@@ -113,7 +138,10 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveQ
             const images = [...previous.images];
             const [moved] = images.splice(draggedImageIndex, 1);
             images.splice(targetIndex, 0, moved);
-            return { ...previous, images };
+            return {
+                ...previous,
+                images: images.map(({ layout: _layout, ...image }) => image)
+            };
         });
         setDraggedImageIndex(null);
     };
@@ -200,7 +228,14 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveQ
                             <div key={`${image.storageKey || image.path?.slice(0, 30)}-${index}`} draggable onDragStart={() => setDraggedImageIndex(index)} onDragOver={event => event.preventDefault()} onDrop={() => handleDropImage(index)} className={styles.editImageCard}>
                                 <div className={styles.dragHandle}>⠿ ドラッグして並べ替え</div>
                                 <img src={image.path?.startsWith('data:') ? image.path : `/${image.path}`} alt={image.legend || `画像${index + 1}`} />
-                                <input value={image.legend || ''} onChange={event => updateDraftImage(index, { legend: event.target.value })} placeholder="画像レジェンド" />
+                                {image.legendLayout ? <StructuredLegendEditor
+                                    legendLayout={image.legendLayout}
+                                    onChange={(legendLayout, legend) => updateDraftImage(index, { legendLayout, legend })}
+                                    onDisable={legend => updateDraftImage(index, { legendLayout: undefined, legend })}
+                                /> : <div className={styles.flatLegendEditor}>
+                                    <input value={image.legend || ''} onChange={event => updateDraftImage(index, { legend: event.target.value })} placeholder="画像レジェンド" />
+                                    <button type="button" onClick={() => updateDraftImage(index, { legendLayout: createStructuredLegendFromText(image.legend) })}>構造化へ変換</button>
+                                </div>}
                                 <div><button type="button" disabled={!selectedPdf} onClick={() => setPdfTarget({ mode: 'replace', index })}>PDFから差し替え</button><button type="button" className={styles.deleteImageBtn} onClick={() => setDraft(previous => ({ ...previous, images: previous.images.filter((_, imageIndex) => imageIndex !== index) }))}>削除</button></div>
                             </div>
                         ))}</div>}
@@ -218,7 +253,24 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveQ
                     <>
                         <div className={styles.questionSection} style={{ marginBottom: '1.5rem' }}><div className={styles.questionText} dangerouslySetInnerHTML={{ __html: question.question || '' }} /></div>
                         <QuestionSourcePages sourcePages={question.sourcePages || []} pdfFiles={pdfFiles} />
-                        {currentImages.length > 0 && <div className={`${styles.imageGrid} ${currentImages.length === 1 ? styles.singleGrid : ''}`}>{currentImages.map((img, idx) => <div key={idx} className={styles.imageWrapper} onClick={() => { setLightboxIndex(idx); setLightboxOpen(true); }}><img src={img.path?.startsWith('data:') ? img.path : `/${img.path}`} alt={img.legend || `Image ${idx + 1}`} className={styles.thumbnail} />{img.legend && <div className={styles.legend} dangerouslySetInnerHTML={{ __html: img.legend }} />}</div>)}</div>}
+                        {currentImages.length > 0 && <div className={`${hasStructuredLayout ? styles.sourceImageGrid : styles.imageGrid} ${currentImages.length === 1 ? styles.singleGrid : ''}`}>{currentImages.map((img, idx) => {
+                            const labels = Array.isArray(img.legendLayout?.labels) ? img.legendLayout.labels : [];
+                            const structuredStyle = hasStructuredLayout ? {
+                                gridColumn: `${img.layout.columnStart} / span ${img.layout.columnSpan}`,
+                                gridRow: `${img.layout.row} / span ${img.layout.rowSpan || 1}`
+                            } : undefined;
+                            const displayedLegend = img.legendLayout ? img.legendLayout.title : img.legend;
+                            return <div key={idx} className={styles.imageWrapper} style={structuredStyle} onClick={() => { setLightboxIndex(idx); setLightboxOpen(true); }}>
+                                <FigureLabels labels={labels} position="top" />
+                                <div className={styles.structuredFigureBody}>
+                                    <FigureLabels labels={labels} position="left" />
+                                    <img src={img.path?.startsWith('data:') ? img.path : `/${img.path}`} alt={img.legend || `Image ${idx + 1}`} className={styles.thumbnail} />
+                                    <FigureLabels labels={labels} position="right" />
+                                </div>
+                                <FigureLabels labels={labels} position="bottom" />
+                                {displayedLegend && <div className={styles.legend} dangerouslySetInnerHTML={{ __html: displayedLegend }} />}
+                            </div>;
+                        })}</div>}
                         <div className={styles.optionsSection} style={{ marginBottom: '2rem' }}><h4>選択肢</h4><div className={styles.options}>{Object.entries(currentOptions).sort((a, b) => a[0].localeCompare(b[0])).map(([key, text]) => { const selected = selectedOptions.includes(key); const answer = normalizeAnswer(currentAnswer).includes(key); let className = styles.optionBtn; if (selected) className += ` ${styles.selected}`; if (showAnswer && answer) className += ` ${styles.correct}`; if (showAnswer && selected && !answer) className += ` ${styles.wrong}`; return <button key={key} className={className} onClick={() => toggleOption(key)}><span className={styles.optionKey}>{key}</span><span dangerouslySetInnerHTML={{ __html: text }} /></button>; })}</div></div>
                         <div className={styles.actionRow}>{!showAnswer ? <button className={styles.revealBtn} onClick={revealAnswer}>回答・解説を見る</button> : <div className={`${styles.explicitAnswer} ${isCorrect ? styles.correct : ''}`}><div className={styles.answerBlock}>{isEditingAnswer ? <div className={styles.inlineEditAnswer}><span className={styles.label}>正解を選択:</span><div className={styles.answerSelectionGrid}>{Object.keys(currentOptions).sort().map(key => <button type="button" key={key} className={editAnswer.includes(key) ? styles.draftAnswerActive : ''} onClick={() => setEditAnswer(previous => previous.includes(key) ? previous.filter(item => item !== key) : [...previous, key].sort())}>{key}</button>)}</div><div className={styles.editActions}><button onClick={() => setIsEditingAnswer(false)} className={styles.cancelBtn}>キャンセル</button><button onClick={saveAnswer} className={styles.saveBtn}>保存</button></div></div> : <><div className={styles.answerText}><span className={styles.label}>正解は</span><span className={styles.value}>{normalizeAnswer(currentAnswer).join(', ')} です</span></div><button onClick={() => { setEditAnswer(normalizeAnswer(currentAnswer)); setIsEditingAnswer(true); }} className={styles.iconEditBtn} title="正解を編集">✎</button></>}</div></div>}</div>
                     </>

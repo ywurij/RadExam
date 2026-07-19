@@ -43,6 +43,33 @@ export const joinOptionContinuation = (optionText, continuationText) => (
         .join(' ')
 );
 
+const getLineGeometry = (items = []) => {
+    const tokens = meaningfulItems(items);
+    if (tokens.length === 0) return null;
+    const pageNum = tokens.find(token => Number.isFinite(token.pageNum))?.pageNum ?? null;
+    const y = tokens.reduce((sum, token) => sum + (Number(token.y) || 0), 0) / tokens.length;
+    const minX = Math.min(...tokens.map(token => token.x));
+    const optionPrefixIndex = tokens.findIndex(token => /^[a-eａ-ｅ][.．)）]?$/i.test(token.text));
+    const contentTokens = optionPrefixIndex >= 0 ? tokens.slice(optionPrefixIndex + 1) : tokens;
+    const contentMinX = contentTokens.length > 0 ? Math.min(...contentTokens.map(token => token.x)) : minX;
+    const maxHeight = Math.max(...tokens.map(token => Number(token.height) || 0), 0);
+    return { pageNum, y, minX, contentMinX, maxHeight };
+};
+
+export const isLikelyOptionContinuationLine = (previousLine, candidateLine) => {
+    const previous = getLineGeometry(previousLine);
+    const candidate = getLineGeometry(candidateLine);
+    if (!previous || !candidate) return true;
+    if (previous.pageNum !== null && candidate.pageNum !== null && previous.pageNum !== candidate.pageNum) return false;
+
+    const verticalGap = previous.y - candidate.y;
+    const maxLineGap = Math.max(26, previous.maxHeight * 2.4, candidate.maxHeight * 2.4);
+    if (verticalGap < -4 || verticalGap > maxLineGap) return false;
+
+    const alignmentTolerance = Math.max(28, previous.maxHeight * 2.6, candidate.maxHeight * 2.6);
+    return Math.abs(candidate.minX - previous.contentMinX) <= alignmentTolerance;
+};
+
 export const isStandaloneImageLegendText = (value) => {
     const text = String(value || '').replace(/[\s　]+/g, ' ').trim();
     if (!text || text.length > 50) return false;
@@ -96,6 +123,67 @@ export const compareImageReadingOrder = (a, b, rowTolerance = 20) => {
         || Math.abs(bottomDifference) <= rowTolerance;
     if (sameVisualRow) return (Number(a.x) || 0) - (Number(b.x) || 0);
     return topDifference;
+};
+
+export const buildSourceGridLayouts = (images = [], { columns = 12, rowTolerance = 20 } = {}) => {
+    if (images.length === 0) return [];
+
+    const layouts = new Array(images.length);
+    let rowOffset = 0;
+    const pageGroups = new Map();
+    images.forEach((image, index) => {
+        const page = Number(image?.page) || 0;
+        if (!pageGroups.has(page)) pageGroups.set(page, []);
+        pageGroups.get(page).push({ image, index });
+    });
+
+    [...pageGroups.entries()].sort(([firstPage], [secondPage]) => firstPage - secondPage).forEach(([, entries]) => {
+        const minX = Math.min(...entries.map(({ image }) => Number(image.x) || 0));
+        const maxX = Math.max(...entries.map(({ image }) => (Number(image.x) || 0) + (Number(image.w) || 0)));
+        const sourceWidth = Math.max(1, maxX - minX);
+        const rows = [];
+
+        // 行の開始位置は上端だけで決める。下端も行判定に使うと、左の縦長画像と
+        // 右下画像の下端が揃うレイアウトで、右上・右下が同じ行に潰れてしまう。
+        [...entries].sort((first, second) => compareImageReadingOrder(first.image, second.image, rowTolerance)).forEach(entry => {
+            const top = getImageVisualTop(entry.image);
+            const bottom = getImageVisualBottom(entry.image);
+            const row = rows.find(candidate => Math.abs(candidate.top - top) <= rowTolerance);
+            if (row) {
+                row.entries.push(entry);
+                row.top = Math.max(row.top, top);
+                row.bottom = Math.min(row.bottom, bottom);
+            } else {
+                rows.push({ top, bottom, entries: [entry] });
+            }
+        });
+
+        rows.sort((first, second) => second.top - first.top);
+        rows.forEach((row, rowIndex) => {
+            row.entries.sort((first, second) => (Number(first.image.x) || 0) - (Number(second.image.x) || 0));
+            row.entries.forEach(({ image, index }) => {
+                const relativeX = ((Number(image.x) || 0) - minX) / sourceWidth;
+                const relativeWidth = Math.max(0, Number(image.w) || 0) / sourceWidth;
+                const columnStart = Math.max(1, Math.min(columns, Math.round(relativeX * columns) + 1));
+                const columnSpan = Math.max(1, Math.min(columns - columnStart + 1, Math.round(relativeWidth * columns)));
+                const imageBottom = getImageVisualBottom(image);
+                const rowSpan = Math.max(1, rows.slice(rowIndex + 1).filter(candidate => (
+                    candidate.top > imageBottom + rowTolerance
+                )).length + 1);
+                layouts[index] = {
+                    type: 'source-grid',
+                    row: rowOffset + rowIndex + 1,
+                    rowSpan,
+                    columnStart,
+                    columnSpan,
+                    columns,
+                };
+            });
+        });
+        rowOffset += rows.length;
+    });
+
+    return layouts;
 };
 
 const getRectGap = (firstMin, firstMax, secondMin, secondMax) => {
