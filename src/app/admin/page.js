@@ -26,6 +26,7 @@ import {
     applyDiagnosticImportCorrection,
     assignNearestUniqueLabels,
     buildPairedOptionText,
+    compareImageReadingOrder,
     extractQuestionTable,
     extractOptionColumnHeaders,
     findNearestPrecedingQuestion,
@@ -35,6 +36,7 @@ import {
     isStandaloneImageLegendText,
     isUsableFallbackFigureCrop,
     joinOptionContinuation,
+    mergeVerticallyAdjacentImageRects,
     removeContainedImageRects,
     restoreTruncatedOptionText,
     splitOptionItemsByColumns,
@@ -207,25 +209,7 @@ const cleanLegendPrefix = (text) => {
     return cleaned;
 };
 
-const compareImportedImages = (a, b) => {
-    if (a.page !== b.page) return a.page - b.page;
-
-    const aFigureNumber = Number.isFinite(a.figureNumber) ? a.figureNumber : null;
-    const bFigureNumber = Number.isFinite(b.figureNumber) ? b.figureNumber : null;
-    if (
-        a.matchedQNum !== null
-        && b.matchedQNum !== null
-        && a.matchedQNum === b.matchedQNum
-        && aFigureNumber !== null
-        && bFigureNumber !== null
-        && aFigureNumber !== bFigureNumber
-    ) {
-        return aFigureNumber - bFigureNumber;
-    }
-
-    if (Math.abs(a.y - b.y) > 20) return b.y - a.y;
-    return a.x - b.x;
-};
+const compareImportedImages = compareImageReadingOrder;
 
 const resolveImportedImageLegend = (img) => {
     if (img.legendResolved) {
@@ -4167,7 +4151,7 @@ export default function AdminPage() {
                       }));
                       const effectiveRects = parserProfile.name === 'nuclear'
                           ? mergeNuclearImageRects(preMatchedRects)
-                          : removeContainedImageRects(preMatchedRects);
+                          : mergeVerticallyAdjacentImageRects(removeContainedImageRects(preMatchedRects));
 
                       const usedLegendTextKeys = new Set();
 
@@ -4247,7 +4231,7 @@ export default function AdminPage() {
                               return !usedLegendTextKeys.has(key) && !pageImageContainedTextKeys.has(key);
                           });
 
-                          const result = extractLegendForImage(rect, availableTextItems, limits, textItems);
+                          const result = extractLegendForImage(rect, availableTextItems, limits, textItems, parserProfile);
                           const legendStr = result.legendStr;
 
                           result.usedItems.forEach(item => {

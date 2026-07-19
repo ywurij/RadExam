@@ -5,6 +5,7 @@ import {
     applyDiagnosticImportCorrection,
     assignNearestUniqueLabels,
     buildPairedOptionText,
+    compareImageReadingOrder,
     extractQuestionTable,
     extractOptionColumnHeaders,
     findNearestPrecedingQuestion,
@@ -14,6 +15,7 @@ import {
     isStandaloneImageLegendText,
     isUsableFallbackFigureCrop,
     joinOptionContinuation,
+    mergeVerticallyAdjacentImageRects,
     repairLegacySequentialComparisonOptions,
     removeContainedImageRects,
     restoreTruncatedOptionText,
@@ -86,6 +88,64 @@ test('distinguishes a standalone image legend from wrapped option prose', () => 
     assert.equal(isStandaloneImageLegendText('造影CT'), true);
     assert.equal(isStandaloneImageLegendText('MRIで高信号を示す。'), false);
     assert.equal(isStandaloneImageLegendText('この画像で病変を認める。'), false);
+    assert.equal(isStandaloneImageLegendText('発症当日 発症10日後'), true);
+    assert.equal(isStandaloneImageLegendText('発症当日発症 10 日後'), true);
+    assert.equal(isStandaloneImageLegendText('3か月前 当日'), true);
+    assert.equal(isStandaloneImageLegendText('3 分後 15 分後'), true);
+    assert.equal(isStandaloneImageLegendText('手技前 手技直後'), true);
+    assert.equal(isStandaloneImageLegendText('負荷時 安静時'), true);
+    assert.equal(isStandaloneImageLegendText('治療半年後 L15 H3 H15'), true);
+    assert.equal(isStandaloneImageLegendText('L15 H3 H15'), true);
+    assert.equal(isStandaloneImageLegendText('L15'), true);
+    assert.equal(isStandaloneImageLegendText('時間放射能曲線'), true);
+    assert.equal(isStandaloneImageLegendText('門脈優位相 肝細胞相'), true);
+    assert.equal(isStandaloneImageLegendText('肝細胞相で低信号を示す。'), false);
+});
+
+test('does not restore a legend removed from the end of option e', () => {
+    assert.deepEqual(
+        restoreTruncatedOptionText(
+            { e: '悪性リンパ腫の形質転換' },
+            { e: '悪性リンパ腫の形質転換 治療半年後 L15 H3 H15' },
+        ),
+        { e: '悪性リンパ腫の形質転換' },
+    );
+    assert.deepEqual(
+        restoreTruncatedOptionText(
+            { e: 'HH15低値、LHL15低値' },
+            { e: 'HH15低値、LHL15低値 時間放射能曲線' },
+        ),
+        { e: 'HH15低値、LHL15低値' },
+    );
+});
+
+test('orders top-aligned images from left to right regardless of height', () => {
+    const images = [
+        { page: 18, x: 299, y: 430, w: 237, h: 156 },
+        { page: 18, x: 60, y: 326, w: 237, h: 260 },
+    ];
+
+    assert.deepEqual([...images].sort(compareImageReadingOrder).map(image => image.x), [60, 299]);
+});
+
+test('orders bottom-aligned images from left to right regardless of height', () => {
+    const images = [
+        { page: 61, x: 294.46, y: 287.4, w: 245.24, h: 282.84, legend: '術後' },
+        { page: 61, x: 55.69, y: 287.24, w: 243.6, h: 259.95, legend: '術前' },
+    ];
+
+    assert.deepEqual([...images].sort(compareImageReadingOrder).map(image => image.legend), ['術前', '術後']);
+});
+
+test('merges a vertically stacked image series while preserving a separate side image', () => {
+    const left = { x: 60, y: 257, w: 165, h: 308, matchedQNum: 72 };
+    const rightTop = { x: 227, y: 382, w: 308, h: 184, matchedQNum: 72 };
+    const rightBottom = { x: 227, y: 194, w: 308, h: 184, matchedQNum: 72 };
+    const result = mergeVerticallyAdjacentImageRects([rightTop, left, rightBottom]);
+
+    assert.equal(result.length, 2);
+    assert.equal(result.find(rect => rect.x === 227).h, 372);
+    assert.equal(result.find(rect => rect.x === 60), left);
 });
 
 test('converts consecutive positioned numeric rows into an HTML table', () => {

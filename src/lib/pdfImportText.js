@@ -49,7 +49,117 @@ export const isStandaloneImageLegendText = (value) => {
     if (/[。！？!?]$/.test(text)) return false;
     if (/(?:である|ではない|を示す|がみられる|を認める|を用いる|を行う)$/.test(text)) return false;
 
-    return /(?:CT|MRI|像|写真|図|シンチ|造影|エコー|DWI|FLAIR|PET)/i.test(text);
+    if (/(?:CT|MRI|像|写真|図|曲線|シンチ|造影|エコー|DWI|FLAIR|PET)/i.test(text)) {
+        return true;
+    }
+
+    // 選択肢の後に置かれる撮像時点・撮像相は、文章ではなく画像レジェンドとして扱う。
+    // 複数画像のレジェンドがPDF上で同じ行に並ぶ場合や、テキスト要素間に空白が
+    // 入らない場合（例: 「発症当日発症10日後」）にも対応する。
+    const compactText = text.replace(/[\s　]/g, '');
+    const temporalPoint = '(?:当日|直後|前|後|半(?:年|か月|ヶ月)(?:前|後)|[0-9０-９]+(?:分|時間|日|週|か月|ヶ月|月|年)(?:前|後)?)';
+    const temporalLegendSequence = new RegExp(`^(?:(?:負荷時|安静時)|(?:発症|治療|手技|術|撮像|検査)?${temporalPoint}[、,/・]*)+$`);
+    const temporalLegendWithPlotLabels = new RegExp(`^(?:発症|治療|手技|術|撮像|検査)?${temporalPoint}(?:[A-Za-z]+[0-9０-９]+)+$`);
+    const plotLabelSequence = /^(?:(?:H|L)[0-9０-９]+|(?:[A-Za-z]+[0-9０-９]+){2,})$/i;
+    const phaseLegendSequence = /^(?:(?:CT|MRI|EOB|造影)?(?:早期|後期|遅延|動脈|門脈|門脈優位|静脈|平衡|肝細胞|後期動脈)?相[、,/・]*)+$/i;
+
+    return temporalLegendSequence.test(compactText)
+        || temporalLegendWithPlotLabels.test(compactText)
+        || plotLabelSequence.test(compactText)
+        || phaseLegendSequence.test(compactText);
+};
+
+const getImageVisualTop = image => (Number(image?.y) || 0) + (Number(image?.h) || 0);
+const getImageVisualBottom = image => Number(image?.y) || 0;
+
+export const compareImageReadingOrder = (a, b, rowTolerance = 20) => {
+    if ((a.page ?? 0) !== (b.page ?? 0)) return (a.page ?? 0) - (b.page ?? 0);
+
+    const aFigureNumber = Number.isFinite(a.figureNumber) ? a.figureNumber : null;
+    const bFigureNumber = Number.isFinite(b.figureNumber) ? b.figureNumber : null;
+    if (
+        a.matchedQNum !== null
+        && b.matchedQNum !== null
+        && a.matchedQNum === b.matchedQNum
+        && aFigureNumber !== null
+        && bFigureNumber !== null
+        && aFigureNumber !== bFigureNumber
+    ) {
+        return aFigureNumber - bFigureNumber;
+    }
+
+    // PDFのyは画像下端を表す。高さの異なる左右画像は、上端または下端の
+    // どちらかが揃っていれば同じ行とみなし、PDF上の左右順を維持する。
+    const topDifference = getImageVisualTop(b) - getImageVisualTop(a);
+    const bottomDifference = getImageVisualBottom(b) - getImageVisualBottom(a);
+    const sameVisualRow = Math.abs(topDifference) <= rowTolerance
+        || Math.abs(bottomDifference) <= rowTolerance;
+    if (sameVisualRow) return (Number(a.x) || 0) - (Number(b.x) || 0);
+    return topDifference;
+};
+
+const getRectGap = (firstMin, firstMax, secondMin, secondMax) => {
+    if (firstMax < secondMin) return secondMin - firstMax;
+    if (secondMax < firstMin) return firstMin - secondMax;
+    return 0;
+};
+
+const unionImageRects = rects => {
+    const minX = Math.min(...rects.map(rect => rect.x));
+    const minY = Math.min(...rects.map(rect => rect.y));
+    const maxX = Math.max(...rects.map(rect => rect.x + rect.w));
+    const maxY = Math.max(...rects.map(rect => rect.y + rect.h));
+    const matchedQuestionNumbers = new Set(rects.map(rect => rect.matchedQNum).filter(Number.isFinite));
+
+    return {
+        ...rects[0],
+        x: minX,
+        y: minY,
+        w: maxX - minX,
+        h: maxY - minY,
+        matchedQNum: matchedQuestionNumbers.size === 1 ? [...matchedQuestionNumbers][0] : null,
+    };
+};
+
+export const mergeVerticallyAdjacentImageRects = (
+    rects = [],
+    { maxGap = 8, minHorizontalOverlapRatio = 0.85 } = {},
+) => {
+    if (rects.length <= 1) return rects;
+
+    const shouldMerge = (first, second) => {
+        const overlapX = Math.max(0, Math.min(first.x + first.w, second.x + second.w) - Math.max(first.x, second.x));
+        const minWidth = Math.min(first.w, second.w);
+        if (minWidth <= 0 || overlapX / minWidth < minHorizontalOverlapRatio) return false;
+
+        const verticalGap = getRectGap(first.y, first.y + first.h, second.y, second.y + second.h);
+        const overlapsVertically = Math.min(first.y + first.h, second.y + second.h) > Math.max(first.y, second.y);
+        return !overlapsVertically && verticalGap <= maxGap;
+    };
+
+    const visited = new Set();
+    const merged = [];
+    rects.forEach((rect, index) => {
+        if (visited.has(index)) return;
+        visited.add(index);
+        const stack = [index];
+        const cluster = [];
+
+        while (stack.length > 0) {
+            const currentIndex = stack.pop();
+            const current = rects[currentIndex];
+            cluster.push(current);
+            rects.forEach((candidate, candidateIndex) => {
+                if (visited.has(candidateIndex) || !shouldMerge(current, candidate)) return;
+                visited.add(candidateIndex);
+                stack.push(candidateIndex);
+            });
+        }
+
+        merged.push(cluster.length > 1 ? unionImageRects(cluster) : cluster[0]);
+    });
+
+    return merged;
 };
 
 export const isPairedOptionHeader = (text) => {
@@ -244,11 +354,19 @@ export const restoreTruncatedOptionText = (rebuiltOptions, originalOptions) => {
     Object.entries(originalOptions || {}).forEach(([key, originalText]) => {
         const rebuiltText = String(restored[key] || '').trim();
         const fullText = String(originalText || '').trim();
+        const removedSuffix = fullText.startsWith(rebuiltText)
+            ? fullText.slice(rebuiltText.length).trim()
+            : '';
 
         // 画像領域を除外して選択肢を再構築する際、PDF上で別テキスト要素に
         // 分かれた末尾（例: 「≧」に続く数字）だけが失われることがある。
         // 初回抽出結果が再構築結果の完全な続きになっている場合に限り復元する。
-        if (rebuiltText && fullText.length > rebuiltText.length && fullText.startsWith(rebuiltText)) {
+        if (
+            rebuiltText
+            && fullText.length > rebuiltText.length
+            && fullText.startsWith(rebuiltText)
+            && !isStandaloneImageLegendText(removedSuffix)
+        ) {
             restored[key] = fullText;
         }
     });
@@ -287,9 +405,6 @@ export const applyDiagnosticImportCorrection = (year, question) => {
     });
 
     switch (key) {
-        case '2021-69':
-            question.pageImages = setLegends(images.slice(0, 3), ['3分後', '15分後', '時間放射能曲線']);
-            break;
         case '2022-28':
             question.pageImages = setLegends(images.slice(0, 3), ['左前斜位頭側像', '左側面頭側像', '心下面から見た像']);
             break;
