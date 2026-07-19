@@ -22,6 +22,27 @@ function findFreePort(startPort, callback) {
   });
 }
 
+// npm run dev が既に動作中なら、Electron 開発版は同じサーバーを再利用する。
+// Next.js は同じプロジェクトで複数の dev サーバーを起動できないため、
+// ポートをずらして二重起動すると .next/dev/lock で停止してしまう。
+function checkServerAvailable(port, callback) {
+  let settled = false;
+  const finish = available => {
+    if (settled) return;
+    settled = true;
+    callback(available);
+  };
+  const request = http.get(`http://localhost:${port}`, res => {
+    res.resume();
+    finish(Boolean(res.statusCode && res.statusCode < 500));
+  });
+  request.setTimeout(1000, () => {
+    request.destroy();
+    finish(false);
+  });
+  request.on('error', () => finish(false));
+}
+
 // Next.js サーバーの起動
 function startNextServer(port, extraEnv = {}) {
   const isDev = !app.isPackaged;
@@ -108,11 +129,26 @@ function createWindow(port) {
 
 // Electron の初期化完了時に実行
 app.whenReady().then(async () => {
-  findFreePort(3000, (port) => {
-    serverPort = port;
-    startNextServer(port);
-    createWindow(port);
-  });
+  const launchOwnServer = () => findFreePort(3000, (port) => {
+      serverPort = port;
+      startNextServer(port);
+      createWindow(port);
+    });
+
+  if (!app.isPackaged) {
+    checkServerAvailable(3000, available => {
+      if (!available) {
+        launchOwnServer();
+        return;
+      }
+      serverPort = 3000;
+      console.log('[Electron] Reusing the existing Next.js dev server at http://localhost:3000');
+      createWindow(serverPort);
+    });
+    return;
+  }
+
+  launchOwnServer();
 });
 
 app.on('window-all-closed', () => {
