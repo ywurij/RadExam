@@ -4,6 +4,7 @@ import { useState, useMemo, useEffect, useRef } from 'react';
 import { getExamTypes, getYears, getGenres, initializeLocalExams } from '@/lib/data';
 import styles from './ExamSelector.module.scss';
 import { useRouter } from 'next/navigation';
+import { limitResumableSessions } from '@/lib/sessionHistory';
 
 export default function ExamSelector() {
     const router = useRouter();
@@ -64,11 +65,7 @@ export default function ExamSelector() {
         setDraggingExamId(null);
     };
 
-    const visibleSessions = useMemo(() => (
-        [...sessions]
-            .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))
-            .slice(0, 4)
-    ), [sessions]);
+    const visibleSessions = useMemo(() => limitResumableSessions(sessions), [sessions]);
 
     const isYearValidForExam = (examId, yearValue) => {
         if (!examId || yearValue === 'all' || yearValue === 'last3' || yearValue === 'last5') {
@@ -155,7 +152,9 @@ export default function ExamSelector() {
                 }
             }
 
-            setSessions(localSessions.filter((session) => session?.mode !== 'search'));
+            const limitedSessions = limitResumableSessions(localSessions);
+            localStorage.setItem(sessionsKey, JSON.stringify(limitedSessions));
+            setSessions(limitedSessions);
 
             // 前回設定のロード
             const lastSettings = localStorage.getItem('radexam_last_settings');

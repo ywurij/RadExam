@@ -115,22 +115,21 @@
     }
 }
 
-.imageGrid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 1.5rem;
-    margin-bottom: 2rem;
+.responsiveImageGrid {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: flex-start;
+    gap: 1rem;
+    width: 100%;
+    max-width: 760px;
+    margin: 0 auto 2rem;
 }
 
-.sourceImageGrid {
-    display: grid;
-    grid-template-columns: repeat(12, minmax(0, 1fr));
-    gap: 1.5rem 0.75rem;
-    align-items: start;
-    margin-bottom: 2rem;
-}
-
-.sourceImageGrid .imageWrapper {
+.responsiveImageGrid .imageWrapper {
+    flex: 0 1 var(--figure-width);
+    width: var(--figure-width);
+    max-width: 100%;
     min-width: 0;
 }
 
@@ -140,12 +139,17 @@
 
 .structuredFigureBody {
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-columns: auto auto auto;
     align-items: stretch;
+    justify-content: center;
+    width: fit-content;
+    max-width: 100%;
+    margin: 0 auto;
 }
 
 .structuredFigureBody > .thumbnail {
     grid-column: 2;
+    justify-self: center;
 }
 
 .figureSideLabels[data-position='left'] {
@@ -173,7 +177,7 @@
 .figureEdgeLabels {
     position: relative;
     height: 2rem;
-    margin: 0 5.5rem;
+    margin: 0;
     color: #2d3748;
     font-size: 1.125rem;
     text-align: center;
@@ -186,6 +190,16 @@
     }
 }
 
+.hasLeftLabels > .figureEdgeLabels,
+.hasLeftLabels > .legend {
+    margin-left: 5.5rem;
+}
+
+.hasRightLabels > .figureEdgeLabels,
+.hasRightLabels > .legend {
+    margin-right: 5.5rem;
+}
+
 /* Single Image Overrides */
 .singleGrid {
     display: flex !important;
@@ -195,7 +209,7 @@
 }
 
 .singleGrid .imageWrapper {
-    max-width: 600px;
+    max-width: 480px;
     /* Horizontal Limit */
     width: 100%;
     display: flex;
@@ -212,15 +226,18 @@
 .singleGrid .thumbnail {
     width: auto;
     max-width: 100%;
-    max-height: 50vh;
-    /* Vertical Limit */
+    max-height: clamp(180px, 26vh, 260px);
     object-fit: contain;
     /* Ensure aspect ratio */
 }
 
 .thumbnail {
-    width: 100%;
+    width: auto;
+    max-width: 100%;
     height: auto;
+    max-height: clamp(180px, 26vh, 260px);
+    object-fit: contain;
+    margin: 0 auto;
     border-radius: 0.5rem;
     transition: transform 0.2s;
     display: block;
@@ -228,6 +245,10 @@
     &:hover {
         transform: scale(1.02);
     }
+}
+
+.tallImageWrapper .thumbnail {
+    max-height: clamp(300px, 42vh, 400px);
 }
 
 .legend {
@@ -386,11 +407,12 @@
 
 .editImageGrid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
     gap: 0.8rem;
 }
 
 .editImageCard {
+    min-width: 0;
     padding: 0.6rem;
     border: 1px solid #cbd5e0;
     border-radius: 0.5rem;
@@ -400,6 +422,14 @@
     input { width: 100%; margin: 0.5rem 0; padding: 0.5rem; border: 1px solid #cbd5e0; border-radius: 0.35rem; }
     > div:last-child { display: flex; gap: 0.4rem; }
     button { flex: 1; padding: 0.4rem; border: 1px solid #3182ce; border-radius: 0.3rem; background: #fff; color: #2b6cb0; cursor: pointer; }
+}
+
+.optionsSection,
+.actionRow {
+    width: 100%;
+    max-width: 44rem;
+    margin-right: auto;
+    margin-left: auto;
 }
 
 .dragHandle {
@@ -889,11 +919,10 @@
 }
 
 .explanation {
-    width: calc(100vw - 2rem);
-    max-width: var(--page-max-width-wide);
-    margin: 0 0 1.5rem 50%;
+    width: 100%;
+    max-width: none;
+    margin: 0 0 1.5rem;
     padding: 2rem;
-    transform: translateX(-50%);
     background: #fff;
     border: 1px solid #e2e8f0;
     border-radius: 1rem;

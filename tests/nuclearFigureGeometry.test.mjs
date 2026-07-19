@@ -14,7 +14,6 @@ import {
     normalizeNuclearTextItemGeometry,
     resolveNuclearDisplayLegend
 } from '../src/lib/nuclearFigureGeometry.mjs';
-import { buildNuclearVlmPageRequest } from '../src/lib/nuclearVlmClient.js';
 
 const structuralObject = (id, type, x, y, w, h, extra = {}) => ({
     id,
@@ -368,46 +367,6 @@ test('keeps every image object on a rotated question page in one composite', () 
 
     assert.equal(result.complete, true);
     assert.deepEqual(result.groups.map(group => group.imageIds), [['I1', 'I2', 'I3', 'I4']]);
-});
-
-test('builds rotated structural request before generic object limit', () => {
-    const pageCanvas = { width: 1000, height: 1000 };
-    const viewport = {
-        scale: 1,
-        width: 1000,
-        height: 1000,
-        convertToViewportPoint: (x, y) => [x, 1000 - y]
-    };
-    const questionOwners = [{
-        questionNumber: 54,
-        items: [{ text: 'No. 54', x: 20, y: 940, width: 50, height: 12 }],
-        ownerTopY: 960,
-        ownerBottomY: 40,
-        ownerLeftX: -Infinity,
-        ownerRightX: Infinity
-    }];
-    const imageRects = Array.from({ length: 190 }, (_value, index) => ({
-        x: 80 + (index % 19) * 40,
-        y: 120 + Math.floor(index / 19) * 45,
-        w: 28,
-        h: 28
-    }));
-
-    const request = buildNuclearVlmPageRequest({
-        pageNumber: 25,
-        pageCanvas,
-        viewport,
-        imageRects,
-        textLines: [],
-        questionOwners,
-        forceQuestionComposite: true
-    });
-
-    assert.ok(request);
-    assert.equal(request.structuralGroupingComplete, true);
-    assert.equal(request.structuralGroups.length, 1);
-    assert.equal(request.structuralGroups[0].imageIds.length, 190);
-    assert.equal(request.imageDataUrl, '');
 });
 
 test('does not expand a crop into the next question anchor band', () => {

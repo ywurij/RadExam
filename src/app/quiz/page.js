@@ -7,6 +7,7 @@ import QuestionCard from '@/components/QuestionCard';
 import styles from './quiz.module.scss';
 import { saveLocalProgress, getLocalProgress, updateLocalQuestion, getExamPdfs } from '@/lib/localDb';
 import QuizResult from '@/components/QuizResult';
+import { limitResumableSessions } from '@/lib/sessionHistory';
 
 const generateUUID = () => {
     if (typeof window !== 'undefined' && window.crypto && window.crypto.randomUUID) {
@@ -226,48 +227,44 @@ function QuizContent() {
         loadData();
     }, [examId, yearFilter, countFilter, isShuffle, searchParams, statusFilter, idFilter, user, router, isSearchMode]);
 
-    // Save Session Effect
-    useEffect(() => {
-        if (!isSearchMode && questions.length > 0 && !isFinished && !isReviewing && sessionId) {
-            const sessionData = {
-                id: sessionId,
-                questionIds: questions.map(q => q.id),
-                currentIndex: currentIndex,
-                timestamp: Date.now(),
-                examId,
-                yearFilter,
-                countFilter,
-                statusFilter: searchParams.get('status') ? searchParams.get('status').split(',') : [],
-                genreFilter,
-                isShuffle,
-                mode: viewMode,
-                userId: user?.uid
-            };
+    const persistInterruptedSession = () => {
+        if (typeof window === 'undefined' || isSearchMode || questions.length === 0 || !sessionId) return;
 
-            const sessionsKey = 'radexam_sessions';
-            let localSessions = [];
-            if (typeof window !== 'undefined') {
-                const raw = localStorage.getItem(sessionsKey);
-                if (raw) {
-                    try {
-                        localSessions = JSON.parse(raw);
-                        if (!Array.isArray(localSessions)) localSessions = [];
-                    } catch(e) {
-                        localSessions = [];
-                    }
-                }
-                
-                const idx = localSessions.findIndex(s => s.id === sessionId);
-                if (idx !== -1) {
-                    localSessions[idx] = sessionData;
-                } else {
-                    localSessions.unshift(sessionData);
-                }
-                
-                localStorage.setItem(sessionsKey, JSON.stringify(localSessions));
-            }
+        const sessionsKey = 'radexam_sessions';
+        const sessionData = {
+            id: sessionId,
+            questionIds: questions.map(q => q.id),
+            currentIndex,
+            timestamp: Date.now(),
+            examId,
+            yearFilter,
+            countFilter,
+            statusFilter: searchParams.get('status') ? searchParams.get('status').split(',') : [],
+            genreFilter,
+            isShuffle,
+            mode: viewMode,
+            userId: user?.uid,
+            interrupted: true,
+        };
+
+        let localSessions = [];
+        try {
+            localSessions = JSON.parse(localStorage.getItem(sessionsKey) || '[]');
+            if (!Array.isArray(localSessions)) localSessions = [];
+        } catch {
+            localSessions = [];
         }
-    }, [questions, currentIndex, examId, isFinished, isReviewing, user, sessionId, yearFilter, countFilter, genreFilter, isShuffle, searchParams, isSearchMode, viewMode]);
+
+        const existingIndex = localSessions.findIndex(session => session.id === sessionId);
+        if (existingIndex >= 0) localSessions[existingIndex] = sessionData;
+        else localSessions.unshift(sessionData);
+        localStorage.setItem(sessionsKey, JSON.stringify(limitResumableSessions(localSessions)));
+    };
+
+    const handleInterrupt = () => {
+        persistInterruptedSession();
+        router.push('/');
+    };
 
     const handleUpdateStatus = async (qid, updates) => {
         const globalId = getGlobalQuestionId(examId, qid);
@@ -430,7 +427,7 @@ function QuizContent() {
                 ) : isSearchMode ? (
                     <button onClick={() => router.push('/search')} className={styles.backBtn}>← 検索に戻る</button>
                 ) : (
-                    <button onClick={() => router.push('/')} className={styles.backBtn}>← 中断</button>
+                    <button onClick={handleInterrupt} className={styles.backBtn}>← 中断</button>
                 )}
 
                 <div className={styles.progress}>

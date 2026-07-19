@@ -9,11 +9,6 @@ import adminStyles from './AdminEdit.module.scss';
 import { initializeLocalExams, getExamTypes } from '@/lib/data';
 import { saveLocalExam, deleteLocalExam, exportAllLocalData, importLocalData, getLocalExam, saveExamPdf, getExamPdfs } from '@/lib/localDb';
 import {
-    buildNuclearVlmPageRequest,
-    convertNuclearVlmResultToGroups,
-    requestNuclearVlmGrouping
-} from '@/lib/nuclearVlmClient';
-import {
     buildNuclearCanvasRotationPlan,
     detectNuclearContentRotation,
     extractPdfImageRectFromTransform,
@@ -51,6 +46,14 @@ import {
     splitOptionItemsByColumns,
     spreadPositionedLegendLabels,
 } from '@/lib/pdfImportText';
+
+// The former nuclear VLM workflow is retained under archive/nuclear-vlm only.
+// Nuclear imports now always use source-page references, so these legacy paths
+// remain unreachable while the surrounding generic PDF parser is kept intact.
+const ARCHIVED_NUCLEAR_VLM = false;
+const buildNuclearVlmPageRequest = () => null;
+const convertNuclearVlmResultToGroups = () => ({ groups: [], vlmGroupCount: 0, structuralGroupCount: 0, fallbackGroupCount: 0 });
+const requestNuclearVlmGrouping = async () => { throw new Error('核医学VLM機能はアーカイブされています。'); };
 
 const FOOTER_DASH_CLASS = 'ー―－\\-−–—';
 const FOOTER_PAGE_PATTERN = new RegExp(`^[${FOOTER_DASH_CLASS}]?\\s*[0-9０-９]+\\s*[${FOOTER_DASH_CLASS}]?$`);
@@ -2928,6 +2931,7 @@ export default function AdminPage() {
     }, []);
 
     useEffect(() => {
+        if (!ARCHIVED_NUCLEAR_VLM) return undefined;
         const api = window.radExamVlm;
         if (!api) return undefined;
         let active = true;
@@ -3356,7 +3360,7 @@ export default function AdminPage() {
             let nuclearRuleFallbackPageCount = 0;
             let nuclearStructuralPageCount = 0;
 
-            if (parserProfile.name === 'nuclear' && nuclearImportMode === 'figures' && nuclearVlmEnabled) {
+            if (ARCHIVED_NUCLEAR_VLM && parserProfile.name === 'nuclear' && nuclearImportMode === 'figures' && nuclearVlmEnabled) {
                 setPdfProgress({ current: 0, total: 0, status: 'ローカルVLMの接続とモデルを確認中...' });
                 const status = await checkNuclearVlmStatus();
                 nuclearVlmReady = Boolean(status.available);
@@ -5123,6 +5127,15 @@ export default function AdminPage() {
                                     </div>
 
                                     {examCategory === '3' && (
+                                        <div style={{ marginBottom: '1.5rem', padding: '1rem', background: '#fffaf0', borderRadius: '0.375rem', border: '1px solid #fbd38d' }}>
+                                            <div style={{ fontWeight: 800, color: '#7b341e', marginBottom: '0.45rem' }}>核医学画像の登録方式</div>
+                                            <div style={{ color: '#744210', lineHeight: 1.6 }}>
+                                                巻末図ページ参照方式で登録します。問題文中の別紙No.と一致する巻末ページを紐付け、問題文・選択肢のページは表示しません。
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {ARCHIVED_NUCLEAR_VLM && examCategory === '3' && (
                                         <div style={{
                                             marginBottom: '1.5rem',
                                             padding: '1rem',

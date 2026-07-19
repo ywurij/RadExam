@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Lightbox from 'yet-another-react-lightbox';
+import Zoom from 'yet-another-react-lightbox/plugins/zoom';
 import 'yet-another-react-lightbox/styles.css';
 import AnswerEditor from './AnswerEditor';
 import PdfClipper from './PdfClipper';
@@ -12,13 +13,6 @@ import styles from './QuestionCard.module.scss';
 import 'katex/dist/katex.min.css';
 
 const normalizeAnswer = value => Array.isArray(value) ? value : String(value || '').split(/[,、\s]+/).filter(Boolean);
-const isStructuredImageLayout = image => (
-    image?.layout?.type === 'source-grid'
-    && Number(image.layout.row) > 0
-    && Number(image.layout.columnStart) > 0
-    && Number(image.layout.columnSpan) > 0
-);
-
 const FigureLabels = ({ labels, position }) => {
     const matchingLabels = labels.filter(label => label.position === position);
     if (matchingLabels.length === 0) return null;
@@ -53,10 +47,39 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveQ
     const [selectedPdfKey, setSelectedPdfKey] = useState('');
     const [lightboxOpen, setLightboxOpen] = useState(false);
     const [lightboxIndex, setLightboxIndex] = useState(0);
+    const [imageDimensions, setImageDimensions] = useState({});
 
     const currentAnswer = question.answer || [];
     const currentImages = useMemo(() => question.images || [], [question.images]);
-    const hasStructuredLayout = currentImages.length > 1 && currentImages.every(isStructuredImageLayout);
+    const figureDisplay = useMemo(() => {
+        const figures = currentImages.map((image, index) => {
+        const dimensions = imageDimensions[`${question.id}:${index}`];
+        const aspect = dimensions?.width && dimensions?.height ? dimensions.width / dimensions.height : 1;
+        const isTall = aspect < 0.75;
+        const imageWidth = Math.min(340, Math.max(120, Math.round((isTall ? 400 : 260) * aspect)));
+        const labels = Array.isArray(image.legendLayout?.labels) ? image.legendLayout.labels : [];
+        const sideLabelWidth = (labels.some(label => label.position === 'left') ? 88 : 0)
+            + (labels.some(label => label.position === 'right') ? 88 : 0);
+            return { imageWidth, isTall, sideLabelWidth, width: imageWidth + sideLabelWidth };
+        });
+
+        if (figures.length >= 2 && figures.length <= 3) {
+            const availableWidth = 760 - (figures.length - 1) * 16;
+            const totalWidth = figures.reduce((sum, figure) => sum + figure.width, 0);
+            if (totalWidth > availableWidth) {
+                const sideLabelWidth = figures.reduce((sum, figure) => sum + figure.sideLabelWidth, 0);
+                const imageWidth = figures.reduce((sum, figure) => sum + figure.imageWidth, 0);
+                const scale = Math.max(0, (availableWidth - sideLabelWidth) / imageWidth);
+                if (figures.every(figure => figure.isTall || figure.imageWidth * scale >= 180)) {
+                    return figures.map(figure => ({
+                        ...figure,
+                        width: Math.floor(figure.imageWidth * scale) + figure.sideLabelWidth
+                    }));
+                }
+            }
+        }
+        return figures;
+    }, [currentImages, imageDimensions, question.id]);
     const currentOptions = question.options || {};
     const maxSelection = getSelectionCount(question.question || '', currentAnswer);
     const slides = useMemo(() => currentImages.map(img => ({ src: img.path?.startsWith('data:') ? img.path : `/${img.path}` })), [currentImages]);
@@ -253,18 +276,29 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveQ
                     <>
                         <div className={styles.questionSection} style={{ marginBottom: '1.5rem' }}><div className={styles.questionText} dangerouslySetInnerHTML={{ __html: question.question || '' }} /></div>
                         <QuestionSourcePages sourcePages={question.sourcePages || []} pdfFiles={pdfFiles} />
-                        {currentImages.length > 0 && <div className={`${hasStructuredLayout ? styles.sourceImageGrid : styles.imageGrid} ${currentImages.length === 1 ? styles.singleGrid : ''}`}>{currentImages.map((img, idx) => {
+                        {currentImages.length > 0 && <div className={`${styles.responsiveImageGrid} ${currentImages.length === 1 ? styles.singleGrid : ''}`}>{currentImages.map((img, idx) => {
                             const labels = Array.isArray(img.legendLayout?.labels) ? img.legendLayout.labels : [];
-                            const structuredStyle = hasStructuredLayout ? {
-                                gridColumn: `${img.layout.columnStart} / span ${img.layout.columnSpan}`,
-                                gridRow: `${img.layout.row} / span ${img.layout.rowSpan || 1}`
-                            } : undefined;
+                            const hasLeftLabels = labels.some(label => label.position === 'left');
+                            const hasRightLabels = labels.some(label => label.position === 'right');
+                            const structuredStyle = { '--figure-width': `${figureDisplay[idx].width}px` };
                             const displayedLegend = img.legendLayout ? img.legendLayout.title : img.legend;
-                            return <div key={idx} className={styles.imageWrapper} style={structuredStyle} onClick={() => { setLightboxIndex(idx); setLightboxOpen(true); }}>
+                            const wrapperClassName = `${styles.imageWrapper} ${hasLeftLabels ? styles.hasLeftLabels : ''} ${hasRightLabels ? styles.hasRightLabels : ''} ${figureDisplay[idx].isTall ? styles.tallImageWrapper : ''}`;
+                            return <div key={idx} className={wrapperClassName} style={structuredStyle} onClick={() => { setLightboxIndex(idx); setLightboxOpen(true); }}>
                                 <FigureLabels labels={labels} position="top" />
                                 <div className={styles.structuredFigureBody}>
                                     <FigureLabels labels={labels} position="left" />
-                                    <img src={img.path?.startsWith('data:') ? img.path : `/${img.path}`} alt={img.legend || `Image ${idx + 1}`} className={styles.thumbnail} />
+                                    <img
+                                        src={img.path?.startsWith('data:') ? img.path : `/${img.path}`}
+                                        alt={img.legend || `Image ${idx + 1}`}
+                                        className={styles.thumbnail}
+                                        onLoad={event => {
+                                            const { naturalWidth: width, naturalHeight: height } = event.currentTarget;
+                                            const dimensionKey = `${question.id}:${idx}`;
+                                            setImageDimensions(previous => previous[dimensionKey]?.width === width && previous[dimensionKey]?.height === height
+                                                ? previous
+                                                : { ...previous, [dimensionKey]: { width, height } });
+                                        }}
+                                    />
                                     <FigureLabels labels={labels} position="right" />
                                 </div>
                                 <FigureLabels labels={labels} position="bottom" />
@@ -279,7 +313,14 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveQ
 
             {showAnswer && !isEditing && <><div className={styles.explanation}><div className={styles.expHeader}><h3>解説</h3>{!isEditingExplanation && <button onClick={() => { setEditExplanation(question.explanation || ''); setIsEditingExplanation(true); }} className={styles.iconEditBtn} title="解説を編集">✎</button>}</div>{isEditingExplanation ? <div className={styles.editorWrapper}><AnswerEditor content={editExplanation} onChange={setEditExplanation} /><div className={styles.editActions}><button onClick={() => setIsEditingExplanation(false)} className={styles.cancelBtn}>キャンセル</button><button onClick={saveExplanation} className={styles.saveBtn}>保存</button></div></div> : <div className={`richTextContent ${styles.richTextContent}`} dangerouslySetInnerHTML={{ __html: question.explanation || '解説がありません' }} />}</div><div className={styles.genreArea}>{isEditingGenre ? <div className={styles.genreEdit}><span className={styles.label}>ジャンル:</span><input className={styles.fullWidthInput} value={editGenre} onChange={event => setEditGenre(event.target.value)} list="question-genres" /><datalist id="question-genres">{availableGenres?.map(genre => <option key={genre} value={genre} />)}</datalist><div className={styles.editActions}><button onClick={() => setIsEditingGenre(false)} className={styles.cancelBtn}>キャンセル</button><button onClick={saveGenre} className={styles.saveBtn}>保存</button></div></div> : <><div className={styles.genreContent}><span className={styles.label}>ジャンル:</span><div className={styles.genreTags}>{(Array.isArray(question.genre) ? question.genre : (question.genre || '未設定').split(/[,、\s]+/)).map((genre, index) => genre && <span key={index} className={styles.genreBadge}>{genre}</span>)}</div></div><button onClick={() => { setEditGenre(Array.isArray(question.genre) ? question.genre.join(', ') : (question.genre || '')); setIsEditingGenre(true); }} className={styles.iconEditBtn} title="ジャンルを編集">✎</button></>}</div></>}
 
-            <Lightbox open={lightboxOpen} close={() => setLightboxOpen(false)} index={lightboxIndex} slides={slides} />
+            <Lightbox
+                open={lightboxOpen}
+                close={() => setLightboxOpen(false)}
+                index={lightboxIndex}
+                slides={slides}
+                plugins={[Zoom]}
+                zoom={{ maxZoomPixelRatio: 5, scrollToZoom: true }}
+            />
         </div>
     );
 }

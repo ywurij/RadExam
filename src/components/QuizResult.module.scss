@@ -1,5 +1,5 @@
 .container {
-    max-width: 800px;
+    max-width: var(--page-max-width-wide);
     margin: 0 auto;
     padding: 2rem;
     text-align: center;

@@ -1,21 +1,10 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow } = require('electron');
 const { spawn } = require('child_process');
 const path = require('path');
 const http = require('http');
 const fs = require('fs');
-const { startEmbeddedVlm } = require('./vlm-sidecar');
-const {
-  getVlmInstallStatus,
-  installPinnedVlmModel,
-  pausePinnedVlmModelDownload,
-  removePinnedVlmModel,
-  selectPinnedVlmModel
-} = require('./vlm-assets');
 
 let nextProcess = null;
-let vlmProcess = null;
-let vlmInstallPromise = null;
-let vlmInstallController = null;
 let mainWindow = null;
 let serverPort = 3000;
 
@@ -119,44 +108,9 @@ function createWindow(port) {
 
 // Electron の初期化完了時に実行
 app.whenReady().then(async () => {
-  const projectPath = app.getAppPath();
-  ipcMain.handle('vlm:get-status', () => getVlmInstallStatus({ app, projectPath }));
-  ipcMain.handle('vlm:install', async (_event, modelId) => {
-    if (vlmInstallPromise) return vlmInstallPromise;
-    try {
-      vlmInstallController = new AbortController();
-      vlmInstallPromise = installPinnedVlmModel({
-        app,
-        projectPath,
-        modelId,
-        signal: vlmInstallController.signal,
-        onProgress: progress => mainWindow?.webContents.send('vlm:progress', progress)
-      });
-      return await vlmInstallPromise;
-    } catch (error) {
-      mainWindow?.webContents.send('vlm:progress', { state: 'error', message: error.message });
-      throw error;
-    } finally {
-      vlmInstallPromise = null;
-      vlmInstallController = null;
-    }
-  });
-  ipcMain.handle('vlm:pause', () => {
-    pausePinnedVlmModelDownload(vlmInstallController);
-    return { pausing: Boolean(vlmInstallController) };
-  });
-  ipcMain.handle('vlm:select', (_event, modelId) => selectPinnedVlmModel({ app, projectPath, modelId }));
-  ipcMain.handle('vlm:remove', (_event, modelId) => removePinnedVlmModel({ app, projectPath, modelId }));
-  ipcMain.handle('vlm:restart', () => {
-    app.relaunch();
-    app.exit(0);
-  });
-
-  const embeddedVlm = await startEmbeddedVlm({ app, projectPath });
-  vlmProcess = embeddedVlm?.process || null;
   findFreePort(3000, (port) => {
     serverPort = port;
-    startNextServer(port, embeddedVlm?.env || {});
+    startNextServer(port);
     createWindow(port);
   });
 });
@@ -175,13 +129,6 @@ app.on('will-quit', () => {
       spawn('taskkill', ['/pid', nextProcess.pid, '/f', '/t']);
     } else {
       nextProcess.kill('SIGTERM');
-    }
-  }
-  if (vlmProcess) {
-    if (process.platform === 'win32') {
-      spawn('taskkill', ['/pid', vlmProcess.pid, '/f', '/t']);
-    } else {
-      vlmProcess.kill('SIGTERM');
     }
   }
 });

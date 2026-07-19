@@ -51,7 +51,7 @@
 
 .labelRow {
     display: grid;
-    grid-template-columns: minmax(100px, 1fr) 64px minmax(120px, 0.8fr) 32px;
+    grid-template-columns: minmax(0, 1fr) 64px 32px;
     align-items: center;
     gap: 0.4rem;
 
@@ -67,6 +67,8 @@
 
 .offsetField {
     display: grid;
+    grid-column: 1 / -1;
+    grid-row: 2;
     grid-template-columns: auto minmax(50px, 1fr);
     align-items: center;
     gap: 0.35rem;
@@ -75,6 +77,7 @@
     white-space: nowrap;
 
     input {
+        min-width: 7.5rem;
         width: 100%;
     }
 }
@@ -108,10 +111,5 @@
 @media (max-width: 700px) {
     .labelRow {
         grid-template-columns: minmax(0, 1fr) 60px 32px;
-    }
-
-    .offsetField {
-        grid-column: 1 / -1;
-        grid-row: 2;
     }
 }

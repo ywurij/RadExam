@@ -6,7 +6,7 @@ import {
     getNuclearTextQuestionAnchorId,
     mergeNuclearImageFragments,
     resolveNuclearDisplayLegend
-} from './nuclearFigureGeometry.mjs';
+} from '../../../../src/lib/nuclearFigureGeometry.mjs';
 
 const MIN_GROUP_CONFIDENCE = 0.45;
 const MAX_TEXT_OBJECTS = 120;
