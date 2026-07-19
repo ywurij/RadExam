@@ -158,9 +158,9 @@
 
 .figureSideLabels {
     position: relative;
-    min-width: 2.25rem;
-    color: #4a5568;
-    font-size: 0.75rem;
+    min-width: 5.5rem;
+    color: #2d3748;
+    font-size: 1.125rem;
 
     span {
         position: absolute;
@@ -172,10 +172,10 @@
 
 .figureEdgeLabels {
     position: relative;
-    height: 1.5rem;
-    margin: 0 2.25rem;
-    color: #4a5568;
-    font-size: 0.75rem;
+    height: 2rem;
+    margin: 0 5.5rem;
+    color: #2d3748;
+    font-size: 1.125rem;
     text-align: center;
 
     span {
@@ -203,6 +203,12 @@
     align-items: center;
 }
 
+.singleGrid .figureEdgeLabels {
+    align-self: stretch;
+    width: auto;
+    box-sizing: border-box;
+}
+
 .singleGrid .thumbnail {
     width: auto;
     max-width: 100%;
@@ -226,8 +232,8 @@
 
 .legend {
     margin-top: 0.5rem;
-    font-size: 0.875rem;
-    color: #718096;
+    font-size: 1.125rem;
+    color: #2d3748;
     text-align: center;
 }
 

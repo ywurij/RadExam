@@ -43,6 +43,164 @@ export const joinOptionContinuation = (optionText, continuationText) => (
         .join(' ')
 );
 
+export const shouldConsumeOptionColumnHeaders = (headers = [], optionsStarted = false) => (
+    Array.isArray(headers) && headers.length >= 2 && !optionsStarted
+);
+
+export const isLikelyLegendContinuationText = (value, previousValue = '') => {
+    const text = String(value || '').trim();
+    const previousText = String(previousValue || '').trim();
+    if (!text || !previousText) return false;
+
+    return /^(?:\([^()]+\)|（[^（）]+）|\[[^\[\]]+\]|［[^［］]+］)$/.test(text);
+};
+
+const hasUnclosedLegendBracket = (value) => {
+    const text = String(value || '');
+    const pairs = [
+        ['(', ')'],
+        ['（', '）'],
+        ['[', ']'],
+        ['［', '］'],
+    ];
+    return pairs.some(([opening, closing]) => (
+        text.split(opening).length - 1 > text.split(closing).length - 1
+    ));
+};
+
+export const groupNearbyLegendItems = (
+    items = [],
+    { lineTolerance = 4, minimumSplitGap = 18, gapHeightRatio = 2.2 } = {},
+) => {
+    const tokens = meaningfulItems(items).map(item => ({
+        ...item,
+        y: Number(item.y) || 0,
+        height: Number(item.height) || 0,
+    }));
+    const lines = [];
+
+    // 基準行を先に作り、上付き・下付きの小さい文字を後から近接行へ結合する。
+    [...tokens].sort((first, second) => (
+        second.height - first.height || second.y - first.y || first.x - second.x
+    )).forEach(token => {
+        const line = lines.find(candidate => (
+            Math.abs(candidate.y - token.y) <= lineTolerance
+            || candidate.items.some(item => {
+                const horizontalGap = getRectGap(
+                    Number(item.x) || 0,
+                    (Number(item.x) || 0) + (Number(item.width) || 0),
+                    Number(token.x) || 0,
+                    (Number(token.x) || 0) + (Number(token.width) || 0),
+                );
+                const itemCenterY = (Number(item.y) || 0) + (Number(item.height) || 0) / 2;
+                const tokenCenterY = token.y + token.height / 2;
+                const compatibleHeight = Math.max(Number(item.height) || 0, token.height, 1);
+                return horizontalGap <= 12 && Math.abs(itemCenterY - tokenCenterY) <= compatibleHeight * 0.8;
+            })
+        ));
+        if (line) {
+            line.items.push(token);
+            line.y = line.items.reduce((sum, item) => sum + item.y, 0) / line.items.length;
+        } else {
+            lines.push({ y: token.y, items: [token] });
+        }
+    });
+
+    return lines.flatMap(line => {
+        const sorted = [...line.items].sort((first, second) => first.x - second.x);
+        const groups = [];
+        sorted.forEach(token => {
+            const group = groups[groups.length - 1];
+            if (!group) {
+                groups.push([token]);
+                return;
+            }
+            const previous = group[group.length - 1];
+            const gap = token.x - (previous.x + previous.width);
+            const height = Math.max(token.height, previous.height, 1);
+            const splitThreshold = Math.max(minimumSplitGap, height * gapHeightRatio);
+            const groupText = group.map(item => item.text).join('');
+            const keepsParentheticalContinuation = hasUnclosedLegendBracket(groupText)
+                && gap <= Math.max(64, height * 6);
+            if (gap > splitThreshold && !keepsParentheticalContinuation) {
+                groups.push([token]);
+            } else {
+                group.push(token);
+            }
+        });
+
+        return groups.map(group => {
+            const minX = Math.min(...group.map(item => item.x));
+            const maxX = Math.max(...group.map(item => item.x + item.width));
+            const minY = Math.min(...group.map(item => item.y));
+            const maxY = Math.max(...group.map(item => item.y + item.height));
+            return {
+                items: group,
+                x: minX,
+                y: minY,
+                width: maxX - minX,
+                height: maxY - minY,
+                text: group.map(item => item.text).join('').trim(),
+            };
+        });
+    });
+};
+
+export const hasSingleNearbyLegendGroup = (items = []) => (
+    groupNearbyLegendItems(items).length === 1
+);
+
+export const hasNearbyOptionPrefix = (item, allItems = [], maxGap = 24) => {
+    if (!item) return false;
+    const optionPattern = /^[a-eA-Eａ-ｅＡ-Ｅ][.．\s)）]?$/;
+    return allItems.some(other => {
+        const gap = (Number(item.x) || 0) - ((Number(other.x) || 0) + (Number(other.width) || 0));
+        return Math.abs((Number(other.y) || 0) - (Number(item.y) || 0)) <= 3
+            && gap >= 0
+            && gap <= maxGap
+            && optionPattern.test(String(other.text || '').trim());
+    });
+};
+
+export const spreadPositionedLegendLabels = (labels = [], minimumSeparation = 0.12) => {
+    const result = labels.map(label => ({ ...label }));
+    const positions = new Map();
+    result.forEach((label, index) => {
+        const position = String(label.position || 'bottom');
+        if (!positions.has(position)) positions.set(position, []);
+        positions.get(position).push({ label, index, offset: Math.max(0, Math.min(1, Number(label.offset) || 0)) });
+    });
+
+    positions.forEach(entries => {
+        entries.sort((first, second) => first.offset - second.offset || first.index - second.index);
+        let cluster = [];
+        const flushCluster = () => {
+            if (cluster.length <= 1) {
+                cluster = [];
+                return;
+            }
+            const center = cluster.reduce((sum, entry) => sum + entry.offset, 0) / cluster.length;
+            const firstOffset = Math.max(0.05, Math.min(
+                0.95 - minimumSeparation * (cluster.length - 1),
+                center - minimumSeparation * (cluster.length - 1) / 2,
+            ));
+            cluster.forEach((entry, index) => {
+                result[entry.index].offset = firstOffset + minimumSeparation * index;
+            });
+            cluster = [];
+        };
+
+        entries.forEach(entry => {
+            const previous = cluster[cluster.length - 1];
+            if (previous && entry.offset - previous.offset >= minimumSeparation) flushCluster();
+            cluster.push(entry);
+        });
+        flushCluster();
+    });
+
+    return result;
+};
+
 const getLineGeometry = (items = []) => {
     const tokens = meaningfulItems(items);
     if (tokens.length === 0) return null;
@@ -163,9 +321,10 @@ export const buildSourceGridLayouts = (images = [], { columns = 12, rowTolerance
             row.entries.sort((first, second) => (Number(first.image.x) || 0) - (Number(second.image.x) || 0));
             row.entries.forEach(({ image, index }) => {
                 const relativeX = ((Number(image.x) || 0) - minX) / sourceWidth;
-                const relativeWidth = Math.max(0, Number(image.w) || 0) / sourceWidth;
                 const columnStart = Math.max(1, Math.min(columns, Math.round(relativeX * columns) + 1));
-                const columnSpan = Math.max(1, Math.min(columns - columnStart + 1, Math.round(relativeWidth * columns)));
+                const relativeEnd = (((Number(image.x) || 0) + (Number(image.w) || 0)) - minX) / sourceWidth;
+                const columnEnd = Math.max(columnStart, Math.min(columns, Math.round(relativeEnd * columns)));
+                const columnSpan = columnEnd - columnStart + 1;
                 const imageBottom = getImageVisualBottom(image);
                 const rowSpan = Math.max(1, rows.slice(rowIndex + 1).filter(candidate => (
                     candidate.top > imageBottom + rowTolerance
@@ -216,6 +375,7 @@ export const mergeVerticallyAdjacentImageRects = (
     if (rects.length <= 1) return rects;
 
     const shouldMerge = (first, second) => {
+        if (first.preserveCompositeRow || second.preserveCompositeRow || first.preserveGridCell || second.preserveGridCell) return false;
         const overlapX = Math.max(0, Math.min(first.x + first.w, second.x + second.w) - Math.max(first.x, second.x));
         const minWidth = Math.min(first.w, second.w);
         if (minWidth <= 0 || overlapX / minWidth < minHorizontalOverlapRatio) return false;
@@ -248,6 +408,111 @@ export const mergeVerticallyAdjacentImageRects = (
     });
 
     return merged;
+};
+
+export const mergeTwoByTwoImageGridRects = (
+    rects = [],
+    { rowTolerance = 20, columnTolerance = 20, textItems = [] } = {},
+) => {
+    if (rects.length < 4) return rects;
+
+    const ownerGroups = new Map();
+    rects.forEach((rect, index) => {
+        const owner = rect.matchedQNum ?? (rects.length === 4 ? '__single-page-grid__' : `__unmatched-${index}`);
+        if (!ownerGroups.has(owner)) ownerGroups.set(owner, []);
+        ownerGroups.get(owner).push({ rect, index });
+    });
+
+    const mergedIndexes = new Set();
+    const mergedByFirstIndex = new Map();
+    ownerGroups.forEach(entries => {
+        if (entries.length !== 4) return;
+        const averageHeight = entries.reduce((sum, { rect }) => sum + (Number(rect.h) || 0), 0) / 4;
+        const effectiveRowTolerance = Math.max(rowTolerance, averageHeight * 0.12);
+        const rows = [];
+
+        [...entries].sort((first, second) => getImageVisualTop(second.rect) - getImageVisualTop(first.rect)).forEach(entry => {
+            const top = getImageVisualTop(entry.rect);
+            const row = rows.find(candidate => Math.abs(candidate.top - top) <= effectiveRowTolerance);
+            if (row) row.entries.push(entry);
+            else rows.push({ top, entries: [entry] });
+        });
+        rows.sort((first, second) => second.top - first.top);
+        if (rows.length !== 2 || rows.some(row => row.entries.length !== 2)) return;
+
+        rows.forEach(row => row.entries.sort((first, second) => first.rect.x - second.rect.x));
+        const [topLeft, topRight] = rows[0].entries;
+        const [bottomLeft, bottomRight] = rows[1].entries;
+        const leftAligned = Math.abs(topLeft.rect.x - bottomLeft.rect.x) <= columnTolerance;
+        const rightAligned = Math.abs(topRight.rect.x - bottomRight.rect.x) <= columnTolerance;
+        const horizontalGap = Math.min(
+            getRectGap(topLeft.rect.x, topLeft.rect.x + topLeft.rect.w, topRight.rect.x, topRight.rect.x + topRight.rect.w),
+            getRectGap(bottomLeft.rect.x, bottomLeft.rect.x + bottomLeft.rect.w, bottomRight.rect.x, bottomRight.rect.x + bottomRight.rect.w),
+        );
+        const verticalGap = Math.min(
+            getRectGap(topLeft.rect.y, topLeft.rect.y + topLeft.rect.h, bottomLeft.rect.y, bottomLeft.rect.y + bottomLeft.rect.h),
+            getRectGap(topRight.rect.y, topRight.rect.y + topRight.rect.h, bottomRight.rect.y, bottomRight.rect.y + bottomRight.rect.h),
+        );
+        const averageWidth = entries.reduce((sum, { rect }) => sum + (Number(rect.w) || 0), 0) / 4;
+        if (
+            !leftAligned
+            || !rightAligned
+            || horizontalGap > Math.max(36, averageWidth * 0.35)
+            || verticalGap > Math.max(36, averageHeight * 0.35)
+        ) return;
+
+        const gridMinX = Math.min(...entries.map(({ rect }) => rect.x));
+        const gridMaxX = Math.max(...entries.map(({ rect }) => rect.x + rect.w));
+        const bottomRowTop = Math.max(...rows[1].entries.map(({ rect }) => rect.y + rect.h));
+        const topRowBottom = Math.min(...rows[0].entries.map(({ rect }) => rect.y));
+        const betweenRowItems = textItems.filter(item => {
+            const centerX = (Number(item.x) || 0) + (Number(item.width) || 0) / 2;
+            const centerY = (Number(item.y) || 0) + (Number(item.height) || 0) / 2;
+            return centerX >= gridMinX
+                && centerX <= gridMaxX
+                && centerY >= bottomRowTop
+                && centerY <= topRowBottom;
+        });
+        const betweenRowGroups = groupNearbyLegendItems(betweenRowItems);
+        const sideMargin = Math.max(60, averageWidth * 0.5);
+        const sideRowItems = textItems.filter(item => {
+            const centerX = (Number(item.x) || 0) + (Number(item.width) || 0) / 2;
+            const centerY = (Number(item.y) || 0) + (Number(item.height) || 0) / 2;
+            const gridMinY = Math.min(...entries.map(({ rect }) => rect.y));
+            const gridMaxY = Math.max(...entries.map(({ rect }) => rect.y + rect.h));
+            return centerX < gridMinX
+                && centerX >= gridMinX - sideMargin
+                && centerY >= gridMinY
+                && centerY <= gridMaxY;
+        });
+        const sideRowGroups = groupNearbyLegendItems(sideRowItems);
+        const hasBetweenRowCaptions = betweenRowGroups.length >= 2;
+        const preserveRows = hasBetweenRowCaptions && sideRowGroups.length >= 2;
+
+        const indexes = entries.map(entry => entry.index).sort((first, second) => first - second);
+        if (preserveRows) {
+            rows.forEach(row => {
+                const rowIndexes = row.entries.map(entry => entry.index).sort((first, second) => first - second);
+                mergedByFirstIndex.set(rowIndexes[0], {
+                    ...unionImageRects(row.entries.map(entry => entry.rect)),
+                    preserveCompositeRow: true,
+                });
+            });
+        } else if (!hasBetweenRowCaptions) {
+            mergedByFirstIndex.set(indexes[0], unionImageRects(entries.map(entry => entry.rect)));
+        } else {
+            entries.forEach(entry => {
+                mergedByFirstIndex.set(entry.index, { ...entry.rect, preserveGridCell: true });
+            });
+        }
+        indexes.forEach(index => mergedIndexes.add(index));
+    });
+
+    return rects.flatMap((rect, index) => {
+        if (mergedByFirstIndex.has(index)) return [mergedByFirstIndex.get(index)];
+        if (mergedIndexes.has(index)) return [];
+        return [rect];
+    });
 };
 
 export const isPairedOptionHeader = (text) => {
@@ -316,7 +581,12 @@ export const extractQuestionTable = (lineEntries) => {
             const numericItems = items.filter(item => numericCellPattern.test(item.text));
             return { index, items, numericItems };
         })
-        .filter(row => row.numericItems.length >= 3);
+        .filter(row => (
+            row.numericItems.length >= 3
+            // 問題文中の年齢・検査値・撮像条件など、数値を複数含む文章を
+            // 数値表として誤認しない。実表は見出しを含め各行の主体が数値セルになる。
+            && row.numericItems.length >= Math.ceil(row.items.length / 2)
+        ));
 
     if (tableRows.length < 2) return { lineIndexes: new Set(), html: '' };
 
@@ -475,88 +745,4 @@ export const repairLegacySequentialComparisonOptions = (options) => {
         ...repaired,
         [key]: `${comparisonMark}${index + 1}`,
     }), { ...(options || {}) });
-};
-
-const setLegends = (images, legends) => images.map((image, index) => ({
-    ...image,
-    legend: legends[index] ?? image.legend,
-    detectedLegend: legends[index] ?? image.detectedLegend,
-    displayLegend: legends[index] ?? image.displayLegend,
-    legendResolved: legends[index] !== undefined ? true : image.legendResolved,
-}));
-
-export const applyDiagnosticImportCorrection = (year, question) => {
-    const key = `${year}-${question.questionNumber}`;
-    const images = [...(question.pageImages || [])].sort((a, b) => {
-        if (Math.abs((b.y || 0) - (a.y || 0)) > 20) return (b.y || 0) - (a.y || 0);
-        return (a.x || 0) - (b.x || 0);
-    });
-
-    switch (key) {
-        case '2022-28':
-            question.pageImages = setLegends(images.slice(0, 3), ['左前斜位頭側像', '左側面頭側像', '心下面から見た像']);
-            break;
-        case '2022-43': {
-            const centerX = images.reduce((sum, image) => sum + (image.x || 0), 0) / Math.max(1, images.length);
-            question.pageImages = images.map(image => ({
-                ...image,
-                legend: (image.x || 0) < centerX ? '横断像' : '冠状断像',
-                detectedLegend: (image.x || 0) < centerX ? '横断像' : '冠状断像',
-                displayLegend: (image.x || 0) < centerX ? '横断像' : '冠状断像',
-                legendResolved: true,
-            }));
-            break;
-        }
-        case '2022-54':
-            question.pageImages = setLegends(images.slice(0, 2), ['カラードップラー超音波像', '単純CT']);
-            break;
-        case '2022-59':
-            question.pageImages = setLegends(images.slice(0, 2), ['A', 'B']);
-            break;
-        case '2022-63': {
-            const centerX = images.reduce((sum, image) => sum + (image.x || 0), 0) / Math.max(1, images.length);
-            const centerY = images.reduce((sum, image) => sum + (image.y || 0), 0) / Math.max(1, images.length);
-            question.pageImages = images.map(image => {
-                const tracer = (image.y || 0) > centerY ? '<sup>123</sup>I-BMIPP' : '<sup>201</sup>Tl';
-                const view = (image.x || 0) < centerX ? '短軸像' : '垂直長軸像';
-                return {
-                    ...image,
-                    legend: `${tracer}${view}`,
-                    detectedLegend: `${tracer}${view}`,
-                    displayLegend: `${tracer}${view}`,
-                    legendResolved: true,
-                };
-            });
-            break;
-        }
-        case '2022-64':
-            question.pageImages = setLegends(images.slice(0, 3), ['A', 'B', 'C']);
-            break;
-        case '2023-30':
-            question.pageImages = setLegends(images.slice(0, 2), ['遅延造影像', 'T1 map: native T1=780 ms（基準値 1200～1250 ms）']);
-            break;
-        case '2023-51':
-            question.question = String(question.question || '').replace(/<div class="tableWrapper">[\s\S]*?<\/div>/g, '').trim();
-            question.pageImages = setLegends(images.slice(0, 3), ['T2強調像', '拡散強調像', 'ADC map']);
-            break;
-        case '2023-65':
-            question.pageImages = setLegends(images.slice(0, 2), [
-                '翌日: 2～3分 / 14～15分 / 29～30分',
-                '8日後: 2～3分 / 14～15分 / 29～30分',
-            ]);
-            break;
-        case '2024-85':
-            question.pageImages = setLegends(images.slice(0, 1), ['列: 治療前 / 2か月後 / 1年後、行: MIP像 / 横断像']);
-            break;
-        case '2025-91':
-            question.pageImages = setLegends(images.slice(0, 2), [
-                '前面像（血流 / 換気）',
-                '後面像（血流 / 換気）',
-            ]);
-            break;
-        default:
-            break;
-    }
-
-    return question;
 };

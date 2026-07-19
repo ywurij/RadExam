@@ -24,7 +24,6 @@ import {
 } from '@/lib/nuclearFigureGeometry.mjs';
 import { buildNuclearSourcePageAssignments } from '@/lib/nuclearSourcePages.mjs';
 import {
-    applyDiagnosticImportCorrection,
     assignNearestUniqueLabels,
     buildSourceGridLayouts,
     buildPairedOptionText,
@@ -32,17 +31,24 @@ import {
     extractQuestionTable,
     extractOptionColumnHeaders,
     findNearestPrecedingQuestion,
+    groupNearbyLegendItems,
+    hasNearbyOptionPrefix,
+    hasSingleNearbyLegendGroup,
     hasExplicitFigureCue,
     isPairedOptionHeader,
     isRepeatedOptionOrFigureLabel,
     isLikelyOptionContinuationLine,
+    isLikelyLegendContinuationText,
     isStandaloneImageLegendText,
     isUsableFallbackFigureCrop,
     joinOptionContinuation,
     mergeVerticallyAdjacentImageRects,
+    mergeTwoByTwoImageGridRects,
     removeContainedImageRects,
     restoreTruncatedOptionText,
+    shouldConsumeOptionColumnHeaders,
     splitOptionItemsByColumns,
+    spreadPositionedLegendLabels,
 } from '@/lib/pdfImportText';
 
 const FOOTER_DASH_CLASS = 'ー―－\\-−–—';
@@ -71,6 +77,11 @@ const getSrgbCanvasContext = canvas => {
 const NO_QUESTION_LABEL_PATTERN = /^[\s\[\]［］【】]*(?:No\.?|NO\.?)\s*[0-9０-９]{1,3}[\s\[\]［］【】]*$/i;
 const FIGURE_HEADER_PATTERN = /図\s*[0-9０-９]+/;
 const INLINE_NO_QUESTION_PREFIX_PATTERN = /^[\s\[\]［］【】]*(?:No\.?|NO\.?)\s*[0-9０-９]{1,3}(?:\s*[-ー−‐–―]\s*[0-9０-９A-Za-z]+)?\s*/i;
+const normalizeLegendComparableText = value => String(value || '')
+    .replace(/<[^>]+>/g, '')
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[\s,:：/／、，・()（）=~〜～\-]+/g, '');
 
 // レジェンドとして適切かどうかを判定する関数
 const isValidLegendText = (text, item = null, allPageTextItems = []) => {
@@ -112,12 +123,7 @@ const isValidLegendText = (text, item = null, allPageTextItems = []) => {
 
     // Left-side option prefix check
     if (item && allPageTextItems.length > 0) {
-        const optionPattern = /^[a-eA-E\uff41-\uff45\uff21-\uff25][\.\uff0e\s\)\)\uff09]?$/;
-        const sameLineLeftItems = allPageTextItems.filter(other => 
-            Math.abs(other.y - item.y) <= 3 && other.x < item.x
-        );
-        const hasOptionPrefix = sameLineLeftItems.some(other => optionPattern.test(other.text.trim()));
-        if (hasOptionPrefix) {
+        if (hasNearbyOptionPrefix(item, allPageTextItems)) {
             return false;
         }
     }
@@ -2667,8 +2673,10 @@ const extractLegendForImage = (rect, textItems, limits = {}, allPageTextItems = 
             if (lineItems.length === 0) break;
 
             lineItems.sort((a, b) => a.x - b.x);
-            const lineText = lineItems.map(t => t.text).join(' ').trim();
-            if (lineText && isValidLegendText(lineText, lineItems[0], allPageTextItems)) {
+            if (!hasSingleNearbyLegendGroup(lineItems)) break;
+            const lineText = buildInlineTextFromItems(lineItems) || lineItems.map(t => t.text).join(' ').trim();
+            const isContinuationLine = isLikelyLegendContinuationText(lineText, lines[lines.length - 1]);
+            if (lineText && (isValidLegendText(lineText, lineItems[0], allPageTextItems) || isContinuationLine)) {
                 lines.push(lineText);
                 lineItems.forEach(item => used.push(item));
             }
@@ -2732,61 +2740,12 @@ const extractLegendForImage = (rect, textItems, limits = {}, allPageTextItems = 
         aboveResult.used.forEach(item => usedItems.push(item));
     }
 
-    const pickSideLegend = (side = 'right') => {
-        const sideMarginX = Math.max(50, Math.min(150, imageWidth * 0.35));
-        const candidates = textItems.filter(item => {
-            const txCenter = item.x + item.width / 2;
-            const tyCenter = item.y + item.height / 2;
-            const xMatch = side === 'right'
-                ? txCenter >= origMaxX && txCenter <= (origMaxX + sideMarginX)
-                : txCenter <= origMinX && txCenter >= (origMinX - sideMarginX);
-            const yMatch = tyCenter >= (origMinY - 20) && tyCenter <= (origMaxY + 20);
-            return xMatch && yMatch;
-        });
-
-        if (candidates.length === 0) return null;
-
-        const linesMap = new Map();
-        candidates.forEach(item => {
-            const lineKey = Math.round(item.y / 3) * 3;
-            const existing = linesMap.get(lineKey) || [];
-            existing.push(item);
-            linesMap.set(lineKey, existing);
-        });
-
-        const lines = Array.from(linesMap.values())
-            .map(lineItems => {
-                const sorted = [...lineItems].sort((a, b) => a.x - b.x);
-                const lineText = sorted.map(t => t.text).join(' ').trim();
-                return { lineItems: sorted, lineText };
-            })
-            .filter(({ lineText, lineItems }) => lineText && isValidLegendText(lineText, lineItems[0], allPageTextItems))
-            .sort((a, b) => {
-                const aOrientation = IMAGE_ORIENTATION_LABEL_PATTERN.test(a.lineText) ? 1 : 0;
-                const bOrientation = IMAGE_ORIENTATION_LABEL_PATTERN.test(b.lineText) ? 1 : 0;
-                if (aOrientation !== bOrientation) return bOrientation - aOrientation;
-                return a.lineItems[0].y - b.lineItems[0].y;
-            });
-
-        return lines[0] || null;
-    };
-
-    if (!mainTitle) {
-        const preferredOrder = preferTopLegend ? ['left', 'right'] : ['right', 'left'];
-        for (const side of preferredOrder) {
-            const picked = pickSideLegend(side);
-            if (!picked) continue;
-            mainTitle = picked.lineText;
-            picked.lineItems.forEach(item => usedItems.push(item));
-            break;
-        }
-    }
-
     // --- 2. 四辺および内部の記述子（ラベル）の回収 ---
     const descriptorsSet = new Set();
     const shortLabelLimit = 15; // 記述子とする最大文字数
 
     const usedWords = mainTitle ? mainTitle.split(/\s+/) : [];
+    const comparableMainTitle = normalizeLegendComparableText(mainTitle);
     
     // (a) 画像の外側近傍 (上下20px, 左右40pxに制限し、隣接画像との干渉限界 limits でX座標を制限)
     const marginY = parserProfile?.name === 'nuclear' ? 12 : 20;
@@ -2823,38 +2782,50 @@ const extractLegendForImage = (rect, textItems, limits = {}, allPageTextItems = 
 
     // 画像オブジェクト枠内（内部）のテキストは測定数値（7mm等）を含みやすいため除外し、
     // 画像の外側近傍のみを探索範囲とする
-    const labelCandidates = outsideText;
+    const labelCandidates = groupNearbyLegendItems(outsideText).map(candidate => ({
+        ...candidate,
+        formattedText: buildInlineTextFromItems(candidate.items) || candidate.text
+    }));
+    const usedItemKeys = new Set(usedItems.map(buildTextItemKey));
 
     const orientationDescriptors = [];
     const genericDescriptors = [];
 
-    labelCandidates.forEach(item => {
-        const text = item.text.trim();
-        if (text.length > 0 && text.length <= shortLabelLimit) {
-            if (WEAK_IMAGE_DESCRIPTOR_PATTERN.test(text)) {
+    labelCandidates.forEach(candidate => {
+        if (candidate.items.some(item => usedItemKeys.has(buildTextItemKey(item)))) return;
+        const rawText = candidate.text.trim();
+        const text = candidate.formattedText.trim();
+        if (rawText.length > 0 && rawText.length <= shortLabelLimit) {
+            if (WEAK_IMAGE_DESCRIPTOR_PATTERN.test(rawText)) {
                 return;
             }
 
-            const isOrientationLabel = IMAGE_ORIENTATION_LABEL_PATTERN.test(text);
-            const isLabelLike = /^[a-zA-Z0-9-+\s()\/]+$/.test(text) || 
-                                /^(?:右|左|前|後|上|下|側面|正面|前面|後面|造影|シネ|遅延|早期|矢状|横断|冠状|エコー|シンチ|図|表|画像|負荷|安静|運動|ストレス|レスト)(?:時|像)?\d*$/i.test(text) ||
-                                /^(?:anterior|posterior|lateral|coronal|sagittal|transverse|axial|min|hour|hr|sec|iv|pre|post|delay|early|Right|Left|L|R|A|P|H|F|sup|inf)\d*$/i.test(text);
-            const isGeometrySupportedLabel = isValidLegendText(text, item, allPageTextItems)
-                && !/[。！？!?]$/.test(text);
+            const isOrientationLabel = IMAGE_ORIENTATION_LABEL_PATTERN.test(rawText);
+            const isLabelLike = /^[a-zA-Z0-9-+\s()\/]+$/.test(rawText) ||
+                                /^(?:右|左|前|後|上|下|側面|正面|前面|後面|造影|シネ|遅延|早期|矢状|横断|冠状|エコー|シンチ|図|表|画像|負荷|安静|運動|ストレス|レスト)(?:時|像)?\d*$/i.test(rawText) ||
+                                /^(?:anterior|posterior|lateral|coronal|sagittal|transverse|axial|min|hour|hr|sec|iv|pre|post|delay|early|Right|Left|L|R|A|P|H|F|sup|inf)\d*$/i.test(rawText);
+            const isGeometrySupportedLabel = isValidLegendText(rawText, candidate, allPageTextItems)
+                && !/[。！？!?]$/.test(rawText);
 
-            if (NO_QUESTION_LABEL_PATTERN.test(text)) {
+            if (NO_QUESTION_LABEL_PATTERN.test(rawText)) {
                 return;
             }
 
             // 候補はすでに画像四辺の狭い帯に限定され、問題文・選択肢も除外済み。
             // 語彙リストだけに依存せず、位置が妥当な未知の撮像相・曲線名も受け入れる。
-            if ((isLabelLike || isGeometrySupportedLabel) && !usedWords.includes(text) && !mainTitle.includes(text)) {
+            const comparableCandidate = normalizeLegendComparableText(text);
+            const duplicatesMainTitle = Boolean(
+                comparableMainTitle
+                && comparableCandidate
+                && comparableMainTitle.includes(comparableCandidate)
+            );
+            if ((isLabelLike || isGeometrySupportedLabel) && !usedWords.includes(rawText) && !duplicatesMainTitle) {
                 if (isOrientationLabel) {
-                    orientationDescriptors.push({ text, item });
+                    orientationDescriptors.push({ text, item: candidate });
                 } else {
-                    genericDescriptors.push({ text, item });
+                    genericDescriptors.push({ text, item: candidate });
                 }
-                usedItems.push(item);
+                candidate.items.forEach(item => usedItems.push(item));
             }
         }
     });
@@ -2863,7 +2834,7 @@ const extractLegendForImage = (rect, textItems, limits = {}, allPageTextItems = 
     descriptorSource.forEach(({ text }) => descriptorsSet.add(text));
     const descriptors = Array.from(descriptorsSet);
 
-    const positionedLabels = [...orientationDescriptors, ...genericDescriptors].map(({ text, item }) => {
+    const positionedLabels = spreadPositionedLegendLabels([...orientationDescriptors, ...genericDescriptors].map(({ text, item }) => {
         const centerX = item.x + item.width / 2;
         const centerY = item.y + item.height / 2;
         let position = 'bottom';
@@ -2886,7 +2857,7 @@ const extractLegendForImage = (rect, textItems, limits = {}, allPageTextItems = 
         };
     }).filter((label, index, labels) => (
         labels.findIndex(candidate => candidate.text === label.text && candidate.position === label.position) === index
-    ));
+    )));
 
     let finalLegend = mainTitle.trim();
     if (descriptors.length > 0) {
@@ -3597,7 +3568,9 @@ export default function AdminPage() {
 
                         const detectedHeaders = extractOptionColumnHeaders(originalLine);
                         if (detectedHeaders.length >= 2) {
-                            if (originalLine) q.finalUsedLines.push(originalLine);
+                            if (shouldConsumeOptionColumnHeaders(detectedHeaders, optionsStarted) && originalLine) {
+                                q.finalUsedLines.push(originalLine);
+                            }
                             return;
                         }
 
@@ -4212,7 +4185,11 @@ export default function AdminPage() {
                       }));
                       const effectiveRects = parserProfile.name === 'nuclear'
                           ? mergeNuclearImageRects(preMatchedRects)
-                          : mergeVerticallyAdjacentImageRects(removeContainedImageRects(preMatchedRects));
+                          : mergeVerticallyAdjacentImageRects(
+                              mergeTwoByTwoImageGridRects(removeContainedImageRects(preMatchedRects), {
+                                  textItems: filteredTextItems,
+                              })
+                          );
 
                       const usedLegendTextKeys = new Set();
 
@@ -4327,6 +4304,38 @@ export default function AdminPage() {
                               crop.legendStr = label;
                           }
                       });
+
+                      // A/B/Cや上下付き核種名を含む短いレジェンドが初回探索で残った場合、
+                      // 未設定の図だけを対象に最寄りの外側文字列を一対一で補完する。
+                      const missingLegendCrops = combinedCrops.filter(crop => !String(crop.legendStr || '').trim());
+                      if (missingLegendCrops.length > 0) {
+                          const remainingLegendItems = filteredTextItems.filter(item => {
+                              const key = buildTextItemKey(item);
+                              return !usedLegendTextKeys.has(key) && !pageImageContainedTextKeys.has(key);
+                          });
+                          const remainingLegendCandidates = groupNearbyLegendItems(remainingLegendItems)
+                              .map(candidate => ({
+                                  ...candidate,
+                                  formattedText: buildInlineTextFromItems(candidate.items) || candidate.text,
+                              }))
+                              .filter(candidate => (
+                                  candidate.text.length <= 50
+                                  && isValidLegendText(candidate.text, candidate, textItems)
+                              ));
+
+                          assignNearestUniqueLabels(missingLegendCrops, remainingLegendCandidates, 72)
+                              .forEach(({ rectIndex, labelIndex }) => {
+                                  const crop = missingLegendCrops[rectIndex];
+                                  const candidate = remainingLegendCandidates[labelIndex];
+                                  if (!crop || !candidate) return;
+                                  crop.legendStr = candidate.formattedText;
+                                  candidate.items.forEach(item => {
+                                      const key = buildTextItemKey(item);
+                                      usedLegendTextKeys.add(key);
+                                      imageLegendTextKeys.add(key);
+                                  });
+                              });
+                      }
 
                       // Share column legends for grid-arranged images
                       if (combinedCrops.length >= 2) {
@@ -4454,6 +4463,8 @@ export default function AdminPage() {
                              h: crop.h,
                              legend: crop.legendStr || '',
                              detectedLegend: crop.legendStr || null,
+                             displayLegend: crop.legendStr || '',
+                             legendResolved: Boolean(crop.legendStr),
                              ...(crop.legendLayout ? { legendLayout: crop.legendLayout } : {}),
                              page: pageNum,
                              matchedQNum: crop.matchedQNum
@@ -4521,9 +4532,11 @@ export default function AdminPage() {
 
                      const detectedHeaders = extractOptionColumnHeaders(sanitizedLineItems);
                      if (detectedHeaders.length >= 2) {
-                         optionColumnHeaders = detectedHeaders;
-                         pairedOptionColumns = detectedHeaders.length === 2;
-                         rebuiltUsedLines.push(sanitizedLineItems);
+                         if (shouldConsumeOptionColumnHeaders(detectedHeaders, optionsStarted)) {
+                             optionColumnHeaders = detectedHeaders;
+                             pairedOptionColumns = detectedHeaders.length === 2;
+                             rebuiltUsedLines.push(sanitizedLineItems);
+                         }
                          return;
                      }
 
@@ -4651,10 +4664,6 @@ export default function AdminPage() {
                      img.legend = resolveImportedImageLegend(img);
                  });
              });
-
-             if (examCategory === '2') {
-                 parsedQuestionsList.forEach(q => applyDiagnosticImportCorrection(detectedYear, q));
-             }
 
              // 2.5.5 ベクタ図形など画像オブジェクトとして検出できない図へのフォールバック
              const renderedPageCache = new Map();

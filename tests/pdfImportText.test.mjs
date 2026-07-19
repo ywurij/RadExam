@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-    applyDiagnosticImportCorrection,
     assignNearestUniqueLabels,
     buildPairedOptionText,
     buildSourceGridLayouts,
@@ -10,18 +9,25 @@ import {
     extractQuestionTable,
     extractOptionColumnHeaders,
     findNearestPrecedingQuestion,
+    groupNearbyLegendItems,
+    hasNearbyOptionPrefix,
+    hasSingleNearbyLegendGroup,
     hasExplicitFigureCue,
     isPairedOptionHeader,
     isRepeatedOptionOrFigureLabel,
     isLikelyOptionContinuationLine,
+    isLikelyLegendContinuationText,
     isStandaloneImageLegendText,
     isUsableFallbackFigureCrop,
     joinOptionContinuation,
     mergeVerticallyAdjacentImageRects,
+    mergeTwoByTwoImageGridRects,
     repairLegacySequentialComparisonOptions,
     removeContainedImageRects,
     restoreTruncatedOptionText,
+    shouldConsumeOptionColumnHeaders,
     splitOptionItemsByColumns,
+    spreadPositionedLegendLabels,
 } from '../src/lib/pdfImportText.js';
 
 test('assigns stacked image legends one-to-one by spatial distance', () => {
@@ -83,6 +89,90 @@ test('joins wrapped option text for every option including option e', () => {
         'Dynamic susceptibility contrast（DSC）法は Gd 造影剤の T1 コントラストを利用 した撮像法である。'
     );
     assert.equal(joinOptionContinuation('', '後続行'), '後続行');
+});
+
+test('groups adjacent numeric and text fragments into one legend label', () => {
+    const groups = groupNearbyLegendItems([
+        { text: '治療前', x: 100, y: 300, width: 42, height: 10 },
+        { text: '2', x: 250, y: 300, width: 6, height: 8 },
+        { text: 'か月後', x: 257, y: 300, width: 32, height: 10 },
+        { text: '1', x: 400, y: 300, width: 6, height: 8 },
+        { text: '年後', x: 407, y: 300, width: 22, height: 10 },
+    ]);
+
+    assert.deepEqual(groups.map(group => group.text), ['治療前', '2か月後', '1年後']);
+    assert.deepEqual(groups[1].items.map(item => item.text), ['2', 'か月後']);
+});
+
+test('groups an elevated isotope prefix with the adjacent nuclide name', () => {
+    const groups = groupNearbyLegendItems([
+        { text: '99m', x: 100, y: 307, width: 12, height: 7 },
+        { text: 'Tc-MIBI', x: 112, y: 300, width: 42, height: 12 },
+    ]);
+    assert.equal(groups.length, 1);
+    assert.deepEqual(groups[0].items.map(token => token.text), ['99m', 'Tc-MIBI']);
+});
+
+test('keeps a parenthetical legend and its unit in one group across a wider gap', () => {
+    const groups = groupNearbyLegendItems([
+        { text: '拡散強調像（b＝800', x: 100, y: 300, width: 108, height: 10 },
+        { text: 's/mm', x: 238, y: 300, width: 28, height: 10 },
+        { text: '2', x: 266, y: 307, width: 5, height: 6 },
+        { text: '）', x: 271, y: 300, width: 10, height: 10 },
+    ]);
+
+    assert.equal(groups.length, 1);
+    assert.equal(groups[0].text, '拡散強調像（b＝800s/mm2）');
+});
+
+test('only consumes option-column headers before answer choices start', () => {
+    const headers = [{ key: 'a' }, { key: 'b' }];
+    assert.equal(shouldConsumeOptionColumnHeaders(headers, false), true);
+    assert.equal(shouldConsumeOptionColumnHeaders(headers, true), false);
+    assert.equal(shouldConsumeOptionColumnHeaders([{ key: 'a' }], false), false);
+});
+
+test('accepts a bracketed second line only after an existing legend line', () => {
+    assert.equal(
+        isLikelyLegendContinuationText('（基準値 1200～1250 ms）', 'T1 map：native T1＝780 ms'),
+        true,
+    );
+    assert.equal(isLikelyLegendContinuationText('（基準値 1200～1250 ms）', ''), false);
+    assert.equal(isLikelyLegendContinuationText('基準値 1200～1250 ms', 'T1 map'), false);
+});
+
+test('spreads colliding structured labels without changing distinct positions', () => {
+    assert.deepEqual(
+        spreadPositionedLegendLabels([
+            { text: '前面像', position: 'bottom', offset: 0.5 },
+            { text: '後面像', position: 'bottom', offset: 0.5 },
+            { text: '負荷時', position: 'left', offset: 0.25 },
+            { text: '安静時', position: 'left', offset: 0.75 },
+        ]).map(label => label.offset),
+        [0.44, 0.56, 0.25, 0.75],
+    );
+});
+
+test('distinguishes one title from multiple captions on the same line', () => {
+    assert.equal(hasSingleNearbyLegendGroup([
+        { text: '遅延造影', x: 100, y: 300, width: 48, height: 10 },
+        { text: '像', x: 150, y: 300, width: 10, height: 10 },
+    ]), true);
+    assert.equal(hasSingleNearbyLegendGroup([
+        { text: '短軸像', x: 100, y: 300, width: 42, height: 10 },
+        { text: '垂直長軸像', x: 280, y: 300, width: 70, height: 10 },
+    ]), false);
+});
+
+test('only treats a nearby left marker as an option prefix', () => {
+    const target = { text: 'B', x: 220, y: 300, width: 8, height: 10 };
+    assert.equal(hasNearbyOptionPrefix(target, [
+        { text: 'A', x: 100, y: 300, width: 8, height: 10 },
+    ]), false);
+    assert.equal(hasNearbyOptionPrefix(
+        { text: '血流量', x: 120, y: 300, width: 42, height: 10 },
+        [{ text: 'a', x: 100, y: 300, width: 7, height: 10 }],
+    ), true);
 });
 
 test('uses line geometry to separate wrapped options from distant image legends', () => {
@@ -168,6 +258,17 @@ test('preserves a two-over-one source image layout on a twelve-column grid', () 
     assert.deepEqual(layouts.map(layout => layout.columnSpan), [6, 6, 6]);
 });
 
+test('does not overlap adjacent source-grid columns after independent image extraction', () => {
+    const images = [
+        { page: 54, x: 102, y: 300, w: 213, h: 250 },
+        { page: 54, x: 316, y: 300, w: 163, h: 220 },
+        { page: 54, x: 480, y: 300, w: 162, h: 220 },
+    ];
+    const layouts = buildSourceGridLayouts(images);
+    const middleEnd = layouts[1].columnStart + layouts[1].columnSpan - 1;
+    assert.ok(middleEnd < layouts[2].columnStart);
+});
+
 test('preserves a tall-left and stacked-right source layout with row span', () => {
     const images = [
         { page: 73, x: 60, y: 194, w: 165, h: 372 },
@@ -179,6 +280,74 @@ test('preserves a tall-left and stacked-right source layout with row span', () =
     assert.deepEqual(layouts.map(layout => layout.row), [1, 1, 2]);
     assert.deepEqual(layouts.map(layout => layout.rowSpan), [2, 1, 1]);
     assert.deepEqual(layouts.map(layout => layout.columnStart), [1, 5, 5]);
+});
+
+test('merges an aligned two-by-two image grid into one composite figure', () => {
+    const grid = [
+        { x: 100, y: 300, w: 120, h: 140, matchedQNum: 76 },
+        { x: 230, y: 300, w: 120, h: 140, matchedQNum: 76 },
+        { x: 100, y: 150, w: 120, h: 140, matchedQNum: 76 },
+        { x: 230, y: 150, w: 120, h: 140, matchedQNum: 76 },
+    ];
+    const result = mergeTwoByTwoImageGridRects(grid);
+
+    assert.equal(result.length, 1);
+    assert.deepEqual(result[0], { x: 100, y: 150, w: 250, h: 290, matchedQNum: 76 });
+});
+
+test('preserves two composite rows when captions occupy the gap in a two-by-two grid', () => {
+    const grid = [
+        { x: 100, y: 300, w: 120, h: 140, matchedQNum: 63 },
+        { x: 230, y: 300, w: 120, h: 140, matchedQNum: 63 },
+        { x: 100, y: 150, w: 120, h: 140, matchedQNum: 63 },
+        { x: 230, y: 150, w: 120, h: 140, matchedQNum: 63 },
+    ];
+    const result = mergeTwoByTwoImageGridRects(grid, {
+        textItems: [
+            { text: '短軸像', x: 130, y: 292, width: 42, height: 6 },
+            { text: '垂直長軸像', x: 260, y: 292, width: 70, height: 6 },
+            { text: '123I-BMIPP', x: 45, y: 360, width: 50, height: 10 },
+            { text: '201Tl', x: 55, y: 210, width: 40, height: 10 },
+        ],
+    });
+
+    assert.equal(result.length, 2);
+    assert.deepEqual(
+        result.map(({ x, y, w, h, preserveCompositeRow }) => ({ x, y, w, h, preserveCompositeRow })),
+        [
+            { x: 100, y: 300, w: 250, h: 140, preserveCompositeRow: true },
+            { x: 100, y: 150, w: 250, h: 140, preserveCompositeRow: true },
+        ],
+    );
+    assert.equal(mergeVerticallyAdjacentImageRects(result).length, 2);
+});
+
+test('keeps four figures separate when a captioned two-by-two grid has no row labels', () => {
+    const grid = [
+        { x: 100, y: 300, w: 120, h: 140, matchedQNum: 44 },
+        { x: 230, y: 300, w: 120, h: 140, matchedQNum: 44 },
+        { x: 100, y: 150, w: 120, h: 140, matchedQNum: 44 },
+        { x: 230, y: 150, w: 120, h: 140, matchedQNum: 44 },
+    ];
+    const result = mergeTwoByTwoImageGridRects(grid, {
+        textItems: [
+            { text: '動脈相', x: 130, y: 292, width: 42, height: 8 },
+            { text: '後期相', x: 260, y: 292, width: 42, height: 8 },
+        ],
+    });
+    assert.equal(result.length, 4);
+    assert.equal(mergeVerticallyAdjacentImageRects(result).length, 4);
+});
+
+test('does not merge a loose collection that is not a two-by-two grid', () => {
+    const figures = [
+        { x: 100, y: 300, w: 120, h: 140, matchedQNum: 76 },
+        { x: 300, y: 300, w: 120, h: 140, matchedQNum: 76 },
+        { x: 100, y: 80, w: 120, h: 140, matchedQNum: 76 },
+        { x: 360, y: 40, w: 80, h: 80, matchedQNum: 76 },
+    ];
+
+    assert.equal(mergeTwoByTwoImageGridRects(figures).length, 4);
 });
 
 test('merges a vertically stacked image series while preserving a separate side image', () => {
@@ -204,6 +373,29 @@ test('converts consecutive positioned numeric rows into an HTML table', () => {
     assert.match(result.html, /<table>/);
     assert.match(result.html, /α\/β 比（Gy）/);
     assert.match(result.html, /<td>10<\/td>/);
+});
+
+test('does not treat numeric imaging conditions in prose as a table', () => {
+    const lines = [
+        {
+            items: [
+                item('60', 100), item('歳代の男性。血清PSA値が', 120, 135),
+                item('6', 260), item('ng/mLのためMRIを施行した。', 275, 160),
+                item('T2', 450),
+            ],
+        },
+        {
+            items: [
+                item('拡散強調像（b＝', 100, 100), item('1', 205), item('400', 218),
+                item('s/mm', 245, 35), item('2', 282), item('ADC map（b＝', 310, 80),
+                item('50', 395), item('800', 420), item('s/mm', 450, 35), item('2', 487),
+            ],
+        },
+    ];
+
+    const result = extractQuestionTable(lines);
+    assert.deepEqual([...result.lineIndexes], []);
+    assert.equal(result.html, '');
 });
 
 test('recognizes paired option headers and preserves both option columns', () => {
@@ -254,62 +446,5 @@ test('extracts a three-column option header without treating it as option a', ()
     ], headers);
     assert.deepEqual(columns.map(column => column.map(token => token.text).join('')), [
         '99mTc-MIBI', '123I-MIBG', '201TlCl',
-    ]);
-});
-
-test('applies row and column legends for diagnostic image grids', () => {
-    const q43 = {
-        questionNumber: 43,
-        pageImages: [
-            { x: 70, y: 399 }, { x: 70, y: 230 },
-            { x: 299, y: 384 }, { x: 299, y: 230 },
-        ],
-    };
-    applyDiagnosticImportCorrection(2022, q43);
-    assert.deepEqual(q43.pageImages.map(image => image.legend), ['横断像', '冠状断像', '横断像', '冠状断像']);
-
-    const q63 = {
-        questionNumber: 63,
-        pageImages: [
-            { x: 307, y: 347 }, { x: 111, y: 347 },
-            { x: 304, y: 118 }, { x: 94, y: 118 },
-        ],
-    };
-    applyDiagnosticImportCorrection(2022, q63);
-    assert.deepEqual(q63.pageImages.map(image => image.legend), [
-        '<sup>123</sup>I-BMIPP短軸像',
-        '<sup>123</sup>I-BMIPP垂直長軸像',
-        '<sup>201</sup>Tl短軸像',
-        '<sup>201</sup>Tl垂直長軸像',
-    ]);
-});
-
-test('removes a false table and restores a two-line legend', () => {
-    const q51 = {
-        questionNumber: 51,
-        question: '前立腺MRIを示す。<div class="tableWrapper"><table><tbody><tr><td>誤検出</td></tr></tbody></table></div>',
-        pageImages: [{ x: 70, y: 420 }, { x: 299, y: 420 }, { x: 184, y: 247 }],
-    };
-    applyDiagnosticImportCorrection(2023, q51);
-    assert.equal(q51.question, '前立腺MRIを示す。');
-
-    const q30 = { questionNumber: 30, pageImages: [{ x: 70, y: 336 }, { x: 299, y: 335 }] };
-    applyDiagnosticImportCorrection(2023, q30);
-    assert.match(q30.pageImages[1].legend, /基準値 1200～1250 ms/);
-});
-
-test('preserves row and column context for composite diagnostic figures', () => {
-    const q65 = { questionNumber: 65, pageImages: [{ x: 145, y: 397 }, { x: 145, y: 214 }] };
-    applyDiagnosticImportCorrection(2023, q65);
-    assert.deepEqual(q65.pageImages.map(image => image.legend), [
-        '翌日: 2～3分 / 14～15分 / 29～30分',
-        '8日後: 2～3分 / 14～15分 / 29～30分',
-    ]);
-
-    const q91 = { questionNumber: 91, pageImages: [{ x: 145, y: 397 }, { x: 145, y: 214 }] };
-    applyDiagnosticImportCorrection(2025, q91);
-    assert.deepEqual(q91.pageImages.map(image => image.legend), [
-        '前面像（血流 / 換気）',
-        '後面像（血流 / 換気）',
     ]);
 });
