@@ -5,10 +5,11 @@ import Lightbox from 'yet-another-react-lightbox';
 import Zoom from 'yet-another-react-lightbox/plugins/zoom';
 import 'yet-another-react-lightbox/styles.css';
 import AnswerEditor from './AnswerEditor';
-import PdfClipper from './PdfClipper';
+import PdfClipper from '@target/pdf-clipper';
 import QuestionSourcePages from './QuestionSourcePages';
-import StructuredLegendEditor, { createStructuredLegendFromText } from './StructuredLegendEditor';
+import StructuredLegendEditor, { createStructuredLegendFromText } from '@target/structured-legend-editor';
 import { getSelectionCount } from '@/lib/utils';
+import { APP_FEATURES } from '@/lib/appTarget';
 import styles from './QuestionCard.module.scss';
 import 'katex/dist/katex.min.css';
 
@@ -222,7 +223,7 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveQ
                 <div className={styles.header}>
                     <span className={styles.questionId}>{question.year} - {question.id}</span>
                     <div className={styles.statusIcons}>
-                        {!isEditing && <button type="button" onClick={beginEditing} className={styles.editQuestionBtn}>設問を編集</button>}
+                        {APP_FEATURES.questionEditing && !isEditing && <button type="button" onClick={beginEditing} className={styles.editQuestionBtn}>設問を編集</button>}
                         <button className={`${styles.statusBtn} ${isLiked ? styles.activeLiked : ''}`} onClick={() => onUpdateStatus?.(question.id, { isLiked: !isLiked })} title="お気に入り">★</button>
                         <button className={`${styles.statusBtn} ${isCorrect ? styles.activeCorrect : ''}`} onClick={() => toggleStatus('correct')} title="正解として記録">✓</button>
                         <button className={`${styles.statusBtn} ${isIncorrect ? styles.activeIncorrect : ''}`} onClick={() => toggleStatus('incorrect')} title="不正解として記録">✕</button>
@@ -306,7 +307,7 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveQ
                             </div>;
                         })}</div>}
                         <div className={styles.optionsSection} style={{ marginBottom: '2rem' }}><h4>選択肢</h4><div className={styles.options}>{Object.entries(currentOptions).sort((a, b) => a[0].localeCompare(b[0])).map(([key, text]) => { const selected = selectedOptions.includes(key); const answer = normalizeAnswer(currentAnswer).includes(key); let className = styles.optionBtn; if (selected) className += ` ${styles.selected}`; if (showAnswer && answer) className += ` ${styles.correct}`; if (showAnswer && selected && !answer) className += ` ${styles.wrong}`; return <button key={key} className={className} onClick={() => toggleOption(key)}><span className={styles.optionKey}>{key}</span><span dangerouslySetInnerHTML={{ __html: text }} /></button>; })}</div></div>
-                        <div className={styles.actionRow}>{!showAnswer ? <button className={styles.revealBtn} onClick={revealAnswer}>回答・解説を見る</button> : <div className={`${styles.explicitAnswer} ${isCorrect ? styles.correct : ''}`}><div className={styles.answerBlock}>{isEditingAnswer ? <div className={styles.inlineEditAnswer}><span className={styles.label}>正解を選択:</span><div className={styles.answerSelectionGrid}>{Object.keys(currentOptions).sort().map(key => <button type="button" key={key} className={editAnswer.includes(key) ? styles.draftAnswerActive : ''} onClick={() => setEditAnswer(previous => previous.includes(key) ? previous.filter(item => item !== key) : [...previous, key].sort())}>{key}</button>)}</div><div className={styles.editActions}><button onClick={() => setIsEditingAnswer(false)} className={styles.cancelBtn}>キャンセル</button><button onClick={saveAnswer} className={styles.saveBtn}>保存</button></div></div> : <><div className={styles.answerText}><span className={styles.label}>正解は</span><span className={styles.value}>{normalizeAnswer(currentAnswer).join(', ')} です</span></div><button onClick={() => { setEditAnswer(normalizeAnswer(currentAnswer)); setIsEditingAnswer(true); }} className={styles.iconEditBtn} title="正解を編集">✎</button></>}</div></div>}</div>
+                        <div className={styles.actionRow}>{!showAnswer ? <button className={styles.revealBtn} onClick={revealAnswer}>回答・解説を見る</button> : <div className={`${styles.explicitAnswer} ${isCorrect ? styles.correct : ''}`}><div className={styles.answerBlock}>{isEditingAnswer ? <div className={styles.inlineEditAnswer}><span className={styles.label}>正解を選択:</span><div className={styles.answerSelectionGrid}>{Object.keys(currentOptions).sort().map(key => <button type="button" key={key} className={`${styles.answerTileBtn} ${editAnswer.includes(key) ? styles.draftAnswerActive : ''}`} onClick={() => setEditAnswer(previous => previous.includes(key) ? previous.filter(item => item !== key) : [...previous, key].sort())}>{key}</button>)}</div><div className={styles.editActions}><button onClick={() => setIsEditingAnswer(false)} className={styles.cancelBtn}>キャンセル</button><button onClick={saveAnswer} className={styles.saveBtn}>保存</button></div></div> : <><div className={styles.answerText}><span className={styles.label}>正解は</span><span className={styles.value}>{normalizeAnswer(currentAnswer).join(', ')} です</span></div>{APP_FEATURES.answerEditing && <button onClick={() => { setEditAnswer(normalizeAnswer(currentAnswer)); setIsEditingAnswer(true); }} className={styles.iconEditBtn} title="正解を編集">✎</button>}</>}</div></div>}</div>
                     </>
                 )}
             </div>

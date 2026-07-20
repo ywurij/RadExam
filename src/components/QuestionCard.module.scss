@@ -135,6 +135,11 @@
 
 .imageWrapper {
     cursor: zoom-in;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    text-align: inherit;
 }
 
 .structuredFigureBody {
@@ -999,6 +1004,18 @@
     }
 }
 
+@media (max-width: 640px) {
+    .questionBlock { padding: 1rem; border-radius: 0.8rem; }
+    .header { align-items: flex-start; gap: 0.75rem; }
+    .statusBtn { width: 2.75rem; height: 2.75rem; }
+    .questionText { font-size: 1rem; line-height: 1.7; }
+    .optionBtn { min-height: 52px; padding: 0.8rem; }
+    .figureSideLabels { min-width: 3.25rem; font-size: 0.85rem; }
+    .responsiveImageGrid { gap: 0.75rem; }
+    .iconEditBtn { min-width: 2.75rem; min-height: 2.75rem; padding: 0.5rem; }
+    .cancelBtn, .saveBtn { min-height: 44px; padding: 0.5rem 0.9rem; }
+}
+
 /* --- Dark Mode Overrides --- */
 @media (prefers-color-scheme: dark) {
     .questionBlock {
@@ -1254,8 +1271,9 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    min-width: 3rem;
-    height: 2.5rem;
+    min-width: 3.25rem;
+    min-height: 3rem;
+    height: 3rem;
     padding: 0 1rem;
     border: 1px solid #cbd5e0;
     border-radius: 0.375rem;
@@ -1263,7 +1281,7 @@
     color: #2d3748;
     cursor: pointer;
     font-weight: 700;
-    font-size: 1rem;
+    font-size: 1.05rem;
     transition: all 0.2s;
     user-select: none;
 

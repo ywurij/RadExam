@@ -58,10 +58,9 @@ function QuizContent() {
             try {
                 setExamPdfFiles(await getExamPdfs(examId));
             } catch (error) {
-                console.error('Failed to load exam PDFs:', error);
+                console.error('Failed to load reference PDFs:', error);
                 setExamPdfFiles([]);
             }
-
             // 1. Load User Progress (Local)
             let userProg = {};
             try {

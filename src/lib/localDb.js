@@ -440,7 +440,7 @@ export const getLocalProgress = async () => {
  * すべてのローカルデータをエクスポート用JSONオブジェクトとして取得する
  * @returns {Promise<Object>}
  */
-export const exportAllLocalData = async () => {
+export const exportAllLocalData = async ({ includePdfs = true } = {}) => {
     const backup = {
         version: 2,
         timestamp: Date.now(),
@@ -460,18 +460,22 @@ export const exportAllLocalData = async () => {
         backup.progress[key] = value;
     });
 
-    await imageStore.iterate((value, key) => {
-        backup.images[key] = value;
-    });
-
-    const pdfRecords = [];
-    await pdfStore.iterate((value, key) => pdfRecords.push([key, value]));
-    await Promise.all(pdfRecords.map(async ([key, value]) => {
-        backup.pdfs[key] = {
-            ...value,
-            blob: value?.blob instanceof Blob ? await blobToDataUrl(value.blob) : value?.blob,
-        };
+    const imageRecords = [];
+    await imageStore.iterate((value, key) => imageRecords.push([key, value]));
+    await Promise.all(imageRecords.map(async ([key, value]) => {
+        backup.images[key] = value instanceof Blob ? await blobToDataUrl(value) : value;
     }));
+
+    if (includePdfs) {
+        const pdfRecords = [];
+        await pdfStore.iterate((value, key) => pdfRecords.push([key, value]));
+        await Promise.all(pdfRecords.map(async ([key, value]) => {
+            backup.pdfs[key] = {
+                ...value,
+                blob: value?.blob instanceof Blob ? await blobToDataUrl(value.blob) : value?.blob,
+            };
+        }));
+    }
 
     return backup;
 };
@@ -481,7 +485,7 @@ export const exportAllLocalData = async () => {
  * @param {Object} jsonData - インポートするバックアップデータ
  * @param {string} strategy - 'overwrite' (上書き)
  */
-export const importLocalData = async (jsonData, strategy = 'overwrite') => {
+export const importLocalData = async (jsonData, strategy = 'overwrite', { includePdfs = true } = {}) => {
     if (!jsonData || typeof jsonData !== 'object') {
         throw new Error("Invalid backup data format");
     }
@@ -512,12 +516,12 @@ export const importLocalData = async (jsonData, strategy = 'overwrite') => {
     await imageStore.clear();
     if (images && typeof images === 'object') {
         for (const [key, value] of Object.entries(images)) {
-            await imageStore.setItem(key, value);
+            await imageStore.setItem(key, isDataUrl(value) ? await dataUrlToBlob(value) : value);
         }
     }
 
     await pdfStore.clear();
-    if (pdfs && typeof pdfs === 'object') {
+    if (includePdfs && pdfs && typeof pdfs === 'object') {
         for (const [key, value] of Object.entries(pdfs)) {
             await pdfStore.setItem(key, {
                 ...value,

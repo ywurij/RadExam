@@ -4,14 +4,20 @@
   "private": true,
   "main": "electron/main.js",
   "scripts": {
-    "dev": "next dev --webpack",
-    "build": "next build --webpack",
-    "start": "next start",
+    "dev": "npm run dev:desktop",
+    "dev:desktop": "node scripts/run-next-target.mjs desktop dev --webpack",
+    "dev:mobile": "node scripts/run-next-target.mjs mobile dev --webpack",
+    "build": "npm run build:desktop",
+    "build:desktop": "node scripts/run-next-target.mjs desktop build --webpack",
+    "build:mobile": "node scripts/run-next-target.mjs mobile build --webpack",
+    "start": "npm run start:desktop",
+    "start:desktop": "node scripts/run-next-target.mjs desktop start",
+    "start:mobile": "node scripts/run-next-target.mjs mobile start",
     "lint": "eslint",
     "test": "node --test tests/*.test.mjs",
     "app:build": "npm run build",
     "app:dev": "electron .",
-    "app:pack": "electron-builder"
+    "app:pack": "npm run build:desktop && electron-builder"
   },
   "dependencies": {
     "@ducanh2912/next-pwa": "^10.2.9",

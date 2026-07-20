@@ -1,22 +1,31 @@
 import "./globals.css";
 
+const isMobile = process.env.NEXT_PUBLIC_APP_TARGET === "mobile";
+
 export const metadata = {
-  title: "RadExam",
-  description: "RadExam - Radiology Exam Practice",
+  title: isMobile ? "RadExam Mobile" : "RadExam",
+  description: isMobile ? "端末内で使える放射線科試験問題演習アプリ" : "放射線科専門医試験学習アプリ",
   manifest: "/manifest.json",
+  applicationName: "RadExam",
+  ...(isMobile ? { appleWebApp: {
+    capable: true,
+    statusBarStyle: "default",
+    title: "RadExam",
+  }, icons: {
+    apple: "/assets/images/icon-192x192.png",
+  }} : {}),
 };
 
 export const viewport = {
-  themeColor: "#ffffff",
+  themeColor: "#f8fafc",
   width: "device-width",
   initialScale: 1,
-  maximumScale: 1,
-  userScalable: false, // Often used in PWA to prevent zooming issues on inputs, verify accessibility if strict.
+  viewportFit: "cover",
 };
 
 export default function RootLayout({ children }) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="ja" suppressHydrationWarning>
       <body>
         {children}
       </body>

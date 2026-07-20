@@ -17,6 +17,43 @@
   letter-spacing: -0.05em;
 }
 
+.homeActions {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 2rem;
+
+  button {
+    min-height: 44px;
+    padding: 0.55rem 0.9rem;
+    border: 1px solid #cbd5e0;
+    border-radius: 0.65rem;
+    background: #fff;
+    color: #475569;
+    font-size: 0.95rem;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  .dataButton { border-color: #2563eb; background: #2563eb; color: #fff; }
+  .adminButton { border-color: #334155; background: #334155; color: #fff; }
+}
+
+.emptyState {
+  margin: 0 auto 1rem;
+  padding: 1.5rem;
+  max-width: 520px;
+  border: 1px dashed #93b4ef;
+  border-radius: 1rem;
+  background: #f3f7ff;
+  text-align: center;
+
+  strong { display: block; margin-bottom: 0.4rem; color: #1e3a8a; }
+  p { margin-bottom: 1rem; color: #64748b; line-height: 1.5; }
+  button { min-height: 44px; padding: 0.55rem 1rem; border: 0; border-radius: 0.65rem; background: #2563eb; color: #fff; font-weight: 800; }
+}
+
 .section {
   margin-bottom: 3rem;
 }
@@ -255,6 +292,23 @@
   &:active {
     transform: translateY(0);
   }
+
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+    transform: none;
+    box-shadow: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .container { padding: max(1.5rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right)) max(2rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left)); }
+  .title { margin-bottom: 1.5rem; font-size: 2.35rem; }
+  .section { margin-bottom: 2rem; }
+  .homeActions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .homeActions .dataButton,
+  .homeActions .adminButton { grid-column: 1 / -1; }
+  .toggleGroup { flex-wrap: wrap; }
 }
 
 /* Resume Section Styles */

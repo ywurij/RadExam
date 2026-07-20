@@ -5,12 +5,14 @@ import { getExamTypes, getYears, getGenres, initializeLocalExams } from '@/lib/d
 import styles from './ExamSelector.module.scss';
 import { useRouter } from 'next/navigation';
 import { limitResumableSessions } from '@/lib/sessionHistory';
+import { APP_FEATURES, isMobileTarget } from '@/lib/appTarget';
 
 export default function ExamSelector() {
     const router = useRouter();
 
     const [exams, setExams] = useState([]);
     const [selectedExam, setSelectedExam] = useState('');
+    const [isLoadingExams, setIsLoadingExams] = useState(true);
  
      // Filters
      const [selectedYear, setSelectedYear] = useState('all');
@@ -161,7 +163,8 @@ export default function ExamSelector() {
             if (lastSettings) {
                 try {
                     const settings = JSON.parse(lastSettings);
-                    const initialExamId = settings.examId || types[0]?.id || '';
+                    const savedExamExists = types.some(exam => exam.id === settings.examId);
+                    const initialExamId = savedExamExists ? settings.examId : (types[0]?.id || '');
                     const initialYear = settings.year || 'all';
                     const initialGenres = Array.isArray(settings.genres) ? settings.genres : [];
 
@@ -189,7 +192,7 @@ export default function ExamSelector() {
             }
         };
 
-        init();
+        init().finally(() => setIsLoadingExams(false));
     }, []);
     const handleStart = () => {
         const params = new URLSearchParams();
@@ -270,40 +273,29 @@ export default function ExamSelector() {
         <div className={styles.container}>
             <h1 className={styles.title}>RadExam</h1>
 
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem', marginBottom: '2rem' }}>
-                <div style={{ display: 'flex', justifyContent: 'center', gap: '1rem', flexWrap: 'wrap' }}>
-                    <button onClick={() => router.push('/search')} style={{ background: 'transparent', border: '1px solid #cbd5e0', padding: '0.5rem 1rem', borderRadius: '0.5rem', cursor: 'pointer', color: '#4a5568', fontSize: '1rem' }}>
+            <div className={styles.homeActions}>
+                    <button type="button" onClick={() => router.push('/search')}>
                         🔍 問題を検索
                     </button>
-
-                    <button
-                        onClick={() => router.push('/usage')}
-                        style={{
-                            background: '#4a5568',
-                            border: 'none',
-                            padding: '0.5rem 1rem',
-                            borderRadius: '0.5rem',
-                            cursor: 'pointer',
-                            color: 'white',
-                            fontSize: '1rem',
-                            fontWeight: 'bold',
-                            marginRight: '0.5rem'
-                        }}
-                    >
+                    <button type="button" onClick={() => router.push('/usage')}>
                         ❓ 使い方
                     </button>
-                    <button
-                        onClick={() => router.push('/admin')}
-                        style={{ background: '#2d3748', border: 'none', padding: '0.5rem 1rem', borderRadius: '0.5rem', cursor: 'pointer', color: 'white', fontSize: '1rem', fontWeight: 'bold' }}
-                    >
+                    {isMobileTarget ? <button type="button" onClick={() => router.push('/data')} className={styles.dataButton}>
+                        ⇄ データ転送
+                    </button> : APP_FEATURES.examManagement && <button type="button" onClick={() => router.push('/admin')} className={styles.adminButton}>
                         ⚙️ 試験管理
-                    </button>
-                </div>
+                    </button>}
             </div>
 
             <div className={styles.section}>
                 <h2 className={styles.label}>試験を選択</h2>
                 <p className={styles.orderHint}>カードを長押ししてドラッグすると表示順を変更できます。</p>
+                {isLoadingExams && <p className={styles.orderHint}>試験データを読み込み中…</p>}
+                {!isLoadingExams && exams.length === 0 && <div className={styles.emptyState}>
+                    <strong>試験データがまだありません</strong>
+                    <p>{isMobileTarget ? 'Electron版で書き出したJSONファイルを登録してください。' : '試験管理からPDFまたはバックアップデータを登録してください。'}</p>
+                    <button type="button" onClick={() => router.push(isMobileTarget ? '/data' : '/admin')}>{isMobileTarget ? 'データ転送を開く' : '試験管理を開く'}</button>
+                </div>}
                 <div className={styles.examGrid} onPointerMove={(event) => {
                     if (!draggingExamId) return;
                     event.preventDefault();
@@ -462,7 +454,7 @@ export default function ExamSelector() {
                 </div>
             )}
 
-            <button className={styles.startButton} onClick={handleStart}>
+            <button className={styles.startButton} onClick={handleStart} disabled={!selectedExam}>
                 演習開始
             </button>
         </div>

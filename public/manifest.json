@@ -1,12 +1,15 @@
 {
-    "name": "RadTest",
-    "short_name": "RadTest",
-    "theme_color": "#ffffff",
-    "background_color": "#ffffff",
+    "id": "/",
+    "name": "RadExam Mobile",
+    "short_name": "RadExam",
+    "description": "放射線科試験問題のモバイル演習アプリ",
+    "theme_color": "#f8fafc",
+    "background_color": "#f8fafc",
     "display": "standalone",
-    "orientation": "portrait",
+    "orientation": "any",
     "scope": "/",
     "start_url": "/",
+    "categories": ["education", "medical"],
     "icons": [
         {
             "src": "/assets/images/icon-192x192.png",
