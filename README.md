@@ -96,6 +96,10 @@ SafariまたはChromeでアクセスし、ブラウザのメニューからホ�
 3.  ビルドコマンドを `npm run build:mobile` に設定。
 4.  自動的にビルド・デプロイが完了し、URLが発行されます。
 
+Mac・Windows・iPhone・iPad・Android への配布方法と、HTTPS 公開を使わない APK / TestFlight の選択肢は、[配布・インストールガイド](docs/installation-guide.md)を参照してください。
+
+ローカル Git リポジトリの GitHub への初回アップロード、Vercel 連携、モバイル版の HTTPS 公開と更新運用は、[GitHub・Vercel 公開手順](docs/github-vercel-deployment.md)を参照してください。
+
 ---
 
 ## ライセンス
