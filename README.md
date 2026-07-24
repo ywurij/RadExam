@@ -33,9 +33,9 @@
 *   **ローカル保存**: 学習状況やメモは端末内に保存されます。
 
 ### 4. 手動データ転送
-* Electron版から書き出したJSONを「データ転送」画面で登録します。
+* Electron版から書き出した`.radexam`バックアップを「データ転送」画面で登録します。
 * 試験、問題画像、参照PDF、正誤、お気に入り、解説・ジャンル編集をまとめて引き継ぎます。
-* モバイル側の変更もJSONへ書き出してバックアップできます。
+* モバイル側の変更も`.radexam`ファイルへ書き出してバックアップできます。
 
 ## モバイル簡易版に含まれない機能
 
@@ -99,6 +99,8 @@ SafariまたはChromeでアクセスし、ブラウザのメニューからホ�
 Mac・Windows・iPhone・iPad・Android への配布方法と、HTTPS 公開を使わない APK / TestFlight の選択肢は、[配布・インストールガイド](docs/installation-guide.md)を参照してください。
 
 ローカル Git リポジトリの GitHub への初回アップロード、Vercel 連携、モバイル版の HTTPS 公開と更新運用は、[GitHub・Vercel 公開手順](docs/github-vercel-deployment.md)を参照してください。
+
+Electron版のmacOS／Windows向けアプリをGitHub Releasesで配布する方法と、配布前の修正事項は、[GitHub ReleasesによるElectron版配布ガイド](docs/github-electron-release.md)を参照してください。
 
 ---
 

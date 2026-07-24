@@ -1,6 +1,15 @@
 import localforage from 'localforage';
+import {
+    collectReferencedImageKeys,
+    collectReferencedPdfKeys,
+    findMissingBackupImageKeys,
+    findMissingBackupPdfKeys,
+} from '@/lib/backupData.mjs';
 
 // --- インスタンスの設定 ---
+
+// 既存ユーザーのIndexedDBを引き続き読めるよう、内部DB名は旧名称のまま維持する。
+// この値は画面表示やエクスポートファイル名には使用しない。
 
 // カスタム試験データを保存するためのストア
 const examsStore = localforage.createInstance({
@@ -66,6 +75,18 @@ const blobToDataUrl = (blob) => new Promise((resolve, reject) => {
     reader.onerror = () => reject(reader.error || new Error('Failed to read blob.'));
     reader.readAsDataURL(blob);
 });
+
+const binaryValueToDataUrl = async (value, label = '保存データ') => {
+    if (isDataUrl(value)) return value;
+    if (value instanceof Blob) return blobToDataUrl(value);
+    if (value instanceof ArrayBuffer) return blobToDataUrl(new Blob([value]));
+    if (ArrayBuffer.isView(value)) {
+        return blobToDataUrl(new Blob([
+            value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength)
+        ]));
+    }
+    throw new Error(`${label}をバックアップ用データへ変換できませんでした。`);
+};
 
 const normalizeQuestionId = (question) => {
     if (!question || typeof question !== 'object') return question;
@@ -442,7 +463,7 @@ export const getLocalProgress = async () => {
  */
 export const exportAllLocalData = async ({ includePdfs = true } = {}) => {
     const backup = {
-        version: 2,
+        version: 3,
         timestamp: Date.now(),
         exams: {},
         progress: {},
@@ -460,19 +481,59 @@ export const exportAllLocalData = async ({ includePdfs = true } = {}) => {
         backup.progress[key] = value;
     });
 
-    const imageRecords = [];
-    await imageStore.iterate((value, key) => imageRecords.push([key, value]));
-    await Promise.all(imageRecords.map(async ([key, value]) => {
-        backup.images[key] = value instanceof Blob ? await blobToDataUrl(value) : value;
-    }));
+    // 問題データが実際に参照している画像をキー指定で取得する。
+    // imageStore.iterate()だけに依存すると、一部環境でBlobが列挙されず、
+    // 参照だけが残った不完全なバックアップになることがある。
+    const referencedImageKeys = collectReferencedImageKeys(backup.exams);
+    const missingImageKeys = [];
+    for (const key of referencedImageKeys) {
+        const value = await imageStore.getItem(key);
+        if (value == null) {
+            missingImageKeys.push(key);
+            continue;
+        }
+        backup.images[key] = await binaryValueToDataUrl(value);
+    }
+
+    if (missingImageKeys.length > 0) {
+        throw new Error(
+            `問題が参照している画像${referencedImageKeys.length}件のうち`
+            + `${missingImageKeys.length}件を読み出せませんでした。`
+            + '元データが表示できる環境で再度エクスポートしてください。'
+        );
+    }
 
     if (includePdfs) {
-        const pdfRecords = [];
-        await pdfStore.iterate((value, key) => pdfRecords.push([key, value]));
-        await Promise.all(pdfRecords.map(async ([key, value]) => {
+        const pdfRecords = new Map();
+        await pdfStore.iterate((value, key) => {
+            pdfRecords.set(key, value);
+        });
+
+        // PDFストアの全件走査だけに依存すると、Blobを含むレコードが環境によって
+        // 取りこぼされるため、問題のsourcePagesが参照する保存キーを直接取得する。
+        const referencedPdfKeys = collectReferencedPdfKeys(backup.exams);
+        const missingPdfKeys = [];
+        for (const key of referencedPdfKeys) {
+            const value = await pdfStore.getItem(key);
+            if (value == null) {
+                missingPdfKeys.push(key);
+                continue;
+            }
+            pdfRecords.set(key, value);
+        }
+
+        if (missingPdfKeys.length > 0) {
+            throw new Error(
+                `問題が参照しているPDF${referencedPdfKeys.length}件のうち`
+                + `${missingPdfKeys.length}件を読み出せませんでした。`
+                + '元のPDFを再登録してからエクスポートしてください。'
+            );
+        }
+
+        await Promise.all([...pdfRecords].map(async ([key, value]) => {
             backup.pdfs[key] = {
                 ...value,
-                blob: value?.blob instanceof Blob ? await blobToDataUrl(value.blob) : value?.blob,
+                blob: await binaryValueToDataUrl(value?.blob, `PDF「${value?.name || key}」`),
             };
         }));
     }
@@ -495,6 +556,36 @@ export const importLocalData = async (jsonData, strategy = 'overwrite', { includ
     }
 
     const { exams, progress, images, pdfs } = jsonData;
+    const missingImageKeys = findMissingBackupImageKeys(exams, images);
+    if (missingImageKeys.length > 0) {
+        throw new Error(
+            `バックアップ内の画像が${missingImageKeys.length}件不足しています。`
+            + '現在のデータは変更していません。元の端末から新しくエクスポートしてください。'
+        );
+    }
+    const missingPdfKeys = includePdfs ? findMissingBackupPdfKeys(exams, pdfs) : [];
+    if (missingPdfKeys.length > 0) {
+        throw new Error(
+            `バックアップ内の参照PDFが${missingPdfKeys.length}件不足しています。`
+            + '現在のデータは変更していません。元の端末から新しくエクスポートしてください。'
+        );
+    }
+
+    // 現在のデータを消去する前に、すべての画像・PDFを復元可能な形式へ変換する。
+    const preparedImages = [];
+    for (const [key, value] of Object.entries(images || {})) {
+        preparedImages.push([key, isDataUrl(value) ? await dataUrlToBlob(value) : value]);
+    }
+
+    const preparedPdfs = [];
+    if (includePdfs && pdfs && typeof pdfs === 'object') {
+        for (const [key, value] of Object.entries(pdfs)) {
+            preparedPdfs.push([key, {
+                ...value,
+                blob: isDataUrl(value?.blob) ? await dataUrlToBlob(value.blob) : value?.blob,
+            }]);
+        }
+    }
 
     // 1. 試験データのインポート
     if (exams && typeof exams === 'object') {
@@ -514,19 +605,12 @@ export const importLocalData = async (jsonData, strategy = 'overwrite', { includ
 
     // 3. 画像データのインポート
     await imageStore.clear();
-    if (images && typeof images === 'object') {
-        for (const [key, value] of Object.entries(images)) {
-            await imageStore.setItem(key, isDataUrl(value) ? await dataUrlToBlob(value) : value);
-        }
+    for (const [key, value] of preparedImages) {
+        await imageStore.setItem(key, value);
     }
 
     await pdfStore.clear();
-    if (includePdfs && pdfs && typeof pdfs === 'object') {
-        for (const [key, value] of Object.entries(pdfs)) {
-            await pdfStore.setItem(key, {
-                ...value,
-                blob: isDataUrl(value?.blob) ? await dataUrlToBlob(value.blob) : value?.blob,
-            });
-        }
+    for (const [key, value] of preparedPdfs) {
+        await pdfStore.setItem(key, value);
     }
 };

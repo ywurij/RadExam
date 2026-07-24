@@ -3,6 +3,15 @@ const { spawn } = require('child_process');
 const path = require('path');
 const http = require('http');
 const fs = require('fs');
+const {
+  LOOPBACK_HOST,
+  createNextServerEnv,
+  createNextServerLaunch,
+} = require('./serverCommand');
+
+// 表示名を変更しても既存の試験・画像・進捗を失わないよう、保存先は旧版と共通にする。
+app.setPath('userData', path.join(app.getPath('appData'), 'exam-app'));
+app.setName('RadExam');
 
 let nextProcess = null;
 let mainWindow = null;
@@ -11,7 +20,7 @@ let serverPort = 3000;
 // 未使用の空きポートを探索してポート衝突を回避
 function findFreePort(startPort, callback) {
   const server = http.createServer();
-  server.listen(startPort, () => {
+  server.listen(startPort, LOOPBACK_HOST, () => {
     server.once('close', () => {
       callback(startPort);
     });
@@ -22,34 +31,15 @@ function findFreePort(startPort, callback) {
   });
 }
 
-// npm run dev が既に動作中なら、Electron 開発版は同じサーバーを再利用する。
-// Next.js は同じプロジェクトで複数の dev サーバーを起動できないため、
-// ポートをずらして二重起動すると .next/dev/lock で停止してしまう。
-function checkServerAvailable(port, callback) {
-  let settled = false;
-  const finish = available => {
-    if (settled) return;
-    settled = true;
-    callback(available);
-  };
-  const request = http.get(`http://localhost:${port}`, res => {
-    res.resume();
-    finish(Boolean(res.statusCode && res.statusCode < 500));
-  });
-  request.setTimeout(1000, () => {
-    request.destroy();
-    finish(false);
-  });
-  request.on('error', () => finish(false));
-}
-
 // Next.js サーバーの起動
 function startNextServer(port, extraEnv = {}) {
   const isDev = !app.isPackaged;
   const projectPath = app.getAppPath();
   
-  // ログファイルの作成 (Finder等からのGUI起動時の不具合究明用・ホームフォルダ直下に出力)
-  const logFile = path.join(app.getPath('home'), 'radtest-server.log');
+  // GUI起動時の調査ログは、インストール先ではなくOS管理のアプリ用データ領域へ保存する。
+  const logDirectory = app.getPath('userData');
+  fs.mkdirSync(logDirectory, { recursive: true });
+  const logFile = path.join(logDirectory, 'server.log');
   const logStream = fs.createWriteStream(logFile, { flags: 'w' });
   
   logStream.write(`=== Server Start Attempt at ${new Date().toISOString()} ===\n`);
@@ -57,27 +47,25 @@ function startNextServer(port, extraEnv = {}) {
   logStream.write(`Is Packaged: ${app.isPackaged}\n`);
   logStream.write(`Platform: ${process.platform}\n`);
 
-  let command;
-  let args = [];
-  
-  const nextBin = path.join('node_modules', 'next', 'dist', 'bin', 'next');
-  const subCommand = isDev ? 'dev --webpack' : 'start';
-  
-  if (process.platform === 'win32') {
-    command = 'cmd.exe';
-    args = ['/c', `node ${nextBin} ${subCommand} -p ${port}`];
-  } else {
-    // macOS/Linux では、ログインシェル (zsh -l) を経由させて環境変数をロードした上で、
-    // package.jsonのscriptsに依存しないよう、直接 node_modules 内の next コマンドを実行
-    command = 'zsh';
-    args = ['-l', '-c', `cd "${projectPath}" && node ${nextBin} ${subCommand} -p ${port}`];
-  }
+  // Electron同梱のNode.jsランタイムを使用し、利用者端末のnodeやシェルに依存しない。
+  // 引数配列で起動するため、インストール先のパスに空白があっても安全に扱える。
+  const { command, args } = createNextServerLaunch({
+    execPath: process.execPath,
+    projectPath,
+    port,
+    isDev,
+  });
   
   logStream.write(`Running Command: ${command} ${args.join(' ')}\n\n`);
 
   nextProcess = spawn(command, args, {
     cwd: projectPath,
-    env: { ...process.env, ...extraEnv, PORT: port.toString() }
+    env: createNextServerEnv({
+      baseEnv: process.env,
+      extraEnv,
+      port,
+      isDev,
+    }),
   });
   
   nextProcess.stdout.pipe(logStream);
@@ -106,7 +94,7 @@ function createWindow(port) {
     }
   });
 
-  const url = `http://localhost:${port}`;
+  const url = `http://${LOOPBACK_HOST}:${port}`;
   
   // サーバーの応答をポーリングで待機し、立ち上がり次第ロード
   const checkServer = () => {
@@ -129,26 +117,13 @@ function createWindow(port) {
 
 // Electron の初期化完了時に実行
 app.whenReady().then(async () => {
-  const launchOwnServer = () => findFreePort(3000, (port) => {
-      serverPort = port;
-      startNextServer(port);
-      createWindow(port);
-    });
-
-  if (!app.isPackaged) {
-    checkServerAvailable(3000, available => {
-      if (!available) {
-        launchOwnServer();
-        return;
-      }
-      serverPort = 3000;
-      console.log('[Electron] Reusing the existing Next.js dev server at http://localhost:3000');
-      createWindow(serverPort);
-    });
-    return;
-  }
-
-  launchOwnServer();
+  // 開発版も必ず専用サーバーを起動する。インストール済みRadExam等が3000番を
+  // 使用していても、空きポートと専用distDirを使うため古い画面を再利用しない。
+  findFreePort(3000, (port) => {
+    serverPort = port;
+    startNextServer(port);
+    createWindow(port);
+  });
 });
 
 app.on('window-all-closed', () => {

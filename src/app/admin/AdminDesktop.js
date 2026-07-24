@@ -8,6 +8,7 @@ import adminStyles from './AdminEdit.module.scss';
 
 import { initializeLocalExams, getExamTypes } from '@/lib/data';
 import { saveLocalExam, deleteLocalExam, exportAllLocalData, importLocalData, getLocalExam, saveExamPdf, getExamPdfs } from '@/lib/localDb';
+import { createBackupArchiveBlob, readBackupFile } from '@/lib/backupArchive.mjs';
 import {
     buildNuclearCanvasRotationPlan,
     detectNuclearContentRotation,
@@ -4942,11 +4943,11 @@ export default function AdminPage() {
                 alert("バックアップするデータがありません。");
                 return;
             }
-            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+            const blob = await createBackupArchiveBlob(data);
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = `radtest_local_backup_${new Date().toISOString().slice(0, 10)}.json`;
+            a.download = `radexam-backup-${new Date().toISOString().slice(0, 10)}.radexam`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
@@ -4967,15 +4968,14 @@ export default function AdminPage() {
         }
 
         try {
-            const text = await file.text();
-            const json = JSON.parse(text);
+            const json = await readBackupFile(file);
             await importLocalData(json);
             await initializeLocalExams(true);
             loadLocalExams();
             alert("データを復元しました。画面を再読み込みします。");
             window.location.reload();
         } catch (e) {
-            alert(`復元に失敗しました。正しいJSONファイルか確認してください: ${e.message}`);
+            alert(`復元に失敗しました。正しいバックアップファイルか確認してください: ${e.message}`);
         } finally {
             e.target.value = '';
         }
@@ -5314,10 +5314,8 @@ export default function AdminPage() {
                                         padding: '3rem 1.5rem',
                                         textAlign: 'center',
                                         background: '#f8fafc',
-                                        cursor: 'pointer',
                                         position: 'relative'
                                     }}
-                                    onClick={() => document.getElementById('pdf-file-selector').click()}
                                     onDragOver={(event) => event.preventDefault()}
                                     onDrop={(event) => {
                                         event.preventDefault();
@@ -5326,42 +5324,60 @@ export default function AdminPage() {
                                     >
                                         <div style={{ fontSize: '3rem', marginBottom: '0.75rem' }}>📁</div>
                                         <div style={{ fontWeight: 'bold', color: '#2d3748', fontSize: '1.05rem', marginBottom: '0.3rem' }}>
-                                            ここに複数の過去問PDFをドロップ、またはクリックして選択
+                                            ここに過去問PDFをドロップ
                                         </div>
-                                        <button
-                                            type="button"
-                                            onClick={(event) => {
-                                                event.stopPropagation();
-                                                document.getElementById('pdf-folder-selector').click();
-                                            }}
-                                            style={{
-                                                marginTop: '1rem',
-                                                padding: '0.6rem 1rem',
-                                                border: '1px solid #3182ce',
-                                                borderRadius: '0.375rem',
-                                                background: '#fff',
-                                                color: '#2b6cb0',
-                                                fontWeight: '700',
-                                                cursor: 'pointer'
-                                            }}
-                                        >
-                                            フォルダを選択
-                                        </button>
+                                        <div style={{ color: '#718096', fontSize: '0.88rem' }}>
+                                            1件だけでも、複数のPDFでも選択できます。
+                                        </div>
+                                        <div style={{ display: 'flex', justifyContent: 'center', flexWrap: 'wrap', gap: '0.75rem', marginTop: '1rem' }}>
+                                            <button
+                                                type="button"
+                                                onClick={() => document.getElementById('pdf-file-selector').click()}
+                                                style={{
+                                                    padding: '0.65rem 1.1rem',
+                                                    border: '1px solid #2b6cb0',
+                                                    borderRadius: '0.375rem',
+                                                    background: '#3182ce',
+                                                    color: '#fff',
+                                                    fontWeight: '700',
+                                                    cursor: 'pointer'
+                                                }}
+                                            >
+                                                PDFファイルを選択（複数可）
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => document.getElementById('pdf-folder-selector').click()}
+                                                style={{
+                                                    padding: '0.65rem 1.1rem',
+                                                    border: '1px solid #3182ce',
+                                                    borderRadius: '0.375rem',
+                                                    background: '#fff',
+                                                    color: '#2b6cb0',
+                                                    fontWeight: '700',
+                                                    cursor: 'pointer'
+                                                }}
+                                            >
+                                                PDFフォルダを選択
+                                            </button>
+                                        </div>
                                         <input
                                             id="pdf-file-selector"
                                             type="file"
-                                            accept=".pdf"
+                                            accept="application/pdf,.pdf"
                                             multiple
                                             style={{ display: 'none' }}
+                                            onClick={(event) => event.stopPropagation()}
                                             onChange={handlePdfImport}
                                         />
                                         <input
                                             id="pdf-folder-selector"
                                             type="file"
-                                            accept=".pdf"
+                                            accept="application/pdf,.pdf"
                                             multiple
                                             webkitdirectory=""
                                             style={{ display: 'none' }}
+                                            onClick={(event) => event.stopPropagation()}
                                             onChange={handlePdfImport}
                                         />
                                     </div>
@@ -5798,7 +5814,7 @@ export default function AdminPage() {
                             <div>
                                 <h3 style={{ marginTop: 0, marginBottom: '0.2rem' }}>💾 ローカルデータの管理（エクスポート & インポート）</h3>
                                 <p style={{ color: '#718096', fontSize: '0.85rem', margin: 0 }}>
-                                    全てのカスタム試験データと学習の進捗（正誤、お気に入り、メモ）をまとめてJSONファイルとしてバックアップ・復元できます。
+                                    全てのカスタム試験データ、画像、参照PDF、学習進捗（正誤、お気に入り、メモ）をRadExamバックアップとして保存・復元できます。
                                 </p>
                             </div>
                             <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
@@ -5831,7 +5847,7 @@ export default function AdminPage() {
                                     📥 インポート (完全復元)
                                     <input
                                         type="file"
-                                        accept=".json"
+                                        accept=".radexam,.json,application/json,application/x-radexam-backup"
                                         style={{ display: 'none' }}
                                         onChange={handleImportBackup}
                                     />

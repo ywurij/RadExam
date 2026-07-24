@@ -134,7 +134,7 @@ export default function SearchPage() {
                     onChange={handleSearch}
                     onFocus={() => setIsHistoryVisible(true)}
                     onBlur={() => window.setTimeout(() => setIsHistoryVisible(false), 120)}
-                    placeholder="問題文や解説を検索..."
+                    placeholder="問題文、解説、ID（例: 2022048）を検索..."
                     autoFocus
                     className={styles.input}
                 />

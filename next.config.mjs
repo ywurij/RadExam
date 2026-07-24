@@ -42,6 +42,8 @@ const withPWA = withPWAInit({
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  distDir: process.env.RADEXAM_NEXT_DIST_DIR || ".next",
+  output: appTarget === "desktop" ? "standalone" : undefined,
   env: {
     NEXT_PUBLIC_APP_TARGET: appTarget,
   },

@@ -1,5 +1,6 @@
 
 import { useState } from 'react';
+import { resolveQuestionProgress } from '@/lib/questionProgress.mjs';
 import styles from './QuizResult.module.scss';
 
 
@@ -8,7 +9,7 @@ export default function QuizResult({ questions, userProgress, onHome, onToggleLi
     let correctCount = 0;
 
     questions.forEach(q => {
-        if (userProgress[q.id]?.status === 'correct') {
+        if (resolveQuestionProgress(userProgress, q).status === 'correct') {
             correctCount++;
         }
     });
@@ -52,8 +53,9 @@ export default function QuizResult({ questions, userProgress, onHome, onToggleLi
                     </thead>
                     <tbody>
                         {questions.map((q, index) => {
-                            const status = userProgress[q.id]?.status;
-                            const isLiked = userProgress[q.id]?.isLiked;
+                            const questionProgress = resolveQuestionProgress(userProgress, q);
+                            const status = questionProgress.status;
+                            const isLiked = questionProgress.isLiked;
                             return (
                                 <tr key={q.id}>
                                     <td>{index + 1}</td>

@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { getAllLocalExams, exportAllLocalData, importLocalData } from '@/lib/localDb';
+import { createBackupArchiveBlob, readBackupFile } from '@/lib/backupArchive.mjs';
 import { initializeLocalExams } from '@/lib/data';
 import styles from './data.module.scss';
 
@@ -43,7 +44,7 @@ export default function DataTransferPage() {
         setMessage('');
         setError('');
         try {
-            const backup = JSON.parse(await file.text());
+            const backup = await readBackupFile(file);
             const summary = getBackupSummary(backup);
             const shouldImport = window.confirm(
                 `${summary.examCount}件の試験（全${summary.questionCount}問）を登録します。\n現在の試験データと学習履歴は置き換えられます。続行しますか？`
@@ -59,7 +60,7 @@ export default function DataTransferPage() {
         } catch (importError) {
             console.error('Failed to import mobile backup:', importError);
             setError(importError instanceof SyntaxError
-                ? 'JSONファイルを読み取れませんでした。'
+                ? 'バックアップファイルを読み取れませんでした。'
                 : importError.message || 'データの登録に失敗しました。');
         } finally {
             setBusy(false);
@@ -73,12 +74,12 @@ export default function DataTransferPage() {
         try {
             const backup = await exportAllLocalData();
             const summary = getBackupSummary(backup);
-            const blob = new Blob([JSON.stringify(backup)], { type: 'application/json' });
+            const blob = await createBackupArchiveBlob(backup);
             const url = URL.createObjectURL(blob);
             const link = document.createElement('a');
             const date = new Date().toISOString().slice(0, 10);
             link.href = url;
-            link.download = `radexam-mobile-${date}.json`;
+            link.download = `radexam-mobile-${date}.radexam`;
             document.body.appendChild(link);
             link.click();
             link.remove();
@@ -101,7 +102,7 @@ export default function DataTransferPage() {
                 <div>
                     <span className={styles.eyebrow}>MOBILE DATA</span>
                     <h1>試験データ転送</h1>
-                    <p>Electron版で書き出したJSONを、この端末へ手動登録します。</p>
+                    <p>Electron版で書き出したRadExamバックアップを、この端末へ手動登録します。</p>
                 </div>
             </header>
 
@@ -116,9 +117,9 @@ export default function DataTransferPage() {
                 <div className={styles.cardBody}>
                     <h2>この端末へ登録</h2>
                     <p>バックアップ内の試験、画像、学習履歴、問題に紐づく参照PDFを登録します。</p>
-                    <input ref={inputRef} type="file" accept="application/json,.json" onChange={handleImport} hidden />
+                    <input ref={inputRef} type="file" accept=".radexam,.json,application/json,application/x-radexam-backup" onChange={handleImport} hidden />
                     <button type="button" className={styles.primaryButton} onClick={() => inputRef.current?.click()} disabled={busy}>
-                        {busy ? '処理中…' : 'JSONファイルを選択'}
+                        {busy ? '処理中…' : 'バックアップファイルを選択'}
                     </button>
                 </div>
             </section>

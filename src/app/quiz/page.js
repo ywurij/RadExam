@@ -7,7 +7,7 @@ import QuestionCard from '@/components/QuestionCard';
 import styles from './quiz.module.scss';
 import { saveLocalProgress, getLocalProgress, updateLocalQuestion, getExamPdfs } from '@/lib/localDb';
 import QuizResult from '@/components/QuizResult';
-import { limitResumableSessions } from '@/lib/sessionHistory';
+import { limitResumableSessions, normalizeSessionConditions } from '@/lib/sessionHistory';
 
 const generateUUID = () => {
     if (typeof window !== 'undefined' && window.crypto && window.crypto.randomUUID) {
@@ -46,6 +46,7 @@ function QuizContent() {
     const user = null; // ローカル完結型のためログイン不要
     const [allGenres, setAllGenres] = useState([]);
     const [sessionId, setSessionId] = useState(null);
+    const [sessionConditions, setSessionConditions] = useState(null);
     const [examPdfFiles, setExamPdfFiles] = useState([]);
     const [isQuestionEditing, setIsQuestionEditing] = useState(false);
 
@@ -93,6 +94,7 @@ function QuizContent() {
 
             if (isResume && session) {
                 setSessionId(session.id);
+                setSessionConditions(normalizeSessionConditions(session));
                 try {
                     // Verify data integrity - fetch questions from the SPECIFIC exam to avoid ID collisions
                     const targetExamId = session.examId || examId;
@@ -129,8 +131,17 @@ function QuizContent() {
                 if (!isSearchMode) {
                     const newId = generateUUID();
                     setSessionId(newId);
+                    setSessionConditions(normalizeSessionConditions({
+                        yearFilter,
+                        countFilter,
+                        statusFilter: statusFilter !== 'all' ? statusFilter.split(',') : [],
+                        genreFilter,
+                        isShuffle,
+                        mode: viewMode,
+                    }));
                 } else {
                     setSessionId(null);
+                    setSessionConditions(null);
                 }
 
                 if (idFilter) {
@@ -224,24 +235,27 @@ function QuizContent() {
         };
 
         loadData();
-    }, [examId, yearFilter, countFilter, isShuffle, searchParams, statusFilter, idFilter, user, router, isSearchMode]);
+    }, [examId, yearFilter, countFilter, isShuffle, genreFilter, searchParams, statusFilter, idFilter, user, router, isSearchMode, viewMode]);
 
     const persistInterruptedSession = () => {
         if (typeof window === 'undefined' || isSearchMode || questions.length === 0 || !sessionId) return;
 
         const sessionsKey = 'radexam_sessions';
-        const sessionData = {
-            id: sessionId,
-            questionIds: questions.map(q => q.id),
-            currentIndex,
-            timestamp: Date.now(),
-            examId,
+        const conditions = sessionConditions || normalizeSessionConditions({
             yearFilter,
             countFilter,
             statusFilter: searchParams.get('status') ? searchParams.get('status').split(',') : [],
             genreFilter,
             isShuffle,
             mode: viewMode,
+        });
+        const sessionData = {
+            id: sessionId,
+            questionIds: questions.map(q => q.id),
+            currentIndex,
+            timestamp: Date.now(),
+            examId,
+            ...conditions,
             userId: user?.uid,
             interrupted: true,
         };

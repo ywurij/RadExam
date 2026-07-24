@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { limitResumableSessions, MAX_RESUMABLE_SESSIONS } from '../src/lib/sessionHistory.js';
+import { limitResumableSessions, MAX_RESUMABLE_SESSIONS, normalizeSessionConditions } from '../src/lib/sessionHistory.js';
 
 test('keeps only the four newest resumable sessions', () => {
     const sessions = [1, 5, 3, 2, 4].map(timestamp => ({ id: `session-${timestamp}`, timestamp, interrupted: true }));
@@ -24,4 +24,17 @@ test('keeps only sessions created by an explicit interruption', () => {
         ]).map(session => session.id),
         ['interrupted'],
     );
+});
+
+test('preserves the original filters when a resumed session is interrupted again', () => {
+    const original = {
+        yearFilter: 'last3',
+        countFilter: 'all',
+        statusFilter: ['incorrect', 'liked'],
+        genreFilter: ['画像診断'],
+        isShuffle: true,
+        mode: 'practice',
+    };
+
+    assert.deepEqual(normalizeSessionConditions(original), original);
 });

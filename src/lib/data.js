@@ -1,5 +1,6 @@
 import Fuse from 'fuse.js';
 import { repairLegacySequentialComparisonOptions } from '@/lib/pdfImportText';
+import { prioritizeExactQuestionIdMatches } from '@/lib/questionSearch.mjs';
 import { 
     getLocalProgress, 
     getAllLocalExams, 
@@ -91,7 +92,7 @@ export const searchQuestions = async (query, examId = null, customKeys = null) =
     const rawData = examId ? await getExamData(examId) : await getAllQuestions();
     const data = rawData;
 
-    const keys = customKeys || ['question', 'options.a', 'options.b', 'options.c', 'options.d', 'options.e', 'explanation', 'genre', 'year'];
+    const keys = customKeys || ['id', 'questionNumber', 'question', 'options.a', 'options.b', 'options.c', 'options.d', 'options.e', 'explanation', 'genre', 'year'];
 
     const options = {
         keys: keys,
@@ -102,8 +103,14 @@ export const searchQuestions = async (query, examId = null, customKeys = null) =
 
     const fuse = new Fuse(data, options);
     const formattedQuery = query.trim().split(/[\s　]+/).map(term => `'${term}`).join(' ');
+    const exactIdMatches = prioritizeExactQuestionIdMatches(data, query);
+    const fuzzyMatches = fuse.search(formattedQuery).map(result => result.item);
+    const seen = new Set(exactIdMatches);
 
-    return fuse.search(formattedQuery).map(result => result.item);
+    return [
+        ...exactIdMatches,
+        ...fuzzyMatches.filter(question => !seen.has(question)),
+    ];
 };
 
 export const getYears = (examId) => {
