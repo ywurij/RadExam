@@ -102,7 +102,7 @@ export default function DataTransferPage() {
                 <div>
                     <span className={styles.eyebrow}>MOBILE DATA</span>
                     <h1>試験データ転送</h1>
-                    <p>Electron版で書き出したRadExamバックアップを、この端末へ手動登録します。</p>
+                    <p>Mac/PC版で書き出したRadExamバックアップ（.radexam）を、この端末へ手動登録します。</p>
                 </div>
             </header>
 

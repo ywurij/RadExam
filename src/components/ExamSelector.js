@@ -293,7 +293,7 @@ export default function ExamSelector() {
                 {isLoadingExams && <p className={styles.orderHint}>試験データを読み込み中…</p>}
                 {!isLoadingExams && exams.length === 0 && <div className={styles.emptyState}>
                     <strong>試験データがまだありません</strong>
-                    <p>{isMobileTarget ? 'Electron版で書き出したJSONファイルを登録してください。' : '試験管理からPDFまたはバックアップデータを登録してください。'}</p>
+                    <p>{isMobileTarget ? 'Mac/PC版で書き出したRadExamバックアップ（.radexam）を登録してください。' : '試験管理からPDFまたはバックアップデータを登録してください。'}</p>
                     <button type="button" onClick={() => router.push(isMobileTarget ? '/data' : '/admin')}>{isMobileTarget ? 'データ転送を開く' : '試験管理を開く'}</button>
                 </div>}
                 <div className={styles.examGrid} onPointerMove={(event) => {
