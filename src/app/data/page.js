@@ -128,7 +128,7 @@ export default function DataTransferPage() {
                 <div className={styles.step}>2</div>
                 <div className={styles.cardBody}>
                     <h2>編集・学習結果を持ち出す</h2>
-                    <p>この端末で編集した解説・ジャンルと、正誤・お気に入りをJSONに保存します。</p>
+                    <p>この端末で編集した解説・ジャンルと、正誤・お気に入りをRadExamバックアップ（.radexam）に保存します。</p>
                     <button type="button" className={styles.secondaryButton} onClick={handleExport} disabled={busy || exams.length === 0}>
                         モバイルデータを書き出す
                     </button>
