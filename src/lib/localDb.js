@@ -5,6 +5,17 @@ import {
     findMissingBackupImageKeys,
     findMissingBackupPdfKeys,
 } from '@/lib/backupData.mjs';
+import {
+    buildDeleteSyncChangeInput,
+    buildQuestionEntityId,
+    buildQuestionSyncChangeInput,
+    buildUpsertSyncChangeInput,
+    SYNC_ENTITY_TYPES,
+} from '@/lib/sync/syncProtocol.mjs';
+import {
+    markLocalSyncReconciliationRequired,
+    recordLocalSyncChanges,
+} from '@/lib/sync/localSyncJournal';
 
 // --- インスタンスの設定 ---
 
@@ -46,6 +57,35 @@ const buildLocalImageRef = (key) => `${LOCAL_IMAGE_PREFIX}${key}`;
 const extractLocalImageKey = (value) => isLocalImageRef(value) ? value.slice(LOCAL_IMAGE_PREFIX.length) : '';
 const buildExamImageKeyPrefix = (examId) => `${examId}::`;
 const buildExamPdfKeyPrefix = (examId) => `${examId}::`;
+const bytesToHex = bytes => (
+    Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')
+);
+const calculateBlobHash = async (blob) => {
+    if (!(blob instanceof Blob) || !globalThis.crypto?.subtle) return '';
+    const digest = await globalThis.crypto.subtle.digest('SHA-256', await blob.arrayBuffer());
+    return `sha256:${bytesToHex(new Uint8Array(digest))}`;
+};
+const recordSyncChangesSafely = async (changes) => {
+    const candidates = (changes || []).filter(Boolean);
+    if (candidates.length === 0) return;
+    try {
+        await recordLocalSyncChanges(candidates);
+    } catch (error) {
+        console.error('Failed to record local sync changes:', error);
+        try {
+            await markLocalSyncReconciliationRequired('local-change-journal-error');
+        } catch (markError) {
+            console.error('Failed to mark sync reconciliation as required:', markError);
+        }
+    }
+};
+const markSyncReconciliationSafely = async (reason) => {
+    try {
+        await markLocalSyncReconciliationRequired(reason);
+    } catch (error) {
+        console.error('Failed to mark sync reconciliation as required:', error);
+    }
+};
 const resolveImageLegend = (source) => (
     Object.prototype.hasOwnProperty.call(source, 'legend')
         ? String(source.legend ?? '')
@@ -116,29 +156,38 @@ const normalizeStoredImage = async (examId, questionId, image, imageIndex) => {
     const legend = resolveImageLegend(source);
     const metadata = {
         ...(source.layout ? { layout: source.layout } : {}),
-        ...(source.legendLayout ? { legendLayout: source.legendLayout } : {})
+        ...(source.legendLayout ? { legendLayout: source.legendLayout } : {}),
+        ...(source.contentHash ? { contentHash: source.contentHash } : {}),
     };
     const storageKey = source.storageKey || extractLocalImageKey(source.path);
     const originalPath = typeof source.path === 'string' ? source.path : '';
 
     if (storageKey) {
+        let contentHash = source.contentHash || '';
+        if (!contentHash) {
+            const storedBlob = await imageStore.getItem(storageKey);
+            contentHash = storedBlob ? await calculateBlobHash(storedBlob) : '';
+        }
         return {
             path: buildLocalImageRef(storageKey),
             legend,
             storageKey,
-            ...metadata
+            ...metadata,
+            ...(contentHash ? { contentHash } : {}),
         };
     }
 
     if (isDataUrl(originalPath)) {
         const imageKey = buildExamImageKey(examId, questionId, imageIndex);
         const blob = await dataUrlToBlob(originalPath);
+        const contentHash = await calculateBlobHash(blob);
         await imageStore.setItem(imageKey, blob);
         return {
             path: buildLocalImageRef(imageKey),
             legend,
             storageKey: imageKey,
-            ...metadata
+            ...metadata,
+            ...(contentHash ? { contentHash } : {}),
         };
     }
 
@@ -189,6 +238,7 @@ const cleanupOrphanExamImages = async (examId, usedImageKeys) => {
     });
 
     await Promise.all(deleteTargets.map((key) => imageStore.removeItem(key)));
+    return deleteTargets;
 };
 
 const hydrateQuestionImages = async (question) => {
@@ -198,7 +248,8 @@ const hydrateQuestionImages = async (question) => {
         const source = image && typeof image === 'object' ? image : {};
         const metadata = {
             ...(source.layout ? { layout: source.layout } : {}),
-            ...(source.legendLayout ? { legendLayout: source.legendLayout } : {})
+            ...(source.legendLayout ? { legendLayout: source.legendLayout } : {}),
+            ...(source.contentHash ? { contentHash: source.contentHash } : {}),
         };
         const storageKey = extractLocalImageKey(source.path);
         if (!storageKey) {
@@ -234,6 +285,81 @@ const hydrateQuestionImages = async (question) => {
     };
 };
 
+const collectStoredImageDescriptors = (questions = []) => {
+    const descriptors = new Map();
+    for (const question of questions) {
+        for (const image of question?.images || []) {
+            const localKey = image?.storageKey || extractLocalImageKey(image?.path);
+            if (!localKey) continue;
+            descriptors.set(localKey, {
+                localKey,
+                ...(image?.contentHash ? { contentHash: image.contentHash } : {}),
+            });
+        }
+    }
+    return descriptors;
+};
+
+const buildExamSyncChanges = (previousExam, nextExam, deletedImageKeys = []) => {
+    const changes = [
+        buildUpsertSyncChangeInput({
+            entityType: SYNC_ENTITY_TYPES.EXAM,
+            entityId: nextExam.id,
+            previousValue: previousExam || {},
+            nextValue: nextExam,
+            fields: ['name', 'years', 'genres'],
+        }),
+    ];
+    const previousQuestions = new Map(
+        (previousExam?.questions || []).map(question => [String(question.id), question])
+    );
+    const nextQuestions = new Map(
+        (nextExam.questions || []).map(question => [String(question.id), question])
+    );
+
+    for (const [questionId, question] of nextQuestions) {
+        changes.push(buildQuestionSyncChangeInput({
+            examId: nextExam.id,
+            previousQuestion: previousQuestions.get(questionId),
+            nextQuestion: question,
+        }));
+    }
+    for (const questionId of previousQuestions.keys()) {
+        if (!nextQuestions.has(questionId)) {
+            changes.push(buildDeleteSyncChangeInput({
+                entityType: SYNC_ENTITY_TYPES.QUESTION,
+                entityId: buildQuestionEntityId(nextExam.id, questionId),
+            }));
+        }
+    }
+
+    const previousImages = collectStoredImageDescriptors(previousExam?.questions);
+    const nextImages = collectStoredImageDescriptors(nextExam.questions);
+    for (const [localKey, descriptor] of nextImages) {
+        const previousDescriptor = previousImages.get(localKey);
+        if (previousDescriptor?.contentHash === descriptor.contentHash && previousDescriptor) continue;
+        changes.push(buildUpsertSyncChangeInput({
+            entityType: SYNC_ENTITY_TYPES.IMAGE,
+            entityId: localKey,
+            previousValue: previousDescriptor || {},
+            nextValue: descriptor,
+            fields: ['localKey', 'contentHash'],
+            blobRefs: [{
+                kind: SYNC_ENTITY_TYPES.IMAGE,
+                localKey,
+                ...(descriptor.contentHash ? { contentHash: descriptor.contentHash } : {}),
+            }],
+        }));
+    }
+    for (const localKey of deletedImageKeys) {
+        changes.push(buildDeleteSyncChangeInput({
+            entityType: SYNC_ENTITY_TYPES.IMAGE,
+            entityId: localKey,
+        }));
+    }
+    return changes;
+};
+
 // --- カスタム試験 (Custom Exams) 関連のAPI ---
 
 /**
@@ -244,14 +370,15 @@ const hydrateQuestionImages = async (question) => {
  */
 export const saveLocalExam = async (examId, name, questions, isMerge = false) => {
     if (!examId || !questions) return;
-    
+
+    const previousExam = await examsStore.getItem(examId);
     let finalName = name;
     let finalQuestions = questions.map(normalizeQuestionId);
     
     // マージ（追加）モードの場合、既存の試験データを取得してマージする
     if (isMerge) {
         try {
-            const existingExam = await examsStore.getItem(examId);
+            const existingExam = previousExam;
             if (existingExam) {
                 // 既存の表示名 (name) を最優先で維持する
                 if (existingExam.name) {
@@ -272,7 +399,7 @@ export const saveLocalExam = async (examId, name, questions, isMerge = false) =>
     
     // ユニークな年度とジャンルを抽出してメタデータとして保存
     const { preparedQuestions, usedImageKeys } = await prepareQuestionsForStorage(examId, finalQuestions);
-    await cleanupOrphanExamImages(examId, usedImageKeys);
+    const deletedImageKeys = await cleanupOrphanExamImages(examId, usedImageKeys);
 
     const years = [...new Set(preparedQuestions.map(q => q.year).filter(Boolean))].map(Number).sort((a, b) => b - a);
     const genres = [...new Set(preparedQuestions.map(q => q.genre).filter(Boolean))].sort();
@@ -287,6 +414,7 @@ export const saveLocalExam = async (examId, name, questions, isMerge = false) =>
     };
     
     await examsStore.setItem(examId, examData);
+    await recordSyncChangesSafely(buildExamSyncChanges(previousExam, examData, deletedImageKeys));
 };
 
 /**
@@ -332,28 +460,66 @@ export const getAllLocalExams = async () => {
  * @param {string} examId 
  */
 export const deleteLocalExam = async (examId) => {
+    const examData = await examsStore.getItem(examId);
     await examsStore.removeItem(examId);
-    await cleanupOrphanExamImages(examId, new Set());
+    const imageKeys = await cleanupOrphanExamImages(examId, new Set());
     const pdfKeys = [];
     await pdfStore.iterate((_value, key) => {
         if (key.startsWith(buildExamPdfKeyPrefix(examId))) pdfKeys.push(key);
     });
     await Promise.all(pdfKeys.map(key => pdfStore.removeItem(key)));
+    await recordSyncChangesSafely([
+        ...(examData ? [buildDeleteSyncChangeInput({
+            entityType: SYNC_ENTITY_TYPES.EXAM,
+            entityId: examId,
+        })] : []),
+        ...(examData?.questions || []).map(question => buildDeleteSyncChangeInput({
+            entityType: SYNC_ENTITY_TYPES.QUESTION,
+            entityId: buildQuestionEntityId(examId, question.id),
+        })),
+        ...imageKeys.map(key => buildDeleteSyncChangeInput({
+            entityType: SYNC_ENTITY_TYPES.IMAGE,
+            entityId: key,
+        })),
+        ...pdfKeys.map(key => buildDeleteSyncChangeInput({
+            entityType: SYNC_ENTITY_TYPES.PDF,
+            entityId: key,
+        })),
+    ]);
 };
 
 export const saveExamPdf = async (examId, year, file) => {
     if (!examId || !file) return;
     const name = file.name || `${year || 'unknown'}.pdf`;
     const key = `${buildExamPdfKeyPrefix(examId)}${year || 'unknown'}::${name}`;
-    await pdfStore.setItem(key, {
+    const previousRecord = await pdfStore.getItem(key);
+    const blob = file instanceof Blob ? file : new Blob([file], { type: 'application/pdf' });
+    const contentHash = await calculateBlobHash(blob);
+    const nextRecord = {
         examId,
         year: Number(year) || null,
         name,
         type: file.type || 'application/pdf',
         size: file.size || 0,
-        blob: file instanceof Blob ? file : new Blob([file], { type: 'application/pdf' }),
+        blob,
+        ...(contentHash ? { contentHash } : {}),
         updatedAt: new Date().toISOString(),
-    });
+    };
+    await pdfStore.setItem(key, nextRecord);
+    await recordSyncChangesSafely([
+        buildUpsertSyncChangeInput({
+            entityType: SYNC_ENTITY_TYPES.PDF,
+            entityId: key,
+            previousValue: previousRecord || {},
+            nextValue: nextRecord,
+            fields: ['examId', 'year', 'name', 'type', 'size', 'contentHash'],
+            blobRefs: [{
+                kind: SYNC_ENTITY_TYPES.PDF,
+                localKey: key,
+                ...(contentHash ? { contentHash } : {}),
+            }],
+        }),
+    ]);
 };
 
 export const getExamPdfs = async (examId) => {
@@ -399,18 +565,20 @@ export const updateLocalQuestion = async (examId, questionId, updates) => {
     }
 
     const { preparedQuestions, usedImageKeys } = await prepareQuestionsForStorage(examId, nextQuestions);
-    await cleanupOrphanExamImages(examId, usedImageKeys);
+    const deletedImageKeys = await cleanupOrphanExamImages(examId, usedImageKeys);
 
     const years = [...new Set(preparedQuestions.map(q => q.year).filter(Boolean))].map(Number).sort((a, b) => b - a);
     const genres = [...new Set(preparedQuestions.map(q => q.genre).filter(Boolean))].sort();
 
-    await examsStore.setItem(examId, {
+    const nextExamData = {
         ...examData,
         questions: preparedQuestions,
         years,
         genres,
         updatedAt: new Date().toISOString(),
-    });
+    };
+    await examsStore.setItem(examId, nextExamData);
+    await recordSyncChangesSafely(buildExamSyncChanges(examData, nextExamData, deletedImageKeys));
 };
 
 
@@ -433,6 +601,15 @@ export const saveLocalProgress = async (questionId, data) => {
             updatedAt: new Date().toISOString()
         };
         await progressStore.setItem(strId, updated);
+        await recordSyncChangesSafely([
+            buildUpsertSyncChangeInput({
+                entityType: SYNC_ENTITY_TYPES.PROGRESS,
+                entityId: strId,
+                previousValue: existing,
+                nextValue: updated,
+                fields: Object.keys(data),
+            }),
+        ]);
     } catch (e) {
         console.error(`Failed to save local progress for ${questionId}:`, e);
     }
@@ -613,4 +790,5 @@ export const importLocalData = async (jsonData, strategy = 'overwrite', { includ
     for (const [key, value] of preparedPdfs) {
         await pdfStore.setItem(key, value);
     }
+    await markSyncReconciliationSafely('manual-backup-import');
 };
