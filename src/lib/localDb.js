@@ -11,16 +11,21 @@ import {
     buildQuestionEntityId,
     buildQuestionSyncChangeInput,
     buildUpsertSyncChangeInput,
+    applySyncFieldDelta,
+    parseQuestionEntityId,
     SYNC_ENTITY_TYPES,
+    SYNC_OPERATIONS,
     SYNC_PROVIDERS,
 } from '@/lib/sync/syncProtocol.mjs';
 import {
     configureLocalSyncJournal,
     getLocalSyncJournalConfig,
     listPendingLocalSyncChanges,
+    localSyncJournal,
     markLocalSyncReconciliationRequired,
     recordLocalSyncChanges,
 } from '@/lib/sync/localSyncJournal';
+import { processIncomingSyncChange } from '@/lib/sync/syncReceiver.mjs';
 
 // --- インスタンスの設定 ---
 
@@ -493,6 +498,197 @@ export const initializeLocalSyncTracking = async ({
         alreadyInitialized: false,
         queuedChanges: recordedChanges.length,
         config,
+    };
+};
+
+const rebuildExamMetadata = exam => ({
+    ...exam,
+    years: [...new Set(
+        (exam?.questions || []).map(question => question.year).filter(Boolean)
+    )].map(Number).sort((left, right) => right - left),
+    genres: [...new Set(
+        (exam?.questions || []).map(question => question.genre).filter(Boolean)
+    )].sort(),
+});
+
+const normalizeReceivedBlob = (value, type = 'application/octet-stream') => {
+    if (value instanceof Blob) return value;
+    if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
+        return new Blob([value], { type });
+    }
+    throw new Error('クラウドから取得したファイルの形式が不正です。');
+};
+
+const expectedBlobHashForChange = change => (
+    change?.payload?.contentHash
+    || (change?.blobRefs || []).find(ref => (
+        ref?.kind === change.entityType
+        && String(ref?.localKey) === String(change.entityId)
+    ))?.contentHash
+    || ''
+);
+
+const verifyReceivedBlob = async (change, value, type) => {
+    const blob = normalizeReceivedBlob(value, type);
+    const expectedHash = expectedBlobHashForChange(change);
+    if (!expectedHash) return blob;
+    const actualHash = await calculateBlobHash(blob);
+    if (!actualHash || actualHash !== expectedHash) {
+        throw new Error(`クラウドファイルの内容確認に失敗しました: ${change.entityId}`);
+    }
+    return blob;
+};
+
+const applyRemoteExamChange = async change => {
+    if (change.operation === SYNC_OPERATIONS.DELETE) {
+        await examsStore.removeItem(change.entityId);
+        return;
+    }
+    const current = await examsStore.getItem(change.entityId) || {
+        id: change.entityId,
+        name: change.entityId,
+        questions: [],
+        years: [],
+        genres: [],
+    };
+    const next = applySyncFieldDelta(current, change);
+    await examsStore.setItem(change.entityId, {
+        ...next,
+        id: change.entityId,
+        questions: Array.isArray(next.questions) ? next.questions : [],
+        updatedAt: change.createdAt,
+    });
+};
+
+const applyRemoteQuestionChange = async change => {
+    const { examId, questionId } = parseQuestionEntityId(change.entityId);
+    const currentExam = await examsStore.getItem(examId);
+    if (!currentExam && change.operation === SYNC_OPERATIONS.DELETE) return;
+    const exam = currentExam || {
+        id: examId,
+        name: examId,
+        questions: [],
+        years: [],
+        genres: [],
+    };
+    const questions = Array.isArray(exam.questions) ? [...exam.questions] : [];
+    const questionIndex = questions.findIndex(question => String(question.id) === questionId);
+
+    if (change.operation === SYNC_OPERATIONS.DELETE) {
+        if (questionIndex >= 0) questions.splice(questionIndex, 1);
+    } else {
+        const currentQuestion = questionIndex >= 0
+            ? questions[questionIndex]
+            : { id: questionId };
+        const nextQuestion = normalizeQuestionId(
+            applySyncFieldDelta(currentQuestion, change)
+        );
+        if (questionIndex >= 0) questions[questionIndex] = nextQuestion;
+        else questions.push(nextQuestion);
+    }
+
+    await examsStore.setItem(examId, rebuildExamMetadata({
+        ...exam,
+        questions,
+        updatedAt: change.createdAt,
+    }));
+};
+
+const applyRemoteProgressChange = async change => {
+    if (change.operation === SYNC_OPERATIONS.DELETE) {
+        await progressStore.removeItem(change.entityId);
+        return;
+    }
+    const current = await progressStore.getItem(change.entityId) || {};
+    await progressStore.setItem(change.entityId, {
+        ...applySyncFieldDelta(current, change),
+        updatedAt: change.createdAt,
+    });
+};
+
+const applyRemoteImageChange = async (change, blob) => {
+    if (change.operation === SYNC_OPERATIONS.DELETE) {
+        await imageStore.removeItem(change.entityId);
+        return;
+    }
+    const verifiedBlob = await verifyReceivedBlob(change, blob, 'application/octet-stream');
+    await imageStore.setItem(change.entityId, verifiedBlob);
+};
+
+const applyRemotePdfChange = async (change, blob) => {
+    if (change.operation === SYNC_OPERATIONS.DELETE) {
+        await pdfStore.removeItem(change.entityId);
+        return;
+    }
+    const current = await pdfStore.getItem(change.entityId) || {};
+    const currentMetadata = { ...current };
+    delete currentMetadata.blob;
+    const metadata = applySyncFieldDelta(currentMetadata, change);
+    const verifiedBlob = await verifyReceivedBlob(
+        change,
+        blob,
+        metadata.type || 'application/pdf'
+    );
+    await pdfStore.setItem(change.entityId, {
+        ...metadata,
+        blob: verifiedBlob,
+        updatedAt: change.createdAt,
+    });
+};
+
+const localSyncDataStore = {
+    async applyChange(change, { blob } = {}) {
+        switch (change.entityType) {
+            case SYNC_ENTITY_TYPES.EXAM:
+                return applyRemoteExamChange(change);
+            case SYNC_ENTITY_TYPES.QUESTION:
+                return applyRemoteQuestionChange(change);
+            case SYNC_ENTITY_TYPES.PROGRESS:
+                return applyRemoteProgressChange(change);
+            case SYNC_ENTITY_TYPES.IMAGE:
+                return applyRemoteImageChange(change, blob);
+            case SYNC_ENTITY_TYPES.PDF:
+                return applyRemotePdfChange(change, blob);
+            default:
+                throw new Error(`ローカル反映に未対応の同期データです: ${change.entityType}`);
+        }
+    },
+};
+
+/**
+ * クラウドから受信した1変更を、重複・競合・ファイル検証を行ってから反映する。
+ */
+export const receiveRemoteSyncChange = async (change, { resolveBlob } = {}) => (
+    processIncomingSyncChange({
+        change,
+        journal: localSyncJournal,
+        dataStore: localSyncDataStore,
+        resolveBlob,
+    })
+);
+
+/**
+ * クラウドへアップロードする画像またはPDF本体を取得する。
+ */
+export const getLocalSyncBlob = async ({ kind, localKey, contentHash } = {}) => {
+    if (!localKey) throw new Error('同期ファイルのlocalKeyが必要です。');
+    let blob = null;
+    if (kind === SYNC_ENTITY_TYPES.IMAGE) {
+        blob = await imageStore.getItem(localKey);
+    } else if (kind === SYNC_ENTITY_TYPES.PDF) {
+        blob = (await pdfStore.getItem(localKey))?.blob || null;
+    } else {
+        throw new Error(`ファイル取得に未対応の同期データです: ${kind}`);
+    }
+    if (!blob) throw new Error(`同期するファイルが見つかりません: ${localKey}`);
+    const normalizedBlob = normalizeReceivedBlob(blob);
+    const actualHash = await calculateBlobHash(normalizedBlob);
+    if (contentHash && actualHash !== contentHash) {
+        throw new Error(`同期するファイルの内容が変更されています: ${localKey}`);
+    }
+    return {
+        blob: normalizedBlob,
+        contentHash: actualHash,
     };
 };
 

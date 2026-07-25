@@ -57,6 +57,15 @@ const cloneSyncValue = value => {
 };
 
 const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, key);
+const UNSAFE_PATH_PARTS = new Set(['__proto__', 'prototype', 'constructor']);
+
+const assertSafeFieldPath = path => {
+    const parts = String(path).split('.');
+    if (parts.some(part => !part || UNSAFE_PATH_PARTS.has(part))) {
+        throw new Error(`安全でない同期フィールドです: ${path}`);
+    }
+    return String(path);
+};
 
 const setPath = (target, path, value) => {
     const parts = path.split('.');
@@ -236,6 +245,9 @@ export const createSyncChange = ({
         throw new Error(`未対応の同期操作です: ${operation}`);
     }
 
+    const normalizedChangedFields = uniqueSortedStrings(changedFields).map(assertSafeFieldPath);
+    const normalizedUnsetFields = uniqueSortedStrings(unsetFields).map(assertSafeFieldPath);
+
     return {
         schemaVersion: SYNC_SCHEMA_VERSION,
         changeId: String(changeId),
@@ -245,11 +257,53 @@ export const createSyncChange = ({
         entityId: String(entityId),
         operation,
         baseVersion: baseVersion || null,
-        changedFields: uniqueSortedStrings(changedFields),
-        unsetFields: uniqueSortedStrings(unsetFields),
+        changedFields: normalizedChangedFields,
+        unsetFields: normalizedUnsetFields,
         payload: operation === SYNC_OPERATIONS.DELETE ? null : cloneSyncValue(payload),
         blobRefs: cloneSyncValue(blobRefs || []),
         createdAt: createdAt || new Date().toISOString(),
+    };
+};
+
+export const validateIncomingSyncChange = change => {
+    if (!change || typeof change !== 'object') {
+        throw new Error('受信した同期変更の形式が不正です。');
+    }
+    if (Number(change.schemaVersion) !== SYNC_SCHEMA_VERSION) {
+        throw new Error(`未対応の同期スキーマです: ${change.schemaVersion}`);
+    }
+    if (!Object.values(SYNC_ENTITY_TYPES).includes(change.entityType)) {
+        throw new Error(`未対応の同期データ種別です: ${change.entityType}`);
+    }
+    const normalized = createSyncChange(change);
+    if (normalized.operation === SYNC_OPERATIONS.UPSERT) {
+        if (!isPlainObject(normalized.payload)) {
+            throw new Error('更新変更のpayloadはオブジェクトである必要があります。');
+        }
+        const unsetFields = new Set(normalized.unsetFields);
+        for (const field of unsetFields) {
+            if (!normalized.changedFields.includes(field)) {
+                throw new Error(`unsetFieldsがchangedFieldsに含まれていません: ${field}`);
+            }
+        }
+        for (const field of normalized.changedFields) {
+            if (!unsetFields.has(field) && readPath(normalized.payload, field) === undefined) {
+                throw new Error(`同期変更のpayloadにフィールドがありません: ${field}`);
+            }
+        }
+    }
+    return normalized;
+};
+
+export const parseQuestionEntityId = entityId => {
+    const value = String(entityId || '');
+    const separatorIndex = value.lastIndexOf('::');
+    if (separatorIndex < 1 || separatorIndex === value.length - 2) {
+        throw new Error(`問題の同期IDが不正です: ${value}`);
+    }
+    return {
+        examId: value.slice(0, separatorIndex),
+        questionId: value.slice(separatorIndex + 2),
     };
 };
 

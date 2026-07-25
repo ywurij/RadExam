@@ -8,8 +8,10 @@ import {
     collectQuestionBlobRefs,
     createSyncChange,
     diffQuestionFields,
+    parseQuestionEntityId,
     SYNC_ENTITY_TYPES,
     SYNC_OPERATIONS,
+    validateIncomingSyncChange,
 } from '../src/lib/sync/syncProtocol.mjs';
 import {
     canApplyRemoteChangeAutomatically,
@@ -17,6 +19,7 @@ import {
     findOverlappingSyncFields,
 } from '../src/lib/sync/syncConflict.mjs';
 import { SyncJournal } from '../src/lib/sync/syncJournal.mjs';
+import { processIncomingSyncChange } from '../src/lib/sync/syncReceiver.mjs';
 
 class MemoryStorage {
     constructor() {
@@ -443,4 +446,179 @@ test('holds delete versus edit as a conflict and stores its resolution', async (
     assert.equal(resolved.resolution, 'keep-local');
     assert.deepEqual(await journal.listConflicts(), []);
     assert.equal((await journal.listConflicts({ status: 'resolved' })).length, 1);
+});
+
+const buildIncomingChange = overrides => createSyncChange({
+    changeId: 'remote-change',
+    deviceId: 'remote-device',
+    sequence: 1,
+    entityType: SYNC_ENTITY_TYPES.QUESTION,
+    entityId: 'exam::2025001',
+    changedFields: ['question'],
+    payload: { question: 'クラウドの問題文' },
+    createdAt: '2026-07-26T00:00:00.000Z',
+    ...overrides,
+});
+
+test('validates incoming schema and rejects unsafe field paths', () => {
+    const valid = buildIncomingChange();
+
+    assert.deepEqual(validateIncomingSyncChange(valid), valid);
+    assert.throws(() => validateIncomingSyncChange({
+        ...valid,
+        schemaVersion: 99,
+    }), /スキーマ/);
+    assert.throws(() => validateIncomingSyncChange({
+        ...valid,
+        changedFields: ['__proto__.polluted'],
+        payload: { __proto__: { polluted: true } },
+    }), /安全でない/);
+    assert.deepEqual(parseQuestionEntityId('exam::nested::2025001'), {
+        examId: 'exam::nested',
+        questionId: '2025001',
+    });
+});
+
+test('applies a non-conflicting incoming change and remembers it', async () => {
+    const storage = new MemoryStorage();
+    const journal = new SyncJournal(storage, {
+        now: () => '2026-07-26T01:00:00.000Z',
+    });
+    await journal.configure({
+        enabled: true,
+        deviceId: 'local-device',
+        provider: 'google-drive',
+        accountId: 'account-1',
+    });
+    const applied = [];
+    const dataStore = {
+        async applyChange(change, options) {
+            applied.push({ change, options });
+        },
+    };
+    const change = buildIncomingChange();
+
+    const result = await processIncomingSyncChange({
+        change,
+        journal,
+        dataStore,
+    });
+
+    assert.equal(result.status, 'applied');
+    assert.equal(applied.length, 1);
+    assert.equal(await journal.hasAppliedChange(change.changeId), true);
+
+    const duplicate = await processIncomingSyncChange({
+        change,
+        journal,
+        dataStore,
+    });
+    assert.equal(duplicate.status, 'duplicate');
+    assert.equal(applied.length, 1);
+});
+
+test('acknowledges an echoed local change without applying it again', async () => {
+    const storage = new MemoryStorage();
+    const journal = new SyncJournal(storage, {
+        uuid: () => 'local-change',
+    });
+    await journal.configure({
+        enabled: true,
+        deviceId: 'local-device',
+        provider: 'google-drive',
+        accountId: 'account-1',
+    });
+    const [localChange] = await journal.recordChanges([{
+        entityType: SYNC_ENTITY_TYPES.PROGRESS,
+        entityId: '2025001',
+        changedFields: ['status'],
+        payload: { status: 'correct' },
+    }]);
+    let applyCount = 0;
+
+    const result = await processIncomingSyncChange({
+        change: localChange,
+        journal,
+        dataStore: {
+            async applyChange() {
+                applyCount += 1;
+            },
+        },
+    });
+
+    assert.equal(result.status, 'acknowledged');
+    assert.equal(applyCount, 0);
+    assert.deepEqual(await journal.listPendingChanges(), []);
+});
+
+test('returns needs-blob before applying image metadata without a downloaded file', async () => {
+    const journal = new SyncJournal(new MemoryStorage());
+    await journal.configure({
+        enabled: true,
+        deviceId: 'local-device',
+        provider: 'google-drive',
+        accountId: 'account-1',
+    });
+    const imageChange = buildIncomingChange({
+        entityType: SYNC_ENTITY_TYPES.IMAGE,
+        entityId: 'image-key',
+        changedFields: ['contentHash', 'localKey'],
+        payload: {
+            contentHash: 'sha256:image',
+            localKey: 'image-key',
+        },
+        blobRefs: [{
+            kind: SYNC_ENTITY_TYPES.IMAGE,
+            localKey: 'image-key',
+            contentHash: 'sha256:image',
+        }],
+    });
+    let applyCount = 0;
+
+    const result = await processIncomingSyncChange({
+        change: imageChange,
+        journal,
+        dataStore: {
+            async applyChange() {
+                applyCount += 1;
+            },
+        },
+    });
+
+    assert.equal(result.status, 'needs-blob');
+    assert.equal(applyCount, 0);
+    assert.equal(await journal.hasAppliedChange(imageChange.changeId), false);
+});
+
+test('stores a same-field incoming conflict without applying it', async () => {
+    const journal = new SyncJournal(new MemoryStorage(), {
+        uuid: () => 'local-change',
+    });
+    await journal.configure({
+        enabled: true,
+        deviceId: 'local-device',
+        provider: 'google-drive',
+        accountId: 'account-1',
+    });
+    await journal.recordChanges([{
+        entityType: SYNC_ENTITY_TYPES.QUESTION,
+        entityId: 'exam::2025001',
+        changedFields: ['question'],
+        payload: { question: 'ローカルの問題文' },
+    }]);
+    let applyCount = 0;
+
+    const result = await processIncomingSyncChange({
+        change: buildIncomingChange(),
+        journal,
+        dataStore: {
+            async applyChange() {
+                applyCount += 1;
+            },
+        },
+    });
+
+    assert.equal(result.status, 'conflict');
+    assert.equal(applyCount, 0);
+    assert.equal((await journal.listConflicts()).length, 1);
 });
