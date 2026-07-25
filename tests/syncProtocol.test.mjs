@@ -258,7 +258,7 @@ test('assigns monotonic sequences and keeps deletion tombstones', async () => {
         changeId: 'uuid-2',
         deviceId: 'device-1',
         sequence: 2,
-        baseVersion: null,
+        baseVersion: 'generation:0',
         deletedAt: '2026-07-25T00:00:00.000Z',
     }]);
 

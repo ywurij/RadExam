@@ -26,6 +26,7 @@ import {
     recordLocalSyncChanges,
 } from '@/lib/sync/localSyncJournal';
 import { processIncomingSyncChange } from '@/lib/sync/syncReceiver.mjs';
+import { runSyncCycle } from '@/lib/sync/syncEngine.mjs';
 
 // --- インスタンスの設定 ---
 
@@ -691,6 +692,18 @@ export const getLocalSyncBlob = async ({ kind, localKey, contentHash } = {}) => 
         contentHash: actualHash,
     };
 };
+
+/**
+ * 接続済みのクラウドアダプターを使って、受信してから送信する1同期サイクルを実行する。
+ */
+export const synchronizeLocalData = async provider => (
+    runSyncCycle({
+        provider,
+        journal: localSyncJournal,
+        dataStore: localSyncDataStore,
+        getLocalBlob: getLocalSyncBlob,
+    })
+);
 
 // --- カスタム試験 (Custom Exams) 関連のAPI ---
 

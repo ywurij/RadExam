@@ -14,7 +14,9 @@ export const configureLocalSyncJournal = updates => localSyncJournal.configure(u
 export const getLocalSyncJournalConfig = () => localSyncJournal.getConfig();
 export const recordLocalSyncChanges = changes => localSyncJournal.recordChanges(changes);
 export const listPendingLocalSyncChanges = () => localSyncJournal.listPendingChanges();
-export const acknowledgeLocalSyncChanges = changeIds => localSyncJournal.acknowledgeChanges(changeIds);
+export const acknowledgeLocalSyncChanges = (changeIds, options) => (
+    localSyncJournal.acknowledgeChanges(changeIds, options)
+);
 export const hasAppliedLocalSyncChange = changeId => localSyncJournal.hasAppliedChange(changeId);
 export const markLocalSyncChangeApplied = (change, appliedAt) => (
     localSyncJournal.markChangeApplied(change, appliedAt)

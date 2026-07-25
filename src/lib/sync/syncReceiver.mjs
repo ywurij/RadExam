@@ -18,6 +18,11 @@ const findPrimaryBlobRef = change => (
     || null
 );
 
+const parseBaseGeneration = baseVersion => {
+    const match = /^generation:(\d+)$/.exec(String(baseVersion || ''));
+    return match ? Number(match[1]) : 0;
+};
+
 export const processIncomingSyncChange = async ({
     change,
     journal,
@@ -41,10 +46,29 @@ export const processIncomingSyncChange = async ({
         return { status: 'acknowledged', change: normalizedChange };
     }
 
+    if (typeof journal.listConflicts === 'function') {
+        const unresolvedConflict = (await journal.listConflicts()).find(conflict => (
+            conflict.entityType === normalizedChange.entityType
+            && String(conflict.entityId) === String(normalizedChange.entityId)
+        ));
+        if (unresolvedConflict) {
+            return {
+                status: 'conflict',
+                change: normalizedChange,
+                conflict: unresolvedConflict,
+            };
+        }
+    }
+
     const pendingLocalChanges = await journal.listPendingChanges();
+    const sentLocalChanges = typeof journal.listSentChangesAfterGeneration === 'function'
+        ? await journal.listSentChangesAfterGeneration(
+            parseBaseGeneration(normalizedChange.baseVersion)
+        )
+        : [];
     const conflict = detectSyncConflict({
         remoteChange: normalizedChange,
-        pendingLocalChanges,
+        pendingLocalChanges: [...pendingLocalChanges, ...sentLocalChanges],
     });
     if (conflict) {
         const storedConflict = await journal.recordConflict(conflict);

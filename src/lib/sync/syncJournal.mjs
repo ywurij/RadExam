@@ -8,6 +8,7 @@ const CHANGE_PREFIX = 'change:';
 const TOMBSTONE_PREFIX = 'tombstone:';
 const APPLIED_PREFIX = 'applied:';
 const CONFLICT_PREFIX = 'conflict:';
+const SENT_PREFIX = 'sent:';
 
 const padSequence = sequence => String(sequence).padStart(16, '0');
 const changeKey = change => `${CHANGE_PREFIX}${padSequence(change.sequence)}:${change.changeId}`;
@@ -116,6 +117,11 @@ export class SyncJournal {
                         changeId: candidates[index].changeId || this.uuid(),
                         deviceId: config.deviceId || this.uuid(),
                         sequence: startingSequence + index,
+                        baseVersion: candidates[index].baseVersion
+                            || `generation:${Math.max(
+                                Number(config.lastPulledGeneration) || 0,
+                                Number(config.lastPushedGeneration) || 0
+                            )}`,
                         createdAt: candidates[index].createdAt || this.now(),
                     });
                     await this.storage.setItem(changeKey(change), {
@@ -160,17 +166,47 @@ export class SyncJournal {
         ));
     }
 
-    async acknowledgeChanges(changeIds) {
+    async acknowledgeChanges(changeIds, { committedGeneration = null } = {}) {
         const targets = new Set((changeIds || []).map(String));
         if (targets.size === 0) return 0;
         const removals = [];
         await this.storage.iterate((value, key) => {
             if (String(key).startsWith(CHANGE_PREFIX) && targets.has(String(value?.change?.changeId))) {
-                removals.push(key);
+                removals.push({ key, change: value.change });
             }
         });
-        await Promise.all(removals.map(key => this.storage.removeItem(key)));
+        if (Number.isSafeInteger(committedGeneration) && committedGeneration > 0) {
+            await Promise.all(removals.map(({ change }) => (
+                this.storage.setItem(`${SENT_PREFIX}${change.changeId}`, {
+                    change,
+                    committedGeneration,
+                    acknowledgedAt: this.now(),
+                })
+            )));
+        }
+        await Promise.all(removals.map(({ key }) => this.storage.removeItem(key)));
         return removals.length;
+    }
+
+    async listSentChangesAfterGeneration(generation = 0) {
+        const minimumGeneration = Number(generation) || 0;
+        const changes = [];
+        await this.storage.iterate((value, key) => {
+            if (
+                String(key).startsWith(SENT_PREFIX)
+                && value?.change
+                && Number(value.committedGeneration) > minimumGeneration
+            ) {
+                changes.push({
+                    ...value.change,
+                    committedGeneration: Number(value.committedGeneration),
+                });
+            }
+        });
+        return changes.sort((left, right) => (
+            left.committedGeneration - right.committedGeneration
+            || left.sequence - right.sequence
+        ));
     }
 
     async hasAppliedChange(changeId) {
