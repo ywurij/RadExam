@@ -17,7 +17,8 @@
     "test": "node --test tests/*.test.mjs",
     "app:build": "npm run build",
     "app:dev": "electron .",
-    "app:pack": "npm run build:desktop && electron-builder"
+    "app:pack": "npm run build:desktop && electron-builder",
+    "release:check": "node scripts/check-release-tag.mjs"
   },
   "dependencies": {
     "@ducanh2912/next-pwa": "^10.2.9",
@@ -74,6 +75,7 @@
       ],
       "category": "public.app-category.education",
       "icon": "icon-512x512.png",
+      "artifactName": "${productName}-${version}-mac-${arch}.${ext}",
       "identity": null,
       "hardenedRuntime": false,
       "notarize": false
@@ -84,6 +86,12 @@
         "portable"
       ],
       "icon": "icon-512x512.png"
+    },
+    "nsis": {
+      "artifactName": "${productName}-Setup-${version}-windows-${arch}.${ext}"
+    },
+    "portable": {
+      "artifactName": "${productName}-Portable-${version}-windows-${arch}.${ext}"
     },
     "publish": [
       {
