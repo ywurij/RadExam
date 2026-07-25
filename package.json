@@ -1,6 +1,6 @@
 {
   "name": "exam-app",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "main": "electron/main.js",
   "scripts": {
@@ -76,7 +76,7 @@
       "category": "public.app-category.education",
       "icon": "icon-512x512.png",
       "artifactName": "${productName}-${version}-mac-${arch}.${ext}",
-      "identity": null,
+      "identity": "-",
       "hardenedRuntime": false,
       "notarize": false
     },
