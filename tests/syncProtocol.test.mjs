@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
     applySyncFieldDelta,
     buildDeleteSyncChangeInput,
+    buildInitialSyncChangeInputs,
     buildQuestionSyncChangeInput,
     collectQuestionBlobRefs,
     createSyncChange,
@@ -10,6 +11,11 @@ import {
     SYNC_ENTITY_TYPES,
     SYNC_OPERATIONS,
 } from '../src/lib/sync/syncProtocol.mjs';
+import {
+    canApplyRemoteChangeAutomatically,
+    detectSyncConflict,
+    findOverlappingSyncFields,
+} from '../src/lib/sync/syncConflict.mjs';
 import { SyncJournal } from '../src/lib/sync/syncJournal.mjs';
 
 class MemoryStorage {
@@ -278,4 +284,163 @@ test('remembers an applied remote change so retries are idempotent', async () =>
     });
     assert.deepEqual(second, first);
     assert.equal(await journal.hasAppliedChange(remoteChange.changeId), true);
+});
+
+test('builds initial changes for existing questions, progress, images, and PDFs', () => {
+    const changes = buildInitialSyncChangeInputs({
+        exams: {
+            exam: {
+                name: '既存試験',
+                years: [2025],
+                genres: ['物理'],
+                questions: [{
+                    id: '2025001',
+                    year: 2025,
+                    questionNumber: 1,
+                    question: '問題文',
+                    options: { a: '選択肢A', b: '選択肢B' },
+                }],
+            },
+        },
+        progress: {
+            2025001: { status: 'correct', updatedAt: 'ignored' },
+        },
+        images: {
+            'image-key': { contentHash: 'sha256:image' },
+        },
+        pdfs: {
+            'pdf-key': {
+                examId: 'exam',
+                year: 2025,
+                name: 'source.pdf',
+                type: 'application/pdf',
+                size: 100,
+                contentHash: 'sha256:pdf',
+            },
+        },
+    });
+
+    assert.deepEqual(changes.map(change => `${change.entityType}:${change.entityId}`), [
+        'exam:exam',
+        'question:exam::2025001',
+        'progress:2025001',
+        'image:image-key',
+        'pdf:pdf-key',
+    ]);
+    assert.deepEqual(changes[1].changedFields, [
+        'id',
+        'options.a',
+        'options.b',
+        'question',
+        'questionNumber',
+        'year',
+    ]);
+    assert.deepEqual(changes[2].changedFields, ['status']);
+    assert.deepEqual(changes[3].blobRefs, [{
+        kind: SYNC_ENTITY_TYPES.IMAGE,
+        localKey: 'image-key',
+        contentHash: 'sha256:image',
+    }]);
+});
+
+test('allows different question fields and different options to merge automatically', () => {
+    const remoteQuestionText = {
+        changeId: 'remote-1',
+        deviceId: 'remote-device',
+        entityType: SYNC_ENTITY_TYPES.QUESTION,
+        entityId: 'exam::2025001',
+        operation: SYNC_OPERATIONS.UPSERT,
+        changedFields: ['question'],
+    };
+    const pending = [{
+        changeId: 'local-1',
+        deviceId: 'local-device',
+        entityType: SYNC_ENTITY_TYPES.QUESTION,
+        entityId: 'exam::2025001',
+        operation: SYNC_OPERATIONS.UPSERT,
+        changedFields: ['options.a'],
+    }, {
+        changeId: 'local-2',
+        deviceId: 'local-device',
+        entityType: SYNC_ENTITY_TYPES.QUESTION,
+        entityId: 'exam::2025001',
+        operation: SYNC_OPERATIONS.UPSERT,
+        changedFields: ['options.b'],
+    }];
+
+    assert.equal(canApplyRemoteChangeAutomatically({
+        remoteChange: remoteQuestionText,
+        pendingLocalChanges: pending,
+    }), true);
+    assert.deepEqual(findOverlappingSyncFields(['options.a'], ['options.b']), []);
+});
+
+test('holds the same option edit as a conflict', () => {
+    const remoteChange = {
+        changeId: 'remote-1',
+        deviceId: 'remote-device',
+        entityType: SYNC_ENTITY_TYPES.QUESTION,
+        entityId: 'exam::2025001',
+        operation: SYNC_OPERATIONS.UPSERT,
+        changedFields: ['options.c'],
+        payload: { options: { c: 'リモートの文' } },
+    };
+    const localChange = {
+        changeId: 'local-1',
+        deviceId: 'local-device',
+        entityType: SYNC_ENTITY_TYPES.QUESTION,
+        entityId: 'exam::2025001',
+        operation: SYNC_OPERATIONS.UPSERT,
+        changedFields: ['options.c'],
+        payload: { options: { c: 'ローカルの文' } },
+    };
+
+    const conflict = detectSyncConflict({
+        remoteChange,
+        pendingLocalChanges: [localChange],
+        detectedAt: '2026-07-26T00:00:00.000Z',
+    });
+
+    assert.equal(conflict.reason, 'same-field-edited');
+    assert.deepEqual(conflict.conflictingFields, ['options.c']);
+    assert.deepEqual(conflict.localChangeIds, ['local-1']);
+    assert.equal(conflict.remoteChange.changeId, 'remote-1');
+});
+
+test('holds delete versus edit as a conflict and stores its resolution', async () => {
+    const remoteChange = {
+        changeId: 'remote-delete',
+        deviceId: 'remote-device',
+        entityType: SYNC_ENTITY_TYPES.QUESTION,
+        entityId: 'exam::2025001',
+        operation: SYNC_OPERATIONS.DELETE,
+        changedFields: [],
+    };
+    const localChange = {
+        changeId: 'local-edit',
+        deviceId: 'local-device',
+        entityType: SYNC_ENTITY_TYPES.QUESTION,
+        entityId: 'exam::2025001',
+        operation: SYNC_OPERATIONS.UPSERT,
+        changedFields: ['question'],
+    };
+    const conflict = detectSyncConflict({
+        remoteChange,
+        pendingLocalChanges: [localChange],
+        detectedAt: '2026-07-26T00:00:00.000Z',
+    });
+    const journal = new SyncJournal(new MemoryStorage(), {
+        now: () => '2026-07-26T01:00:00.000Z',
+    });
+
+    assert.equal(conflict.reason, 'delete-versus-change');
+    assert.deepEqual(conflict.conflictingFields, ['*']);
+    await journal.recordConflict(conflict);
+    assert.equal((await journal.listConflicts()).length, 1);
+
+    const resolved = await journal.resolveConflict(conflict.conflictId, 'keep-local');
+    assert.equal(resolved.status, 'resolved');
+    assert.equal(resolved.resolution, 'keep-local');
+    assert.deepEqual(await journal.listConflicts(), []);
+    assert.equal((await journal.listConflicts({ status: 'resolved' })).length, 1);
 });

@@ -14,6 +14,11 @@ export const SYNC_OPERATIONS = Object.freeze({
     DELETE: 'delete',
 });
 
+export const SYNC_PROVIDERS = Object.freeze({
+    GOOGLE_DRIVE: 'google-drive',
+    ONE_DRIVE: 'one-drive',
+});
+
 export const QUESTION_SYNC_FIELDS = Object.freeze([
     'id',
     'year',
@@ -306,3 +311,70 @@ export const buildDeleteSyncChangeInput = ({
     payload: null,
     blobRefs: [],
 });
+
+export const buildInitialSyncChangeInputs = ({
+    exams = {},
+    progress = {},
+    images = {},
+    pdfs = {},
+}) => {
+    const changes = [];
+
+    for (const [examId, exam] of Object.entries(exams || {})) {
+        changes.push(buildUpsertSyncChangeInput({
+            entityType: SYNC_ENTITY_TYPES.EXAM,
+            entityId: examId,
+            nextValue: exam,
+            fields: ['name', 'years', 'genres'],
+        }));
+        for (const question of exam?.questions || []) {
+            changes.push(buildQuestionSyncChangeInput({
+                examId,
+                nextQuestion: question,
+            }));
+        }
+    }
+
+    for (const [questionId, value] of Object.entries(progress || {})) {
+        changes.push(buildUpsertSyncChangeInput({
+            entityType: SYNC_ENTITY_TYPES.PROGRESS,
+            entityId: questionId,
+            nextValue: value,
+            fields: Object.keys(value || {}).filter(field => field !== 'updatedAt'),
+        }));
+    }
+
+    for (const [localKey, descriptor] of Object.entries(images || {})) {
+        const nextValue = {
+            localKey,
+            ...(descriptor?.contentHash ? { contentHash: descriptor.contentHash } : {}),
+        };
+        changes.push(buildUpsertSyncChangeInput({
+            entityType: SYNC_ENTITY_TYPES.IMAGE,
+            entityId: localKey,
+            nextValue,
+            fields: ['localKey', 'contentHash'],
+            blobRefs: [{
+                kind: SYNC_ENTITY_TYPES.IMAGE,
+                localKey,
+                ...(descriptor?.contentHash ? { contentHash: descriptor.contentHash } : {}),
+            }],
+        }));
+    }
+
+    for (const [localKey, value] of Object.entries(pdfs || {})) {
+        changes.push(buildUpsertSyncChangeInput({
+            entityType: SYNC_ENTITY_TYPES.PDF,
+            entityId: localKey,
+            nextValue: value,
+            fields: ['examId', 'year', 'name', 'type', 'size', 'contentHash'],
+            blobRefs: [{
+                kind: SYNC_ENTITY_TYPES.PDF,
+                localKey,
+                ...(value?.contentHash ? { contentHash: value.contentHash } : {}),
+            }],
+        }));
+    }
+
+    return changes.filter(Boolean);
+};

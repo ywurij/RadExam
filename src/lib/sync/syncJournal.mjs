@@ -7,6 +7,7 @@ const CONFIG_KEY = 'config';
 const CHANGE_PREFIX = 'change:';
 const TOMBSTONE_PREFIX = 'tombstone:';
 const APPLIED_PREFIX = 'applied:';
+const CONFLICT_PREFIX = 'conflict:';
 
 const padSequence = sequence => String(sequence).padStart(16, '0');
 const changeKey = change => `${CHANGE_PREFIX}${padSequence(change.sequence)}:${change.changeId}`;
@@ -192,6 +193,57 @@ export class SyncJournal {
         };
         await this.storage.setItem(key, record);
         return record;
+    }
+
+    async recordConflict(conflict) {
+        if (!conflict?.conflictId) {
+            throw new Error('競合の保存にはconflictIdが必要です。');
+        }
+        const key = `${CONFLICT_PREFIX}${String(conflict.conflictId)}`;
+        const existing = await this.storage.getItem(key);
+        if (existing) return existing;
+        const record = {
+            ...conflict,
+            status: 'pending',
+            detectedAt: conflict.detectedAt || this.now(),
+        };
+        await this.storage.setItem(key, record);
+        return record;
+    }
+
+    async listConflicts({ status = 'pending' } = {}) {
+        const conflicts = [];
+        await this.storage.iterate((value, key) => {
+            if (
+                String(key).startsWith(CONFLICT_PREFIX)
+                && value
+                && (!status || value.status === status)
+            ) {
+                conflicts.push(value);
+            }
+        });
+        return conflicts.sort((left, right) => (
+            String(left.detectedAt).localeCompare(String(right.detectedAt))
+            || String(left.conflictId).localeCompare(String(right.conflictId))
+        ));
+    }
+
+    async resolveConflict(conflictId, resolution) {
+        if (!conflictId || !resolution) {
+            throw new Error('競合解決にはconflictIdとresolutionが必要です。');
+        }
+        const key = `${CONFLICT_PREFIX}${String(conflictId)}`;
+        const conflict = await this.storage.getItem(key);
+        if (!conflict) throw new Error('解決対象の競合が見つかりません。');
+        if (conflict.status === 'resolved') return conflict;
+        const resolved = {
+            ...conflict,
+            status: 'resolved',
+            resolution,
+            resolvedAt: this.now(),
+        };
+        await this.storage.setItem(key, resolved);
+        return resolved;
     }
 
     async listTombstones() {

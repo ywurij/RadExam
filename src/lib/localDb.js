@@ -7,12 +7,17 @@ import {
 } from '@/lib/backupData.mjs';
 import {
     buildDeleteSyncChangeInput,
+    buildInitialSyncChangeInputs,
     buildQuestionEntityId,
     buildQuestionSyncChangeInput,
     buildUpsertSyncChangeInput,
     SYNC_ENTITY_TYPES,
+    SYNC_PROVIDERS,
 } from '@/lib/sync/syncProtocol.mjs';
 import {
+    configureLocalSyncJournal,
+    getLocalSyncJournalConfig,
+    listPendingLocalSyncChanges,
     markLocalSyncReconciliationRequired,
     recordLocalSyncChanges,
 } from '@/lib/sync/localSyncJournal';
@@ -358,6 +363,137 @@ const buildExamSyncChanges = (previousExam, nextExam, deletedImageKeys = []) => 
         }));
     }
     return changes;
+};
+
+const collectStoreEntries = async store => {
+    const entries = [];
+    await store.iterate((value, key) => {
+        entries.push([String(key), value]);
+    });
+    return entries;
+};
+
+const collectLocalSyncSeedData = async () => {
+    const exams = {};
+    const progress = {};
+    const images = {};
+    const pdfs = {};
+
+    for (const [examId, exam] of await collectStoreEntries(examsStore)) {
+        const questions = await Promise.all((exam?.questions || []).map(async question => {
+            const enrichedImages = await Promise.all((question?.images || []).map(async image => {
+                const localKey = image?.storageKey || extractLocalImageKey(image?.path);
+                if (!localKey) return image;
+                let contentHash = image?.contentHash || '';
+                if (!contentHash) {
+                    const blob = await imageStore.getItem(localKey);
+                    if (!blob) {
+                        throw new Error(`同期対象の画像を読み出せませんでした: ${localKey}`);
+                    }
+                    contentHash = await calculateBlobHash(blob);
+                }
+                images[localKey] = {
+                    localKey,
+                    ...(contentHash ? { contentHash } : {}),
+                };
+                return {
+                    ...image,
+                    ...(contentHash ? { contentHash } : {}),
+                };
+            }));
+            return {
+                ...question,
+                images: enrichedImages,
+            };
+        }));
+        exams[examId] = {
+            ...exam,
+            questions,
+        };
+    }
+
+    for (const [questionId, value] of await collectStoreEntries(progressStore)) {
+        progress[questionId] = value;
+    }
+
+    for (const [localKey, value] of await collectStoreEntries(pdfStore)) {
+        let contentHash = value?.contentHash || '';
+        if (!value?.blob) {
+            throw new Error(`同期対象のPDFを読み出せませんでした: ${localKey}`);
+        }
+        if (!contentHash) contentHash = await calculateBlobHash(value.blob);
+        pdfs[localKey] = {
+            examId: value?.examId,
+            year: value?.year,
+            name: value?.name,
+            type: value?.type,
+            size: value?.size,
+            ...(contentHash ? { contentHash } : {}),
+        };
+    }
+
+    return { exams, progress, images, pdfs };
+};
+
+/**
+ * 既存のローカルデータを初回同期キューへ登録し、以後の変更追跡を有効にする。
+ * 実際のクラウド送受信はプロバイダー実装がこのAPIの後に行う。
+ */
+export const initializeLocalSyncTracking = async ({
+    provider,
+    accountId,
+    deviceName,
+}) => {
+    const supportedProviders = Object.values(SYNC_PROVIDERS);
+    if (!supportedProviders.includes(provider)) {
+        throw new Error(`未対応の同期先です: ${provider || '未指定'}`);
+    }
+    if (!accountId) throw new Error('同期を開始するにはアカウントIDが必要です。');
+
+    const currentConfig = await getLocalSyncJournalConfig();
+    if (
+        currentConfig.enabled
+        && (
+            currentConfig.provider !== provider
+            || String(currentConfig.accountId) !== String(accountId)
+        )
+    ) {
+        throw new Error('同期中のクラウドとは別のサービスまたはアカウントです。先に同期を解除してください。');
+    }
+    if (currentConfig.enabled && currentConfig.bootstrapCompleted) {
+        return {
+            alreadyInitialized: true,
+            queuedChanges: (await listPendingLocalSyncChanges()).length,
+            config: currentConfig,
+        };
+    }
+
+    const seedData = await collectLocalSyncSeedData();
+    await configureLocalSyncJournal({
+        enabled: true,
+        provider,
+        accountId: String(accountId),
+        ...(deviceName ? { deviceName } : {}),
+        bootstrapCompleted: false,
+    });
+
+    const recordedChanges = await recordLocalSyncChanges(
+        buildInitialSyncChangeInputs(seedData)
+    );
+    const initializedAt = new Date().toISOString();
+    const config = await configureLocalSyncJournal({
+        bootstrapCompleted: true,
+        bootstrapCompletedAt: initializedAt,
+        reconciliationRequired: false,
+        reconciliationReason: null,
+        reconciliationMarkedAt: null,
+    });
+
+    return {
+        alreadyInitialized: false,
+        queuedChanges: recordedChanges.length,
+        config,
+    };
 };
 
 // --- カスタム試験 (Custom Exams) 関連のAPI ---
