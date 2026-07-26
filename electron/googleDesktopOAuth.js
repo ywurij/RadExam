@@ -81,6 +81,7 @@ const parseTokenResponse = async response => {
 class GoogleDesktopOAuthManager {
   constructor({
     clientId,
+    clientSecret,
     userDataPath,
     safeStorage,
     shell,
@@ -89,6 +90,7 @@ class GoogleDesktopOAuthManager {
     now = () => Date.now(),
   }) {
     this.clientId = String(clientId || '');
+    this.clientSecret = String(clientSecret || '');
     this.userDataPath = userDataPath;
     this.safeStorage = safeStorage;
     this.shell = shell;
@@ -102,6 +104,9 @@ class GoogleDesktopOAuthManager {
   assertConfigured() {
     if (!this.clientId.endsWith('.apps.googleusercontent.com')) {
       throw new Error('デスクトップ版のGoogle OAuthクライアントIDが設定されていません。');
+    }
+    if (!this.clientSecret) {
+      throw new Error('デスクトップ版のGoogle OAuthクライアントシークレットが設定されていません。');
     }
   }
 
@@ -163,6 +168,7 @@ class GoogleDesktopOAuthManager {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
         client_id: this.clientId,
+        client_secret: this.clientSecret,
         code,
         code_verifier: verifier,
         grant_type: 'authorization_code',
@@ -194,6 +200,7 @@ class GoogleDesktopOAuthManager {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
         client_id: this.clientId,
+        client_secret: this.clientSecret,
         refresh_token: tokens.refreshToken,
         grant_type: 'refresh_token',
       }),

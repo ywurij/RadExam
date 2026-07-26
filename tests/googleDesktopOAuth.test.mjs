@@ -48,6 +48,7 @@ test('refreshes and securely stores desktop Google credentials', async () => {
     try {
         const manager = new GoogleDesktopOAuthManager({
             clientId: 'desktop-client.apps.googleusercontent.com',
+            clientSecret: 'desktop-client-secret',
             userDataPath: temporaryDirectory,
             safeStorage,
             shell: { openExternal: async () => {} },
@@ -77,7 +78,7 @@ test('refreshes and securely stores desktop Google credentials', async () => {
         assert.equal(requests.length, 1);
         assert.equal(requests[0].url, 'https://oauth2.googleapis.com/token');
         assert.equal(requests[0].options.body.get('grant_type'), 'refresh_token');
-        assert.equal(requests[0].options.body.get('client_secret'), null);
+        assert.equal(requests[0].options.body.get('client_secret'), 'desktop-client-secret');
         assert.equal(manager.getStatus().hasCredentials, true);
         assert.ok(encryptedValues.length >= 2);
     } finally {

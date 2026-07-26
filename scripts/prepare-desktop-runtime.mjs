@@ -12,6 +12,27 @@ const electronSource = path.join(projectRoot, 'electron');
 const electronDestination = path.join(standaloneRoot, 'electron');
 const rootPackagePath = path.join(projectRoot, 'package.json');
 const standalonePackagePath = path.join(standaloneRoot, 'package.json');
+const cloudSyncConfigPath = path.join(electronDestination, 'cloud-sync-config.json');
+
+const parseEnvText = text => {
+    const values = {};
+    for (const rawLine of text.split(/\r?\n/)) {
+        const line = rawLine.trim();
+        if (!line || line.startsWith('#')) continue;
+        const separator = line.indexOf('=');
+        if (separator <= 0) continue;
+        const key = line.slice(0, separator).trim();
+        let value = line.slice(separator + 1).trim();
+        if (
+            (value.startsWith('"') && value.endsWith('"'))
+            || (value.startsWith("'") && value.endsWith("'"))
+        ) {
+            value = value.slice(1, -1);
+        }
+        values[key] = value;
+    }
+    return values;
+};
 
 if (!existsSync(path.join(standaloneRoot, 'server.js'))) {
     throw new Error('Next.js standalone server was not generated');
@@ -21,6 +42,17 @@ mkdirSync(path.dirname(staticDestination), { recursive: true });
 cpSync(staticSource, staticDestination, { recursive: true, force: true });
 cpSync(publicSource, publicDestination, { recursive: true, force: true });
 cpSync(electronSource, electronDestination, { recursive: true, force: true });
+
+const localEnvPath = path.join(projectRoot, '.env.local');
+const localEnv = existsSync(localEnvPath)
+    ? parseEnvText(readFileSync(localEnvPath, 'utf8'))
+    : {};
+const googleDesktopClientSecret = process.env.GOOGLE_DESKTOP_CLIENT_SECRET
+    || localEnv.GOOGLE_DESKTOP_CLIENT_SECRET
+    || '';
+writeFileSync(cloudSyncConfigPath, `${JSON.stringify({
+    googleDesktopClientSecret,
+}, null, 2)}\n`, { mode: 0o600 });
 
 const rootPackage = JSON.parse(readFileSync(rootPackagePath, 'utf8'));
 const standalonePackage = JSON.parse(readFileSync(standalonePackagePath, 'utf8'));

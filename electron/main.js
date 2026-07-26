@@ -15,6 +15,7 @@ const {
   createNextServerLaunch,
 } = require('./serverCommand');
 const { GoogleDesktopOAuthManager } = require('./googleDesktopOAuth');
+const { loadCloudSyncConfig } = require('./cloudSyncConfig');
 
 // 表示名を変更しても既存の試験・画像・進捗を失わないよう、保存先は旧版と共通にする。
 app.setPath('userData', path.join(app.getPath('appData'), 'exam-app'));
@@ -24,6 +25,7 @@ let nextProcess = null;
 let mainWindow = null;
 let serverPort = 3000;
 let googleOAuthManager = null;
+let cloudSyncConfig = null;
 
 // 未使用の空きポートを探索してポート衝突を回避
 function findFreePort(startPort, callback) {
@@ -134,6 +136,7 @@ const registerCloudSyncIpc = () => {
     if (!googleOAuthManager || googleOAuthManager.clientId !== normalizedClientId) {
       googleOAuthManager = new GoogleDesktopOAuthManager({
         clientId: normalizedClientId,
+        clientSecret: cloudSyncConfig?.googleDesktopClientSecret,
         userDataPath: app.getPath('userData'),
         safeStorage,
         shell,
@@ -162,6 +165,10 @@ const registerCloudSyncIpc = () => {
 
 // Electron の初期化完了時に実行
 app.whenReady().then(async () => {
+  cloudSyncConfig = loadCloudSyncConfig({
+    appPath: app.getAppPath(),
+    isPackaged: app.isPackaged,
+  });
   registerCloudSyncIpc();
   // 開発版も必ず専用サーバーを起動する。インストール済みRadExam等が3000番を
   // 使用していても、空きポートと専用distDirを使うため古い画面を再利用しない。
