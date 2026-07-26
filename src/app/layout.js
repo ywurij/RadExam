@@ -1,4 +1,5 @@
 import "./globals.css";
+import CloudSyncLifecycle from "@/components/CloudSyncLifecycle";
 
 const isMobile = process.env.NEXT_PUBLIC_APP_TARGET === "mobile";
 
@@ -27,6 +28,7 @@ export default function RootLayout({ children }) {
   return (
     <html lang="ja" suppressHydrationWarning>
       <body>
+        <CloudSyncLifecycle />
         {children}
       </body>
     </html>

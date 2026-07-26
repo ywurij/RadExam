@@ -48,6 +48,10 @@ export default function CloudSyncPage() {
         refreshState().catch(loadError => {
             setError(loadError.message || '同期状態を読み出せませんでした。');
         });
+        window.addEventListener('radexam-cloud-sync-completed', refreshState);
+        return () => {
+            window.removeEventListener('radexam-cloud-sync-completed', refreshState);
+        };
     }, [refreshState]);
 
     const runAction = async action => {
@@ -156,6 +160,11 @@ export default function CloudSyncPage() {
                             <div><dt>未送信</dt><dd>{syncState.pendingCount}件</dd></div>
                             <div><dt>競合</dt><dd>{syncState.conflictCount}件</dd></div>
                         </dl>
+                        {syncState.config.lastSyncError && (
+                            <p className={styles.syncError}>
+                                前回の同期エラー: {syncState.config.lastSyncError}
+                            </p>
+                        )}
                     </>
                 )}
 

@@ -104,6 +104,17 @@
   line-height: 1.55;
 }
 
+.syncError {
+  margin: 0.8rem 0 0;
+  padding: 0.8rem 0.9rem;
+  border-radius: 0.75rem;
+  background: #fff1f2;
+  color: #be123c;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
 .details {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
