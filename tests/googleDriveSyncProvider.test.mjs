@@ -38,6 +38,32 @@ test('uses the appDataFolder space and drive.appdata authorization', async () =>
     assert.match(url.searchParams.get('q'), /device\\'a/);
 });
 
+test('reads the currently authorized Google Drive account', async () => {
+    const requests = [];
+    const client = new GoogleDriveAppDataClient({
+        getAccessToken: async () => 'access-token',
+        fetchImpl: async (url, options) => {
+            requests.push({ url: String(url), options });
+            return jsonResponse({
+                user: {
+                    displayName: 'RadExam User',
+                    permissionId: 'permission-123',
+                    emailAddress: 'user@example.com',
+                },
+            });
+        },
+    });
+
+    const user = await client.getCurrentUser();
+
+    assert.equal(user.permissionId, 'permission-123');
+    assert.equal(user.emailAddress, 'user@example.com');
+    const url = new URL(requests[0].url);
+    assert.equal(url.pathname, '/drive/v3/about');
+    assert.match(url.searchParams.get('fields'), /permissionId/);
+    assert.equal(requests[0].options.headers.Authorization, 'Bearer access-token');
+});
+
 test('creates an appData file through a resumable upload session', async () => {
     const requests = [];
     const client = new GoogleDriveAppDataClient({

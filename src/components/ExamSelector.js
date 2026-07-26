@@ -280,6 +280,9 @@ export default function ExamSelector() {
                     <button type="button" onClick={() => router.push('/usage')}>
                         ❓ 使い方
                     </button>
+                    <button type="button" onClick={() => router.push('/sync')}>
+                        ☁️ クラウド同期
+                    </button>
                     {isMobileTarget ? <button type="button" onClick={() => router.push('/data')} className={styles.dataButton}>
                         ⇄ データ転送
                     </button> : APP_FEATURES.examManagement && <button type="button" onClick={() => router.push('/admin')} className={styles.adminButton}>

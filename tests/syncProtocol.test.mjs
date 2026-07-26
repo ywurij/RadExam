@@ -39,12 +39,47 @@ class MemoryStorage {
         this.values.delete(key);
     }
 
+    async clear() {
+        this.values.clear();
+    }
+
     async iterate(iterator) {
         for (const [key, value] of this.values) {
             iterator(structuredClone(value), key);
         }
     }
 }
+
+test('does not disconnect while unsent changes remain unless explicitly confirmed', async () => {
+    let uuidSequence = 0;
+    const journal = new SyncJournal(new MemoryStorage(), {
+        uuid: () => `uuid-${++uuidSequence}`,
+    });
+    const configured = await journal.configure({
+        enabled: true,
+        provider: 'google-drive',
+        accountId: 'account-1',
+    });
+    await journal.recordChanges([{
+        entityType: 'question',
+        entityId: 'exam-1:question-1',
+        operation: 'upsert',
+        changedFields: ['question'],
+        payload: { question: '変更後' },
+    }]);
+
+    await assert.rejects(
+        () => journal.disconnect(),
+        /未同期の変更が1件/
+    );
+
+    const disconnected = await journal.disconnect({ discardPending: true });
+
+    assert.equal(disconnected.enabled, false);
+    assert.equal(disconnected.provider, null);
+    assert.notEqual(disconnected.deviceId, configured.deviceId);
+    assert.deepEqual(await journal.listPendingChanges(), []);
+});
 
 test('records question text and each option as independent changed fields', () => {
     const previous = {

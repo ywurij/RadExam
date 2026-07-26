@@ -151,6 +151,14 @@ export class GoogleDriveAppDataClient {
         return response.json();
     }
 
+    async getCurrentUser() {
+        const query = new URLSearchParams({
+            fields: 'user(displayName,permissionId,emailAddress,photoLink)',
+        });
+        const response = await this.request(`${DRIVE_API_BASE}/about?${query}`);
+        return (await response.json()).user || null;
+    }
+
     async downloadFile(fileId) {
         return this.request(
             `${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}?alt=media`

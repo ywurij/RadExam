@@ -19,6 +19,7 @@ import {
 } from '@/lib/sync/syncProtocol.mjs';
 import {
     configureLocalSyncJournal,
+    disconnectLocalSyncJournal,
     getLocalSyncJournalConfig,
     listPendingLocalSyncChanges,
     localSyncJournal,
@@ -449,6 +450,7 @@ export const initializeLocalSyncTracking = async ({
     provider,
     accountId,
     deviceName,
+    accountLabel,
 }) => {
     const supportedProviders = Object.values(SYNC_PROVIDERS);
     if (!supportedProviders.includes(provider)) {
@@ -480,6 +482,7 @@ export const initializeLocalSyncTracking = async ({
         provider,
         accountId: String(accountId),
         ...(deviceName ? { deviceName } : {}),
+        ...(accountLabel ? { accountLabel } : {}),
         bootstrapCompleted: false,
     });
 
@@ -501,6 +504,8 @@ export const initializeLocalSyncTracking = async ({
         config,
     };
 };
+
+export const disconnectLocalSyncTracking = options => disconnectLocalSyncJournal(options);
 
 const rebuildExamMetadata = exam => ({
     ...exam,

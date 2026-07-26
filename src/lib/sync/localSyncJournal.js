@@ -11,6 +11,7 @@ const syncJournalStore = localforage.createInstance({
 export const localSyncJournal = new SyncJournal(syncJournalStore);
 
 export const configureLocalSyncJournal = updates => localSyncJournal.configure(updates);
+export const disconnectLocalSyncJournal = options => localSyncJournal.disconnect(options);
 export const getLocalSyncJournalConfig = () => localSyncJournal.getConfig();
 export const recordLocalSyncChanges = changes => localSyncJournal.recordChanges(changes);
 export const listPendingLocalSyncChanges = () => localSyncJournal.listPendingChanges();

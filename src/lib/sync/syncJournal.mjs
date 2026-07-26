@@ -95,6 +95,38 @@ export class SyncJournal {
         });
     }
 
+    async disconnect({ discardPending = false } = {}) {
+        return this.withLock(async () => {
+            const pendingKeys = [];
+            const allKeys = [];
+            await this.storage.iterate((value, key) => {
+                allKeys.push(key);
+                if (String(key).startsWith(CHANGE_PREFIX) && value?.status === 'pending') {
+                    pendingKeys.push(key);
+                }
+            });
+            if (pendingKeys.length > 0 && !discardPending) {
+                throw new Error(`未同期の変更が${pendingKeys.length}件あります。先に同期してください。`);
+            }
+            if (typeof this.storage.clear === 'function') {
+                await this.storage.clear();
+            } else {
+                await Promise.all(allKeys.map(key => this.storage.removeItem(key)));
+            }
+            const config = {
+                enabled: false,
+                deviceId: this.uuid(),
+                deviceName: null,
+                provider: null,
+                accountId: null,
+                nextSequence: 1,
+                reconciliationRequired: false,
+            };
+            await this.storage.setItem(CONFIG_KEY, config);
+            return config;
+        });
+    }
+
     async recordChanges(inputs) {
         const candidates = (inputs || []).filter(Boolean);
         if (candidates.length === 0) return [];
