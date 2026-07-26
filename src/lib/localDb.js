@@ -1,5 +1,9 @@
 import localforage from 'localforage';
 import {
+    createBackupArchiveBlob,
+    parseBackupArchiveBlob,
+} from '@/lib/backupArchive.mjs';
+import {
     collectReferencedImageKeys,
     collectReferencedPdfKeys,
     findMissingBackupImageKeys,
@@ -62,6 +66,10 @@ const pdfStore = localforage.createInstance({
 });
 
 const LOCAL_IMAGE_PREFIX = 'local-image://';
+const RESUMABLE_SESSIONS_KEY = 'radexam_sessions';
+const LEGACY_RESUMABLE_SESSION_KEY = 'radexam_session';
+const RESUMABLE_SESSION_ENTITY_PREFIX = 'resumable-session:';
+const MAX_RESUMABLE_SESSIONS = 4;
 
 const isDataUrl = (value) => typeof value === 'string' && value.startsWith('data:');
 const isLocalImageRef = (value) => typeof value === 'string' && value.startsWith(LOCAL_IMAGE_PREFIX);
@@ -79,9 +87,15 @@ const calculateBlobHash = async (blob) => {
 };
 const recordSyncChangesSafely = async (changes) => {
     const candidates = (changes || []).filter(Boolean);
-    if (candidates.length === 0) return;
+    if (candidates.length === 0) return [];
     try {
-        await recordLocalSyncChanges(candidates);
+        const recorded = await recordLocalSyncChanges(candidates);
+        if (recorded.length > 0) {
+            globalThis.window?.dispatchEvent(new CustomEvent('radexam-local-sync-change', {
+                detail: { changeCount: recorded.length },
+            }));
+        }
+        return recorded;
     } catch (error) {
         console.error('Failed to record local sync changes:', error);
         try {
@@ -89,6 +103,7 @@ const recordSyncChangesSafely = async (changes) => {
         } catch (markError) {
             console.error('Failed to mark sync reconciliation as required:', markError);
         }
+        return [];
     }
 };
 const markSyncReconciliationSafely = async (reason) => {
@@ -97,6 +112,135 @@ const markSyncReconciliationSafely = async (reason) => {
     } catch (error) {
         console.error('Failed to mark sync reconciliation as required:', error);
     }
+};
+const normalizeResumableSessions = sessions => (
+    (Array.isArray(sessions) ? sessions : [])
+        .filter(session => (
+            session
+            && typeof session === 'object'
+            && session.id
+            && session.mode !== 'search'
+            && session.interrupted === true
+        ))
+        .sort((left, right) => (
+            (Number(right.timestamp) || 0) - (Number(left.timestamp) || 0)
+        ))
+        .slice(0, MAX_RESUMABLE_SESSIONS)
+);
+const readLocalStorageJson = (key, fallback) => {
+    try {
+        const raw = globalThis.localStorage?.getItem(key);
+        return raw ? JSON.parse(raw) : fallback;
+    } catch {
+        return fallback;
+    }
+};
+const writeLocalResumableSessions = sessions => {
+    const normalized = normalizeResumableSessions(sessions).map(
+        session => JSON.parse(JSON.stringify(session))
+    );
+    globalThis.localStorage?.setItem(
+        RESUMABLE_SESSIONS_KEY,
+        JSON.stringify(normalized)
+    );
+    globalThis.window?.dispatchEvent(new CustomEvent(
+        'radexam-resumable-sessions-changed',
+        { detail: { sessions: normalized } }
+    ));
+    return normalized;
+};
+const resumableSessionEntityId = sessionId => (
+    `${RESUMABLE_SESSION_ENTITY_PREFIX}${String(sessionId)}`
+);
+const resumableSessionIdFromEntity = entityId => (
+    String(entityId || '').startsWith(RESUMABLE_SESSION_ENTITY_PREFIX)
+        ? String(entityId).slice(RESUMABLE_SESSION_ENTITY_PREFIX.length)
+        : ''
+);
+
+export const getLocalResumableSessions = () => (
+    normalizeResumableSessions(
+        readLocalStorageJson(RESUMABLE_SESSIONS_KEY, [])
+    )
+);
+
+export const replaceLocalResumableSessions = async sessions => {
+    const previous = getLocalResumableSessions();
+    const next = writeLocalResumableSessions(sessions);
+    const syncConfig = await getLocalSyncJournalConfig();
+    if (
+        syncConfig.enabled
+        && syncConfig.resumableSessionsInitialized !== true
+    ) {
+        const recorded = await recordSyncChangesSafely(next.map(session => (
+            buildUpsertSyncChangeInput({
+                entityType: SYNC_ENTITY_TYPES.PREFERENCE,
+                entityId: resumableSessionEntityId(session.id),
+                nextValue: session,
+                fields: Object.keys(session),
+            })
+        )));
+        if (next.length === 0 || recorded.length === next.length) {
+            await configureLocalSyncJournal({
+                resumableSessionsInitialized: true,
+            });
+        }
+        return next;
+    }
+    const previousById = new Map(previous.map(session => [String(session.id), session]));
+    const nextById = new Map(next.map(session => [String(session.id), session]));
+    const changes = [];
+
+    for (const [sessionId, session] of nextById) {
+        changes.push(buildUpsertSyncChangeInput({
+            entityType: SYNC_ENTITY_TYPES.PREFERENCE,
+            entityId: resumableSessionEntityId(sessionId),
+            previousValue: previousById.get(sessionId) || {},
+            nextValue: session,
+        }));
+    }
+    for (const sessionId of previousById.keys()) {
+        if (!nextById.has(sessionId)) {
+            changes.push(buildDeleteSyncChangeInput({
+                entityType: SYNC_ENTITY_TYPES.PREFERENCE,
+                entityId: resumableSessionEntityId(sessionId),
+            }));
+        }
+    }
+    await recordSyncChangesSafely(changes);
+    return next;
+};
+
+export const saveLocalResumableSession = async session => {
+    if (!session?.id) return getLocalResumableSessions();
+    const current = getLocalResumableSessions();
+    const next = current.filter(item => String(item.id) !== String(session.id));
+    next.unshift(session);
+    return replaceLocalResumableSessions(next);
+};
+
+export const deleteLocalResumableSession = async sessionId => (
+    replaceLocalResumableSessions(
+        getLocalResumableSessions().filter(
+            session => String(session.id) !== String(sessionId)
+        )
+    )
+);
+
+export const migrateLegacyResumableSession = async () => {
+    const legacy = readLocalStorageJson(LEGACY_RESUMABLE_SESSION_KEY, null);
+    if (!legacy) return getLocalResumableSessions();
+    const migrated = {
+        ...legacy,
+        id: legacy.id
+            || (legacy.timestamp
+                ? `migrated-${legacy.timestamp}`
+                : `migrated-${Date.now()}`),
+        name: legacy.name || '移行されたセッション',
+        interrupted: true,
+    };
+    globalThis.localStorage?.removeItem(LEGACY_RESUMABLE_SESSION_KEY);
+    return saveLocalResumableSession(migrated);
 };
 const resolveImageLegend = (source) => (
     Object.prototype.hasOwnProperty.call(source, 'legend')
@@ -385,6 +529,7 @@ const collectLocalSyncSeedData = async () => {
     const progress = {};
     const images = {};
     const pdfs = {};
+    const preferences = {};
 
     for (const [examId, exam] of await collectStoreEntries(examsStore)) {
         const questions = await Promise.all((exam?.questions || []).map(async question => {
@@ -439,18 +584,23 @@ const collectLocalSyncSeedData = async () => {
         };
     }
 
-    return { exams, progress, images, pdfs };
+    for (const session of getLocalResumableSessions()) {
+        preferences[resumableSessionEntityId(session.id)] = session;
+    }
+
+    return { exams, progress, images, pdfs, preferences };
 };
 
 /**
- * 既存のローカルデータを初回同期キューへ登録し、以後の変更追跡を有効にする。
- * 実際のクラウド送受信はプロバイダー実装がこのAPIの後に行う。
+ * Google認証後の接続情報だけを先に保存する。
+ * 端末データの走査は行わないため、接続完了をすぐ画面へ反映できる。
  */
-export const initializeLocalSyncTracking = async ({
+export const connectLocalSyncTracking = async ({
     provider,
     accountId,
     deviceName,
     accountLabel,
+    cloudSyncId,
 }) => {
     const supportedProviders = Object.values(SYNC_PROVIDERS);
     if (!supportedProviders.includes(provider)) {
@@ -469,23 +619,43 @@ export const initializeLocalSyncTracking = async ({
         throw new Error('同期中のクラウドとは別のサービスまたはアカウントです。先に同期を解除してください。');
     }
     if (currentConfig.enabled && currentConfig.bootstrapCompleted) {
+        const config = cloudSyncId && !currentConfig.cloudSyncId
+            ? await configureLocalSyncJournal({ cloudSyncId })
+            : currentConfig;
         return {
             alreadyInitialized: true,
             queuedChanges: (await listPendingLocalSyncChanges()).length,
-            config: currentConfig,
+            config,
         };
     }
 
-    const seedData = await collectLocalSyncSeedData();
-    await configureLocalSyncJournal({
+    const connectedAt = new Date().toISOString();
+    const config = await configureLocalSyncJournal({
         enabled: true,
         provider,
         accountId: String(accountId),
         ...(deviceName ? { deviceName } : {}),
         ...(accountLabel ? { accountLabel } : {}),
+        ...(cloudSyncId ? { cloudSyncId } : {}),
         bootstrapCompleted: false,
+        connectedAt,
     });
+    return {
+        alreadyInitialized: false,
+        queuedChanges: (await listPendingLocalSyncChanges()).length,
+        config,
+    };
+};
 
+/**
+ * 接続済み端末のデータを初回同期キューへ登録する。
+ * Google認証の完了後に別処理として呼び出し、準備の進捗を区別する。
+ */
+export const initializeLocalSyncTracking = async options => {
+    const connection = await connectLocalSyncTracking(options);
+    if (connection.config.bootstrapCompleted) return connection;
+
+    const seedData = await collectLocalSyncSeedData();
     const recordedChanges = await recordLocalSyncChanges(
         buildInitialSyncChangeInputs(seedData)
     );
@@ -493,6 +663,7 @@ export const initializeLocalSyncTracking = async ({
     const config = await configureLocalSyncJournal({
         bootstrapCompleted: true,
         bootstrapCompletedAt: initializedAt,
+        resumableSessionsInitialized: true,
         reconciliationRequired: false,
         reconciliationReason: null,
         reconciliationMarkedAt: null,
@@ -506,6 +677,22 @@ export const initializeLocalSyncTracking = async ({
 };
 
 export const disconnectLocalSyncTracking = options => disconnectLocalSyncJournal(options);
+
+/**
+ * 開発中の端末復元テスト用に、クラウドへ削除変更を送らずローカルだけを空にする。
+ * 同期履歴も消すため、次回接続時はクラウドの全体データを新しい端末として受信する。
+ */
+export const clearLocalAppDataForDevelopment = async () => {
+    await Promise.all([
+        examsStore.clear(),
+        progressStore.clear(),
+        imageStore.clear(),
+        pdfStore.clear(),
+    ]);
+    writeLocalResumableSessions([]);
+    globalThis.localStorage?.removeItem('radexam_last_settings');
+    await disconnectLocalSyncJournal({ discardPending: true });
+};
 
 const rebuildExamMetadata = exam => ({
     ...exam,
@@ -612,6 +799,31 @@ const applyRemoteProgressChange = async change => {
     });
 };
 
+const applyRemotePreferenceChange = async change => {
+    const sessionId = resumableSessionIdFromEntity(change.entityId);
+    if (!sessionId) {
+        throw new Error(`未対応の同期設定です: ${change.entityId}`);
+    }
+    const sessions = getLocalResumableSessions();
+    const currentIndex = sessions.findIndex(
+        session => String(session.id) === sessionId
+    );
+    if (change.operation === SYNC_OPERATIONS.DELETE) {
+        if (currentIndex >= 0) sessions.splice(currentIndex, 1);
+        writeLocalResumableSessions(sessions);
+        return;
+    }
+    const current = currentIndex >= 0 ? sessions[currentIndex] : { id: sessionId };
+    const next = {
+        ...applySyncFieldDelta(current, change),
+        id: sessionId,
+        interrupted: true,
+    };
+    if (currentIndex >= 0) sessions[currentIndex] = next;
+    else sessions.push(next);
+    writeLocalResumableSessions(sessions);
+};
+
 const applyRemoteImageChange = async (change, blob) => {
     if (change.operation === SYNC_OPERATIONS.DELETE) {
         await imageStore.removeItem(change.entityId);
@@ -651,6 +863,8 @@ const localSyncDataStore = {
                 return applyRemoteQuestionChange(change);
             case SYNC_ENTITY_TYPES.PROGRESS:
                 return applyRemoteProgressChange(change);
+            case SYNC_ENTITY_TYPES.PREFERENCE:
+                return applyRemotePreferenceChange(change);
             case SYNC_ENTITY_TYPES.IMAGE:
                 return applyRemoteImageChange(change, blob);
             case SYNC_ENTITY_TYPES.PDF:
@@ -707,6 +921,25 @@ export const synchronizeLocalData = async provider => (
         journal: localSyncJournal,
         dataStore: localSyncDataStore,
         getLocalBlob: getLocalSyncBlob,
+        createLocalSnapshot: async () => {
+            const backup = await exportAllLocalData();
+            const blob = await createBackupArchiveBlob(backup);
+            return {
+                blob,
+                contentHash: await calculateBlobHash(blob),
+                counts: {
+                    exams: Object.keys(backup.exams || {}).length,
+                    progress: Object.keys(backup.progress || {}).length,
+                    images: Object.keys(backup.images || {}).length,
+                    pdfs: Object.keys(backup.pdfs || {}).length,
+                    sessions: Array.isArray(backup.sessions) ? backup.sessions.length : 0,
+                },
+            };
+        },
+        restoreLocalSnapshot: async blob => {
+            const backup = await parseBackupArchiveBlob(blob);
+            await importLocalData(backup, 'overwrite');
+        },
     })
 );
 
@@ -990,12 +1223,13 @@ export const getLocalProgress = async () => {
  */
 export const exportAllLocalData = async ({ includePdfs = true } = {}) => {
     const backup = {
-        version: 3,
+        version: 4,
         timestamp: Date.now(),
         exams: {},
         progress: {},
         images: {},
-        pdfs: {}
+        pdfs: {},
+        sessions: getLocalResumableSessions(),
     };
 
     // 試験データをエクスポート用に追加
@@ -1082,7 +1316,13 @@ export const importLocalData = async (jsonData, strategy = 'overwrite', { includ
         throw new Error("Unsupported import strategy");
     }
 
-    const { exams, progress, images, pdfs } = jsonData;
+    const {
+        exams,
+        progress,
+        images,
+        pdfs,
+        sessions = [],
+    } = jsonData;
     const missingImageKeys = findMissingBackupImageKeys(exams, images);
     if (missingImageKeys.length > 0) {
         throw new Error(
@@ -1140,5 +1380,6 @@ export const importLocalData = async (jsonData, strategy = 'overwrite', { includ
     for (const [key, value] of preparedPdfs) {
         await pdfStore.setItem(key, value);
     }
+    writeLocalResumableSessions(sessions);
     await markSyncReconciliationSafely('manual-backup-import');
 };

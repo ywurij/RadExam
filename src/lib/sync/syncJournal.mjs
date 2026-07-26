@@ -10,6 +10,7 @@ const APPLIED_PREFIX = 'applied:';
 const CONFLICT_PREFIX = 'conflict:';
 const SENT_PREFIX = 'sent:';
 const APPLIED_BATCH_PREFIX = 'applied-batch:';
+const BOOTSTRAP_SNAPSHOT_KEY = 'bootstrap-snapshot';
 
 const padSequence = sequence => String(sequence).padStart(16, '0');
 const changeKey = change => `${CHANGE_PREFIX}${padSequence(change.sequence)}:${change.changeId}`;
@@ -197,6 +198,22 @@ export class SyncJournal {
         return records.sort((left, right) => (
             left.sequence - right.sequence || left.changeId.localeCompare(right.changeId)
         ));
+    }
+
+    async getBootstrapSnapshot() {
+        return this.storage.getItem(BOOTSTRAP_SNAPSHOT_KEY);
+    }
+
+    async saveBootstrapSnapshot(snapshot) {
+        if (!snapshot?.descriptor || !(snapshot?.blob instanceof Blob)) {
+            throw new Error('初回同期スナップショットの保存内容が不正です。');
+        }
+        await this.storage.setItem(BOOTSTRAP_SNAPSHOT_KEY, snapshot);
+        return snapshot;
+    }
+
+    async clearBootstrapSnapshot() {
+        await this.storage.removeItem(BOOTSTRAP_SNAPSHOT_KEY);
     }
 
     async acknowledgeChanges(changeIds, { committedGeneration = null } = {}) {

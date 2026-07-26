@@ -2,6 +2,11 @@ import { SYNC_SCHEMA_VERSION } from './syncProtocol.mjs';
 
 export const SYNC_MANIFEST_VERSION = 1;
 export const MAX_CHANGES_PER_BATCH = 100;
+export const MAX_CHANGES_PER_BULK_PACKAGE = 2000;
+export const SYNC_BATCH_FORMATS = Object.freeze({
+    STANDARD: 'change-batch',
+    BULK: 'bulk-delta',
+});
 
 export class SyncManifestConflictError extends Error {
     constructor(message = 'manifestが別端末で更新されました。') {
@@ -29,6 +34,10 @@ export const createEmptySyncManifest = ({
 });
 
 const validateBatchDescriptor = batch => {
+    const format = batch?.format || SYNC_BATCH_FORMATS.STANDARD;
+    const maximumChanges = format === SYNC_BATCH_FORMATS.BULK
+        ? MAX_CHANGES_PER_BULK_PACKAGE
+        : MAX_CHANGES_PER_BATCH;
     if (
         !batch?.batchId
         || !batch?.deviceId
@@ -41,11 +50,32 @@ const validateBatchDescriptor = batch => {
         || batch.toSequence < batch.fromSequence
         || !Number.isSafeInteger(batch?.changeCount)
         || batch.changeCount < 1
-        || batch.changeCount > MAX_CHANGES_PER_BATCH
+        || batch.changeCount > maximumChanges
+        || !Object.values(SYNC_BATCH_FORMATS).includes(format)
     ) {
         throw new Error(`manifest内の変更バッチが不正です: ${batch?.batchId || 'IDなし'}`);
     }
     return batch;
+};
+
+const validateSnapshotDescriptor = snapshot => {
+    if (snapshot == null) return null;
+    if (
+        !snapshot?.snapshotId
+        || !snapshot?.deviceId
+        || !snapshot?.objectKey
+        || !Number.isSafeInteger(snapshot?.generation)
+        || snapshot.generation < 0
+        || !Number.isSafeInteger(snapshot?.cutoffSequence)
+        || snapshot.cutoffSequence < 0
+        || !Number.isSafeInteger(snapshot?.byteSize)
+        || snapshot.byteSize < 0
+        || !String(snapshot?.contentHash || '').startsWith('sha256:')
+        || !snapshot?.createdAt
+    ) {
+        throw new Error(`manifest内のスナップショットが不正です: ${snapshot?.snapshotId || 'IDなし'}`);
+    }
+    return snapshot;
 };
 
 export const validateSyncManifest = manifest => {
@@ -79,7 +109,35 @@ export const validateSyncManifest = manifest => {
     if (previousGeneration > manifest.generation) {
         throw new Error('manifestのgenerationより新しいバッチがあります。');
     }
+    validateSnapshotDescriptor(manifest.latestSnapshot);
+    if (
+        manifest.latestSnapshot
+        && manifest.latestSnapshot.generation > manifest.generation
+    ) {
+        throw new Error('manifestより新しいスナップショットが登録されています。');
+    }
     return cloneValue(manifest);
+};
+
+export const setLatestSyncSnapshot = (
+    manifest,
+    snapshot,
+    { updatedAt = new Date().toISOString() } = {}
+) => {
+    const current = validateSyncManifest(manifest);
+    const nextSnapshot = validateSnapshotDescriptor(cloneValue(snapshot));
+    if (nextSnapshot.generation !== current.generation) {
+        throw new Error('スナップショットの世代がmanifestと一致しません。');
+    }
+    if (current.latestSnapshot?.snapshotId === nextSnapshot.snapshotId) {
+        return { manifest: current, snapshot: current.latestSnapshot, updated: false };
+    }
+    const nextManifest = {
+        ...current,
+        latestSnapshot: nextSnapshot,
+        updatedAt,
+    };
+    return { manifest: nextManifest, snapshot: nextSnapshot, updated: true };
 };
 
 export const appendSyncManifestBatch = (
@@ -96,8 +154,14 @@ export const appendSyncManifestBatch = (
             'fromSequence',
             'toSequence',
             'changeCount',
+            'format',
         ];
-        if (comparableFields.some(field => existing[field] !== batch[field])) {
+        if (comparableFields.some(field => (
+            field === 'format'
+                ? (existing[field] || SYNC_BATCH_FORMATS.STANDARD)
+                    !== (batch[field] || SYNC_BATCH_FORMATS.STANDARD)
+                : existing[field] !== batch[field]
+        ))) {
             throw new Error(`同じIDで内容の異なる変更バッチがあります: ${batch.batchId}`);
         }
         return { manifest: current, batch: existing, appended: false };
@@ -134,6 +198,36 @@ export const buildSyncChangeBatch = ({
     }
     return {
         batchVersion: 1,
+        format: SYNC_BATCH_FORMATS.STANDARD,
+        batchId: String(batchId),
+        deviceId: String(deviceId),
+        fromSequence: Math.min(...sequences),
+        toSequence: Math.max(...sequences),
+        changeCount: changes.length,
+        createdAt,
+        changes: cloneValue(changes),
+    };
+};
+
+export const buildSyncBulkChangePackage = ({
+    batchId,
+    deviceId,
+    changes,
+    createdAt = new Date().toISOString(),
+}) => {
+    if (!batchId || !deviceId || !Array.isArray(changes) || changes.length === 0) {
+        throw new Error('まとめ差分にはbatchId、deviceId、changesが必要です。');
+    }
+    if (changes.length > MAX_CHANGES_PER_BULK_PACKAGE) {
+        throw new Error(`1つのまとめ差分は${MAX_CHANGES_PER_BULK_PACKAGE}変更までです。`);
+    }
+    const sequences = changes.map(change => change.sequence);
+    if (changes.some(change => change.deviceId !== deviceId)) {
+        throw new Error('1つのまとめ差分に複数端末の変更は保存できません。');
+    }
+    return {
+        batchVersion: 1,
+        format: SYNC_BATCH_FORMATS.BULK,
         batchId: String(batchId),
         deviceId: String(deviceId),
         fromSequence: Math.min(...sequences),
@@ -145,13 +239,18 @@ export const buildSyncChangeBatch = ({
 };
 
 export const validateSyncChangeBatch = (batch, descriptor) => {
+    const format = batch?.format || descriptor?.format || SYNC_BATCH_FORMATS.STANDARD;
+    const maximumChanges = format === SYNC_BATCH_FORMATS.BULK
+        ? MAX_CHANGES_PER_BULK_PACKAGE
+        : MAX_CHANGES_PER_BATCH;
     if (
         batch?.batchVersion !== 1
         || !batch?.batchId
         || !batch?.deviceId
         || !Array.isArray(batch?.changes)
         || batch.changes.length === 0
-        || batch.changes.length > MAX_CHANGES_PER_BATCH
+        || batch.changes.length > maximumChanges
+        || !Object.values(SYNC_BATCH_FORMATS).includes(format)
     ) {
         throw new Error(`クラウド上の変更バッチが不正です: ${batch?.batchId || 'IDなし'}`);
     }
@@ -172,6 +271,7 @@ export const validateSyncChangeBatch = (batch, descriptor) => {
             || batch.fromSequence !== descriptor.fromSequence
             || batch.toSequence !== descriptor.toSequence
             || batch.changeCount !== descriptor.changeCount
+            || format !== (descriptor.format || SYNC_BATCH_FORMATS.STANDARD)
         )
     ) {
         throw new Error(`manifestと変更バッチの内容が一致しません: ${batch.batchId}`);

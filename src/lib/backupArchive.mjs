@@ -7,6 +7,7 @@ const createRecordIterator = function* (backup) {
         progress: Object.keys(backup.progress || {}).length,
         images: Object.keys(backup.images || {}).length,
         pdfs: Object.keys(backup.pdfs || {}).length,
+        sessions: Array.isArray(backup.sessions) ? backup.sessions.length : 0,
     };
 
     yield {
@@ -30,6 +31,9 @@ const createRecordIterator = function* (backup) {
     for (const [key, value] of Object.entries(backup.pdfs || {})) {
         yield { type: 'pdf', key, value };
     }
+    for (const session of backup.sessions || []) {
+        yield { type: 'session', key: String(session.id), value: session };
+    }
 
     yield { type: 'end', counts };
 };
@@ -39,6 +43,13 @@ const addArchiveRecord = (backup, record) => {
         throw new Error('バックアップ内に不正なレコードがあります。');
     }
 
+    if (record.type === 'session') {
+        if (!record.value?.id) {
+            throw new Error('バックアップ内にIDのない中断履歴があります。');
+        }
+        backup.sessions.push(record.value);
+        return;
+    }
     const targetByType = {
         exam: backup.exams,
         progress: backup.progress,
@@ -80,6 +91,7 @@ export const parseBackupArchiveBlob = async file => {
         progress: {},
         images: {},
         pdfs: {},
+        sessions: [],
     };
     let header = null;
     let footer = null;
@@ -132,6 +144,7 @@ export const parseBackupArchiveBlob = async file => {
         progress: Object.keys(backup.progress).length,
         images: Object.keys(backup.images).length,
         pdfs: Object.keys(backup.pdfs).length,
+        sessions: backup.sessions.length,
     };
     for (const [key, count] of Object.entries(header.counts || {})) {
         if (actualCounts[key] !== count || footer.counts?.[key] !== count) {

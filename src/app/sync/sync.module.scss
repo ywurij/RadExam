@@ -126,6 +126,13 @@
   dd { margin: 0.2rem 0 0; overflow-wrap: anywhere; font-weight: 800; }
 }
 
+.statusHelp {
+  margin: 0.7rem 0 0;
+  color: #64748b;
+  font-size: 0.78rem;
+  line-height: 1.55;
+}
+
 .actions {
   display: flex;
   gap: 0.7rem;
@@ -146,6 +153,46 @@
 
 .primaryButton { border: 0; background: #2563eb; color: #fff; }
 .secondaryButton { border: 1px solid #cbd5e1; background: #fff; color: #475569; }
+
+.progress {
+  display: grid;
+  gap: 0.45rem;
+  margin-top: 0.85rem;
+  color: #1e40af;
+  font-size: 0.84rem;
+  font-weight: 700;
+
+  progress {
+    width: 100%;
+    height: 0.65rem;
+    accent-color: #2563eb;
+  }
+}
+
+.resetArea {
+  display: grid;
+  gap: 0.55rem;
+  margin-top: 1.2rem;
+  padding-top: 1rem;
+  border-top: 1px solid #e2e8f0;
+
+  strong { color: #475569; font-size: 0.86rem; }
+  p { margin: 0; color: #64748b; font-size: 0.78rem; line-height: 1.55; }
+}
+
+.resetButton, .hardResetButton {
+  min-height: 42px;
+  padding: 0.6rem 0.85rem;
+  border-radius: 0.7rem;
+  background: #fff;
+  font-weight: 750;
+  cursor: pointer;
+
+  &:disabled { cursor: not-allowed; opacity: 0.5; }
+}
+
+.resetButton { border: 1px solid #f59e0b; color: #9a3412; }
+.hardResetButton { border: 1px solid #f43f5e; color: #be123c; }
 
 .success, .error { margin: 1rem 0 0; padding: 0.9rem 1rem; border-radius: 0.8rem; line-height: 1.5; }
 .success { background: #ecfdf5; color: #047857; }

@@ -324,7 +324,7 @@ test('remembers an applied remote change so retries are idempotent', async () =>
     assert.equal(await journal.hasAppliedChange(remoteChange.changeId), true);
 });
 
-test('builds initial changes for existing questions, progress, images, and PDFs', () => {
+test('builds initial changes for existing questions, progress, files, and resumable sessions', () => {
     const changes = buildInitialSyncChangeInputs({
         exams: {
             exam: {
@@ -356,6 +356,14 @@ test('builds initial changes for existing questions, progress, images, and PDFs'
                 contentHash: 'sha256:pdf',
             },
         },
+        preferences: {
+            'resumable-session:session-1': {
+                id: 'session-1',
+                examId: 'exam',
+                currentIndex: 1,
+                interrupted: true,
+            },
+        },
     });
 
     assert.deepEqual(changes.map(change => `${change.entityType}:${change.entityId}`), [
@@ -364,6 +372,7 @@ test('builds initial changes for existing questions, progress, images, and PDFs'
         'progress:2025001',
         'image:image-key',
         'pdf:pdf-key',
+        'preference:resumable-session:session-1',
     ]);
     assert.deepEqual(changes[1].changedFields, [
         'id',
@@ -379,6 +388,12 @@ test('builds initial changes for existing questions, progress, images, and PDFs'
         localKey: 'image-key',
         contentHash: 'sha256:image',
     }]);
+    assert.deepEqual(changes[5].changedFields, [
+        'currentIndex',
+        'examId',
+        'id',
+        'interrupted',
+    ]);
 });
 
 test('allows different question fields and different options to merge automatically', () => {

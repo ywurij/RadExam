@@ -371,6 +371,7 @@ export const buildInitialSyncChangeInputs = ({
     progress = {},
     images = {},
     pdfs = {},
+    preferences = {},
 }) => {
     const changes = [];
 
@@ -427,6 +428,15 @@ export const buildInitialSyncChangeInputs = ({
                 localKey,
                 ...(value?.contentHash ? { contentHash: value.contentHash } : {}),
             }],
+        }));
+    }
+
+    for (const [preferenceId, value] of Object.entries(preferences || {})) {
+        changes.push(buildUpsertSyncChangeInput({
+            entityType: SYNC_ENTITY_TYPES.PREFERENCE,
+            entityId: preferenceId,
+            nextValue: value,
+            fields: Object.keys(value || {}),
         }));
     }
 

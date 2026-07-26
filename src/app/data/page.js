@@ -14,11 +14,12 @@ const getBackupSummary = (backup) => {
 
     const exams = Object.values(backup.exams);
     const questionCount = exams.reduce((total, exam) => total + (Array.isArray(exam?.questions) ? exam.questions.length : 0), 0);
+    const sessionCount = Array.isArray(backup.sessions) ? backup.sessions.length : 0;
     if (exams.length === 0 || questionCount === 0) {
         throw new Error('試験問題が含まれていません。');
     }
 
-    return { examCount: exams.length, questionCount };
+    return { examCount: exams.length, questionCount, sessionCount };
 };
 
 export default function DataTransferPage() {
@@ -47,16 +48,20 @@ export default function DataTransferPage() {
             const backup = await readBackupFile(file);
             const summary = getBackupSummary(backup);
             const shouldImport = window.confirm(
-                `${summary.examCount}件の試験（全${summary.questionCount}問）を登録します。\n現在の試験データと学習履歴は置き換えられます。続行しますか？`
+                `${summary.examCount}件の試験（全${summary.questionCount}問）と`
+                + `中断履歴${summary.sessionCount}件を登録します。\n`
+                + '現在の試験データ、学習履歴、中断履歴は置き換えられます。続行しますか？'
             );
             if (!shouldImport) return;
 
             await importLocalData(backup, 'overwrite');
-            localStorage.removeItem('radexam_sessions');
             localStorage.removeItem('radexam_last_settings');
             await initializeLocalExams(true);
             await refresh();
-            setMessage(`${summary.examCount}件の試験、全${summary.questionCount}問を登録しました。`);
+            setMessage(
+                `${summary.examCount}件の試験、全${summary.questionCount}問、`
+                + `中断履歴${summary.sessionCount}件を登録しました。`
+            );
         } catch (importError) {
             console.error('Failed to import mobile backup:', importError);
             setError(importError instanceof SyntaxError
@@ -84,7 +89,10 @@ export default function DataTransferPage() {
             link.click();
             link.remove();
             URL.revokeObjectURL(url);
-            setMessage(`${summary.examCount}件の試験と学習履歴を書き出しました。`);
+            setMessage(
+                `${summary.examCount}件の試験、学習履歴、中断履歴`
+                + `${summary.sessionCount}件を書き出しました。`
+            );
         } catch (exportError) {
             console.error('Failed to export mobile backup:', exportError);
             setError(exportError.message || 'データの書き出しに失敗しました。');

@@ -8,6 +8,8 @@ import { runGoogleDriveDesktopBackgroundSync } from '@/lib/sync/googleDriveDeskt
 const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || '';
 const GOOGLE_DESKTOP_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_DESKTOP_CLIENT_ID || '';
 const MINIMUM_SYNC_INTERVAL_MS = 15_000;
+const EDIT_SYNC_DELAY_MS = 45_000;
+const PERIODIC_SYNC_INTERVAL_MS = 15 * 60_000;
 
 export default function CloudSyncLifecycle() {
     useEffect(() => {
@@ -18,6 +20,7 @@ export default function CloudSyncLifecycle() {
 
         let disposed = false;
         let lastAttemptAt = 0;
+        let editSyncTimer = null;
 
         const requestSync = async () => {
             const now = Date.now();
@@ -38,14 +41,23 @@ export default function CloudSyncLifecycle() {
         const handleVisibilityChange = () => {
             if (document.visibilityState === 'visible') requestSync();
         };
+        const handleLocalChange = () => {
+            if (editSyncTimer) window.clearTimeout(editSyncTimer);
+            editSyncTimer = window.setTimeout(requestSync, EDIT_SYNC_DELAY_MS);
+        };
 
         requestSync();
+        const periodicTimer = window.setInterval(requestSync, PERIODIC_SYNC_INTERVAL_MS);
         document.addEventListener('visibilitychange', handleVisibilityChange);
         window.addEventListener('online', requestSync);
+        window.addEventListener('radexam-local-sync-change', handleLocalChange);
         return () => {
             disposed = true;
+            if (editSyncTimer) window.clearTimeout(editSyncTimer);
+            window.clearInterval(periodicTimer);
             document.removeEventListener('visibilitychange', handleVisibilityChange);
             window.removeEventListener('online', requestSync);
+            window.removeEventListener('radexam-local-sync-change', handleLocalChange);
         };
     }, []);
 

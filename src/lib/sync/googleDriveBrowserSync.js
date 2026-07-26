@@ -1,4 +1,5 @@
 import {
+    connectLocalSyncTracking,
     disconnectLocalSyncTracking,
     initializeLocalSyncTracking,
     synchronizeLocalData,
@@ -17,18 +18,31 @@ import { SYNC_PROVIDERS } from './syncProtocol.mjs';
 
 let activeSession = null;
 let activeSync = null;
+const publishProgress = detail => {
+    globalThis.window?.dispatchEvent(new CustomEvent('radexam-cloud-sync-progress', {
+        detail,
+    }));
+};
 
 const createSession = clientId => {
     if (activeSession?.clientId === clientId) return activeSession;
     const tokenManager = new GoogleDriveWebTokenManager({ clientId });
     const client = new GoogleDriveAppDataClient({
         getAccessToken: () => tokenManager.getAccessToken(),
+        onUploadProgress: progress => publishProgress({
+            phase: progress.progressPhase || (
+                String(progress.path || '').startsWith('snapshots/')
+                ? 'uploading-snapshot'
+                : 'uploading-changes'
+            ),
+            ...progress,
+        }),
     });
     activeSession = {
         clientId,
         tokenManager,
         client,
-        provider: new GoogleDriveSyncProvider({ client }),
+        provider: new GoogleDriveSyncProvider({ client, onProgress: publishProgress }),
     };
     return activeSession;
 };
@@ -46,16 +60,26 @@ export const getGoogleDriveSyncState = async () => {
         listPendingLocalSyncChanges(),
         listLocalSyncConflicts(),
     ]);
+    const connected = Boolean(
+        config.enabled
+        && config.provider === SYNC_PROVIDERS.GOOGLE_DRIVE
+    );
     return {
         config,
-        connected: Boolean(
-            config.enabled
-            && config.provider === SYNC_PROVIDERS.GOOGLE_DRIVE
-            && config.bootstrapCompleted
-        ),
+        connected,
+        initialSyncCompleted: Boolean(config.bootstrapCompleted && config.lastVerifiedAt),
         pendingCount: pendingChanges.length,
         conflictCount: conflicts.length,
         hasSessionToken: Boolean(activeSession?.tokenManager?.hasValidToken()),
+        dataStatus: !connected
+            ? 'not-connected'
+            : config.lastSyncError
+                ? 'error'
+                : pendingChanges.length > 0
+                    ? 'local-changes'
+                    : config.lastVerifiedAt
+                        ? 'verified'
+                        : 'not-verified',
     };
 };
 
@@ -90,16 +114,17 @@ export const connectGoogleDriveSync = async ({ clientId }) => {
         const accountId = user?.permissionId || user?.emailAddress;
         if (!accountId) throw new Error('Google Driveのアカウント情報を確認できませんでした。');
         const accountLabel = user?.emailAddress || user?.displayName || 'Google Drive';
+        const root = await session.provider.ensureActiveSyncSpace();
 
-        await initializeLocalSyncTracking({
+        await connectLocalSyncTracking({
             provider: SYNC_PROVIDERS.GOOGLE_DRIVE,
             accountId,
             accountLabel,
             deviceName: getDeviceName(),
+            cloudSyncId: root.activeSyncId,
         });
-        const result = await synchronizeLocalData(session.provider);
         return {
-            result,
+            result: { status: 'connected' },
             user,
             state: await getGoogleDriveSyncState(),
         };
@@ -121,6 +146,34 @@ export const runGoogleDriveSync = async ({
         if (String(accountId) !== String(state.config.accountId)) {
             throw new Error('接続済みとは別のGoogleアカウントです。正しいアカウントで再認証してください。');
         }
+        const root = await session.provider.ensureActiveSyncSpace();
+        if (
+            state.config.cloudSyncId
+            && state.config.cloudSyncId !== root.activeSyncId
+        ) {
+            const error = new Error(
+                'クラウド同期が別の端末でリセットされました。この端末を再接続してください。'
+            );
+            error.code = 'CLOUD_SYNC_RESET';
+            throw error;
+        }
+        if (!state.config.cloudSyncId) {
+            await connectLocalSyncTracking({
+                provider: SYNC_PROVIDERS.GOOGLE_DRIVE,
+                accountId,
+                cloudSyncId: root.activeSyncId,
+            });
+        }
+        if (!state.config.bootstrapCompleted) {
+            session.provider.reportProgress({ phase: 'preparing-local-data' });
+            await initializeLocalSyncTracking({
+                provider: SYNC_PROVIDERS.GOOGLE_DRIVE,
+                accountId,
+                accountLabel: user?.emailAddress || user?.displayName || 'Google Drive',
+                deviceName: getDeviceName(),
+                cloudSyncId: root.activeSyncId,
+            });
+        }
         const result = await synchronizeLocalData(session.provider);
         return {
             result,
@@ -128,6 +181,41 @@ export const runGoogleDriveSync = async ({
         };
     });
 };
+
+export const resetGoogleDriveSync = async ({
+    clientId,
+    hard = false,
+} = {}) => (
+    runExclusive(async () => {
+        const state = await getGoogleDriveSyncState();
+        if (!state.connected) throw new Error('先にGoogle Driveへ接続してください。');
+        const session = await authorizeSession(clientId, { prompt: '' });
+        const user = await session.client.getCurrentUser();
+        const accountId = user?.permissionId || user?.emailAddress;
+        if (String(accountId) !== String(state.config.accountId)) {
+            throw new Error('接続済みとは別のGoogleアカウントです。');
+        }
+        let deletedFiles = 0;
+        if (hard) {
+            ({ deletedFiles } = await session.provider.deleteAllCloudSyncData());
+            await session.provider.ensureActiveSyncSpace();
+        }
+        const root = await session.provider.rotateSyncSpace();
+        await disconnectLocalSyncTracking({ discardPending: true });
+        await connectLocalSyncTracking({
+            provider: SYNC_PROVIDERS.GOOGLE_DRIVE,
+            accountId,
+            accountLabel: user?.emailAddress || user?.displayName || 'Google Drive',
+            deviceName: getDeviceName(),
+            cloudSyncId: root.activeSyncId,
+        });
+        return {
+            deletedFiles,
+            root,
+            state: await getGoogleDriveSyncState(),
+        };
+    })
+);
 
 export const disconnectGoogleDriveSync = async ({ discardPending = false } = {}) => {
     if (activeSync) await activeSync.catch(() => {});

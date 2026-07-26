@@ -102,6 +102,50 @@ const syncDevice = device => runSyncCycle({
     },
 });
 
+test('syncs creation and deletion of a resumable session between devices', async () => {
+    const cloud = createInMemorySyncCloud();
+    const deviceA = await createDevice('device-a', new InMemorySyncProvider(cloud));
+    const deviceB = await createDevice('device-b', new InMemorySyncProvider(cloud));
+    const entityId = 'resumable-session:session-1';
+
+    await deviceA.journal.recordChanges([{
+        entityType: SYNC_ENTITY_TYPES.PREFERENCE,
+        entityId,
+        changedFields: ['id', 'examId', 'currentIndex', 'interrupted'],
+        payload: {
+            id: 'session-1',
+            examId: 'exam',
+            currentIndex: 12,
+            interrupted: true,
+        },
+    }]);
+    await syncDevice(deviceA);
+    await syncDevice(deviceB);
+
+    assert.deepEqual(
+        deviceB.dataStore.get(SYNC_ENTITY_TYPES.PREFERENCE, entityId),
+        {
+            id: 'session-1',
+            examId: 'exam',
+            currentIndex: 12,
+            interrupted: true,
+        }
+    );
+
+    await deviceA.journal.recordChanges([{
+        entityType: SYNC_ENTITY_TYPES.PREFERENCE,
+        entityId,
+        operation: 'delete',
+    }]);
+    await syncDevice(deviceA);
+    await syncDevice(deviceB);
+
+    assert.equal(
+        deviceB.dataStore.get(SYNC_ENTITY_TYPES.PREFERENCE, entityId),
+        undefined
+    );
+});
+
 test('syncs two devices and merges edits to different options', async () => {
     const cloud = createInMemorySyncCloud();
     const deviceA = await createDevice('device-a', new InMemorySyncProvider(cloud));
@@ -294,7 +338,32 @@ test('retries a conditional manifest update after another writer wins', async ()
     assert.deepEqual(await device.journal.listPendingChanges(), []);
 });
 
-test('splits more than 100 local changes into multiple manifest batches', async () => {
+test('uses one manifest read for a normal one-change sync', async () => {
+    const cloud = createInMemorySyncCloud();
+    const provider = new InMemorySyncProvider(cloud);
+    const originalReadManifest = provider.readManifest.bind(provider);
+    let manifestReads = 0;
+    provider.readManifest = async options => {
+        manifestReads += 1;
+        return originalReadManifest(options);
+    };
+    const device = await createDevice('device-a', provider);
+    await device.journal.recordChanges([{
+        entityType: SYNC_ENTITY_TYPES.PROGRESS,
+        entityId: 'one-change',
+        changedFields: ['status'],
+        payload: { status: 'correct' },
+    }]);
+
+    const result = await syncDevice(device);
+
+    assert.equal(result.pushedChanges, 1);
+    assert.equal(manifestReads, 1);
+    assert.ok(result.durationMs >= 0);
+    assert.equal((await device.journal.getConfig()).lastKnownCloudGeneration, 1);
+});
+
+test('packs more than 100 local changes into one bulk delta package', async () => {
     const cloud = createInMemorySyncCloud();
     const device = await createDevice('device-a', new InMemorySyncProvider(cloud));
     await device.journal.recordChanges(Array.from({ length: 205 }, (_, index) => ({
@@ -305,9 +374,180 @@ test('splits more than 100 local changes into multiple manifest batches', async 
     })));
 
     const result = await syncDevice(device);
+    const receivingDevice = await createDevice(
+        'device-b',
+        new InMemorySyncProvider(cloud)
+    );
+    const received = await syncDevice(receivingDevice);
 
-    assert.equal(result.pushedBatches, 3);
+    assert.equal(result.pushedBatches, 1);
     assert.equal(result.pushedChanges, 205);
-    assert.deepEqual(cloud.manifest.batches.map(batch => batch.changeCount), [100, 100, 5]);
+    assert.equal(result.pushedBulkPackages, 1);
+    assert.deepEqual(cloud.manifest.batches.map(batch => batch.changeCount), [205]);
+    assert.equal(cloud.manifest.batches[0].format, 'bulk-delta');
+    assert.equal(received.appliedChanges, 205);
     assert.deepEqual(await device.journal.listPendingChanges(), []);
+});
+
+test('uses a bulk delta package for many structural question edits below 100 changes', async () => {
+    const cloud = createInMemorySyncCloud();
+    const device = await createDevice('device-a', new InMemorySyncProvider(cloud));
+    await device.journal.recordChanges(Array.from({ length: 25 }, (_, index) => ({
+        entityType: SYNC_ENTITY_TYPES.QUESTION,
+        entityId: `exam::${index}`,
+        changedFields: ['question'],
+        payload: { question: `修正した問題文${index}` },
+    })));
+
+    const result = await syncDevice(device);
+
+    assert.equal(result.pushedChanges, 25);
+    assert.equal(result.pushedBulkPackages, 1);
+    assert.equal(cloud.manifest.batches[0].format, 'bulk-delta');
+});
+
+test('uses one snapshot for a large initial sync and leaves later edits as deltas', async () => {
+    const cloud = createInMemorySyncCloud();
+    const device = await createDevice('device-a', new InMemorySyncProvider(cloud));
+    await device.journal.recordChanges(Array.from({ length: 205 }, (_, index) => ({
+        entityType: SYNC_ENTITY_TYPES.PROGRESS,
+        entityId: String(2025000 + index),
+        changedFields: ['status'],
+        payload: { status: 'correct' },
+    })));
+    let createdSnapshots = 0;
+
+    const result = await runSyncCycle({
+        provider: device.provider,
+        journal: device.journal,
+        dataStore: device.dataStore,
+        getLocalBlob: () => null,
+        createLocalSnapshot: async () => {
+            createdSnapshots += 1;
+            await device.journal.recordChanges([{
+                entityType: SYNC_ENTITY_TYPES.PROGRESS,
+                entityId: 'edited-during-snapshot',
+                changedFields: ['status'],
+                payload: { status: 'review' },
+            }]);
+            return { blob: new Blob(['complete-local-data']) };
+        },
+    });
+
+    assert.equal(createdSnapshots, 1);
+    assert.equal(result.createdSnapshot, true);
+    assert.equal(result.coveredChanges, 205);
+    assert.equal(result.pushedChanges, 1);
+    assert.equal(result.sentChanges, 206);
+    assert.equal((await device.journal.getConfig()).lastSyncSentChanges, 206);
+    assert.equal((await device.journal.getConfig()).lastSyncSnapshotChanges, 205);
+    assert.equal(cloud.stats.snapshotUploads, 1);
+    assert.equal(cloud.manifest.latestSnapshot.cutoffSequence, 205);
+    assert.equal(cloud.manifest.batches.length, 1);
+    assert.deepEqual(await device.journal.listPendingChanges(), []);
+});
+
+test('restores the latest snapshot before applying newer change batches', async () => {
+    const cloud = createInMemorySyncCloud();
+    const source = await createDevice('device-a', new InMemorySyncProvider(cloud));
+    await source.journal.recordChanges(Array.from({ length: 101 }, (_, index) => ({
+        entityType: SYNC_ENTITY_TYPES.PROGRESS,
+        entityId: String(index),
+        changedFields: ['status'],
+        payload: { status: 'correct' },
+    })));
+    await runSyncCycle({
+        provider: source.provider,
+        journal: source.journal,
+        dataStore: source.dataStore,
+        getLocalBlob: () => null,
+        createLocalSnapshot: async () => ({ blob: new Blob(['snapshot-data']) }),
+    });
+    await source.journal.recordChanges([{
+        entityType: SYNC_ENTITY_TYPES.PROGRESS,
+        entityId: 'after-snapshot',
+        changedFields: ['status'],
+        payload: { status: 'review' },
+    }]);
+    await syncDevice(source);
+
+    const target = await createDevice('device-b', new InMemorySyncProvider(cloud));
+    let restoredText = '';
+    const result = await runSyncCycle({
+        provider: target.provider,
+        journal: target.journal,
+        dataStore: target.dataStore,
+        getLocalBlob: () => null,
+        restoreLocalSnapshot: async blob => {
+            restoredText = await blob.text();
+        },
+    });
+
+    assert.equal(result.restoredSnapshot, true);
+    assert.equal(restoredText, 'snapshot-data');
+    assert.equal(result.appliedChanges, 1);
+    assert.equal(
+        target.dataStore.get(SYNC_ENTITY_TYPES.PROGRESS, 'after-snapshot').status,
+        'review'
+    );
+});
+
+test('creates a recovery checkpoint after 100 successfully synced changes', async () => {
+    const cloud = createInMemorySyncCloud();
+    const device = await createDevice('device-a', new InMemorySyncProvider(cloud));
+    await device.journal.configure({
+        lastSnapshotAt: '2026-07-26T00:00:00.000Z',
+        changesSinceSnapshot: 99,
+    });
+    await device.journal.recordChanges([{
+        entityType: SYNC_ENTITY_TYPES.PROGRESS,
+        entityId: 'one-more-change',
+        changedFields: ['status'],
+        payload: { status: 'correct' },
+    }]);
+
+    const result = await runSyncCycle({
+        provider: device.provider,
+        journal: device.journal,
+        dataStore: device.dataStore,
+        getLocalBlob: () => null,
+        createLocalSnapshot: async () => ({ blob: new Blob(['recovery-checkpoint']) }),
+    });
+
+    assert.equal(result.pushedChanges, 1);
+    assert.equal(result.createdPeriodicSnapshot, true);
+    assert.equal(cloud.manifest.latestSnapshot.purpose, 'checkpoint');
+    assert.equal(cloud.manifest.latestSnapshot.generation, 1);
+    assert.equal((await device.journal.getConfig()).changesSinceSnapshot, 0);
+});
+
+test('does not block a one-change sync with an old weekly checkpoint', async () => {
+    const cloud = createInMemorySyncCloud();
+    const device = await createDevice('device-a', new InMemorySyncProvider(cloud));
+    await device.journal.configure({
+        lastSnapshotAt: '2025-01-01T00:00:00.000Z',
+        changesSinceSnapshot: 0,
+    });
+    await device.journal.recordChanges([{
+        entityType: SYNC_ENTITY_TYPES.PROGRESS,
+        entityId: 'small-change',
+        changedFields: ['status'],
+        payload: { status: 'correct' },
+    }]);
+    let snapshotCreations = 0;
+
+    const result = await runSyncCycle({
+        provider: device.provider,
+        journal: device.journal,
+        dataStore: device.dataStore,
+        getLocalBlob: () => null,
+        createLocalSnapshot: async () => {
+            snapshotCreations += 1;
+            return { blob: new Blob(['should-not-be-created']) };
+        },
+    });
+
+    assert.equal(result.pushedChanges, 1);
+    assert.equal(result.createdPeriodicSnapshot, false);
+    assert.equal(snapshotCreations, 0);
 });

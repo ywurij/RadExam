@@ -10,9 +10,11 @@ export const createInMemorySyncCloud = () => ({
     revision: 0,
     batches: new Map(),
     blobs: new Map(),
+    snapshots: new Map(),
     stats: {
         batchUploads: 0,
         blobUploads: 0,
+        snapshotUploads: 0,
         manifestCommits: 0,
     },
 });
@@ -47,9 +49,17 @@ export class InMemorySyncProvider {
         return { objectKey: `changes/${batch.batchId}.json` };
     }
 
+    async uploadBulkChangePackage(batch) {
+        if (!this.cloud.batches.has(batch.batchId)) {
+            this.cloud.batches.set(batch.batchId, cloneValue(batch));
+            this.cloud.stats.batchUploads += 1;
+        }
+        return { objectKey: `bulk-changes/${batch.batchId}.json` };
+    }
+
     async downloadChangeBatch(descriptor) {
         const batchId = String(descriptor.objectKey)
-            .replace(/^changes\//, '')
+            .replace(/^(?:changes|bulk-changes)\//, '')
             .replace(/\.json$/, '');
         const batch = this.cloud.batches.get(batchId);
         if (!batch) throw new Error(`変更バッチが見つかりません: ${descriptor.objectKey}`);
@@ -70,6 +80,22 @@ export class InMemorySyncProvider {
 
     async downloadBlob(contentHash) {
         const blob = this.cloud.blobs.get(String(contentHash));
+        return blob == null ? null : cloneValue(blob);
+    }
+
+    async uploadSnapshot(snapshotId, blob) {
+        if (!this.cloud.snapshots.has(String(snapshotId))) {
+            this.cloud.snapshots.set(String(snapshotId), cloneValue(blob));
+            this.cloud.stats.snapshotUploads += 1;
+        }
+        return { objectKey: `snapshots/${snapshotId}.radexam` };
+    }
+
+    async downloadSnapshot(descriptor) {
+        const snapshotId = String(descriptor.objectKey)
+            .replace(/^snapshots\//, '')
+            .replace(/\.radexam$/, '');
+        const blob = this.cloud.snapshots.get(snapshotId);
         return blob == null ? null : cloneValue(blob);
     }
 }

@@ -6,6 +6,12 @@ import styles from './ExamSelector.module.scss';
 import { useRouter } from 'next/navigation';
 import { limitResumableSessions } from '@/lib/sessionHistory';
 import { APP_FEATURES, isMobileTarget } from '@/lib/appTarget';
+import {
+    deleteLocalResumableSession,
+    getLocalResumableSessions,
+    migrateLegacyResumableSession,
+    replaceLocalResumableSessions,
+} from '@/lib/localDb';
 
 export default function ExamSelector() {
     const router = useRouter();
@@ -113,49 +119,10 @@ export default function ExamSelector() {
             }
             setExams(types);
 
-            const sessionsKey = 'radexam_sessions';
-            const oldSessionKey = 'radexam_session';
-            
-            let localSessions = [];
-
-            // 1. 旧セッションキーからの移行処理
-            if (typeof window !== 'undefined') {
-                const oldSession = localStorage.getItem(oldSessionKey);
-                if (oldSession) {
-                    try {
-                        const parsed = JSON.parse(oldSession);
-                        if (parsed) {
-                            if (!parsed.id) {
-                                parsed.id = parsed.timestamp ? `migrated-${parsed.timestamp}` : `migrated-${Date.now()}`;
-                            }
-                            if (!parsed.name) {
-                                parsed.name = `移行されたセッション`;
-                            }
-                            localSessions.push(parsed);
-                        }
-                    } catch (e) {
-                        console.error("Invalid old session data", e);
-                    }
-                    localStorage.removeItem(oldSessionKey);
-                    localStorage.setItem(sessionsKey, JSON.stringify(localSessions));
-                } else {
-                    const raw = localStorage.getItem(sessionsKey);
-                    if (raw) {
-                        try {
-                            localSessions = JSON.parse(raw);
-                            if (!Array.isArray(localSessions)) {
-                                localSessions = [];
-                            }
-                        } catch (e) {
-                            console.error("Invalid sessions data", e);
-                            localSessions = [];
-                        }
-                    }
-                }
-            }
-
-            const limitedSessions = limitResumableSessions(localSessions);
-            localStorage.setItem(sessionsKey, JSON.stringify(limitedSessions));
+            await migrateLegacyResumableSession();
+            const limitedSessions = await replaceLocalResumableSessions(
+                getLocalResumableSessions()
+            );
             setSessions(limitedSessions);
 
             // 前回設定のロード
@@ -193,6 +160,22 @@ export default function ExamSelector() {
         };
 
         init().finally(() => setIsLoadingExams(false));
+    }, []);
+
+    useEffect(() => {
+        const handleSessionsChanged = event => {
+            setSessions(limitResumableSessions(
+                event.detail?.sessions || getLocalResumableSessions()
+            ));
+        };
+        window.addEventListener(
+            'radexam-resumable-sessions-changed',
+            handleSessionsChanged
+        );
+        return () => window.removeEventListener(
+            'radexam-resumable-sessions-changed',
+            handleSessionsChanged
+        );
     }, []);
     const handleStart = () => {
         const params = new URLSearchParams();
@@ -242,10 +225,9 @@ export default function ExamSelector() {
             return;
         }
         
-        const sessionsKey = 'radexam_sessions';
         const updated = sessions.filter(s => s.id !== session.id);
         setSessions(updated);
-        localStorage.setItem(sessionsKey, JSON.stringify(updated));
+        await deleteLocalResumableSession(session.id);
     };
 
     const toggleGenre = (genre) => {
