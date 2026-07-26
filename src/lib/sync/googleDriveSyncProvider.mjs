@@ -62,10 +62,12 @@ const defaultSleep = milliseconds => new Promise(resolve => {
     setTimeout(resolve, milliseconds);
 });
 
+const defaultFetch = (...args) => globalThis.fetch(...args);
+
 export class GoogleDriveAppDataClient {
     constructor({
         getAccessToken,
-        fetchImpl = globalThis.fetch,
+        fetchImpl = defaultFetch,
         sleep = defaultSleep,
         maxRetries = 3,
     }) {
@@ -76,7 +78,9 @@ export class GoogleDriveAppDataClient {
             throw new Error('Google Drive接続にはfetch()が必要です。');
         }
         this.getAccessToken = getAccessToken;
-        this.fetch = fetchImpl;
+        // WebKitなどではwindow.fetchを別オブジェクトのメソッドとして呼ぶと
+        // Illegal invocationになるため、呼び出し時のthisを引き継がない。
+        this.fetch = (...args) => fetchImpl(...args);
         this.sleep = sleep;
         this.maxRetries = maxRetries;
     }

@@ -64,6 +64,18 @@ test('reads the currently authorized Google Drive account', async () => {
     assert.equal(requests[0].options.headers.Authorization, 'Bearer access-token');
 });
 
+test('calls an injected fetch function without binding the Drive client as this', async () => {
+    const client = new GoogleDriveAppDataClient({
+        getAccessToken: async () => 'access-token',
+        fetchImpl: function fetchWithoutReceiver() {
+            assert.equal(this, undefined);
+            return jsonResponse({ files: [] });
+        },
+    });
+
+    await client.listFiles();
+});
+
 test('creates an appData file through a resumable upload session', async () => {
     const requests = [];
     const client = new GoogleDriveAppDataClient({
