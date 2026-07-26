@@ -9,9 +9,16 @@ import {
     getGoogleDriveSyncState,
     runGoogleDriveSync,
 } from '@/lib/sync/googleDriveBrowserSync';
+import {
+    connectGoogleDriveDesktopSync,
+    disconnectGoogleDriveDesktopSync,
+    getGoogleDriveDesktopSyncState,
+    runGoogleDriveDesktopSync,
+} from '@/lib/sync/googleDriveDesktopSync';
 import styles from './sync.module.scss';
 
 const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || '';
+const GOOGLE_DESKTOP_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_DESKTOP_CLIENT_ID || '';
 
 const formatDateTime = value => {
     if (!value) return '未実行';
@@ -39,10 +46,13 @@ export default function CloudSyncPage() {
     const [busy, setBusy] = useState(false);
     const [message, setMessage] = useState('');
     const [error, setError] = useState('');
+    const clientId = isMobileTarget ? GOOGLE_CLIENT_ID : GOOGLE_DESKTOP_CLIENT_ID;
 
     const refreshState = useCallback(async () => {
-        setSyncState(await getGoogleDriveSyncState());
-    }, []);
+        setSyncState(isMobileTarget
+            ? await getGoogleDriveSyncState()
+            : await getGoogleDriveDesktopSyncState({ clientId }));
+    }, [clientId]);
 
     useEffect(() => {
         refreshState().catch(loadError => {
@@ -73,18 +83,22 @@ export default function CloudSyncPage() {
     };
 
     const handleConnect = async () => {
-        const response = await runAction(() => connectGoogleDriveSync({
-            clientId: GOOGLE_CLIENT_ID,
-        }));
+        const response = await runAction(() => (
+            isMobileTarget
+                ? connectGoogleDriveSync({ clientId })
+                : connectGoogleDriveDesktopSync({ clientId })
+        ));
         if (response) {
             setMessage(`Google Driveへ接続しました。${describeSyncResult(response.result)}`);
         }
     };
 
     const handleSync = async () => {
-        const response = await runAction(() => runGoogleDriveSync({
-            clientId: GOOGLE_CLIENT_ID,
-        }));
+        const response = await runAction(() => (
+            isMobileTarget
+                ? runGoogleDriveSync({ clientId })
+                : runGoogleDriveDesktopSync({ clientId })
+        ));
         if (response) setMessage(describeSyncResult(response.result));
     };
 
@@ -97,16 +111,21 @@ export default function CloudSyncPage() {
         )) {
             return;
         }
-        const response = await runAction(() => disconnectGoogleDriveSync({
-            discardPending,
-        }));
+        const response = await runAction(() => (
+            isMobileTarget
+                ? disconnectGoogleDriveSync({ discardPending })
+                : disconnectGoogleDriveDesktopSync({
+                    clientId,
+                    discardPending,
+                })
+        ));
         if (response) setMessage('Google Driveとの接続を解除しました。端末内のデータはそのままです。');
     };
 
     const connected = Boolean(syncState?.connected);
-    const mobileUnavailable = !isMobileTarget;
-    const configurationMissing = !GOOGLE_CLIENT_ID;
-    const unavailable = mobileUnavailable || configurationMissing;
+    const desktopBridgeUnavailable = !isMobileTarget && syncState && !syncState.bridgeAvailable;
+    const configurationMissing = !clientId;
+    const unavailable = desktopBridgeUnavailable || configurationMissing;
 
     return (
         <main className={styles.container}>
@@ -136,22 +155,27 @@ export default function CloudSyncPage() {
                     </span>
                 </div>
 
-                {mobileUnavailable && (
+                {desktopBridgeUnavailable && (
                     <p className={styles.notice}>
-                        Mac/PC版のGoogle認証は準備中です。現在はモバイル／Web版から接続できます。
+                        Google Driveへの接続は、ブラウザ版ではなくインストールしたMac/PC版アプリから実行してください。
                     </p>
                 )}
-                {!mobileUnavailable && configurationMissing && (
+                {!desktopBridgeUnavailable && configurationMissing && (
                     <p className={styles.notice}>
-                        このビルドにはGoogle OAuthクライアントIDが設定されていません。
+                        このビルドには{isMobileTarget ? 'Web版' : 'デスクトップ版'}のGoogle OAuthクライアントIDが設定されていません。
                     </p>
                 )}
 
                 {connected && (
                     <>
-                        {!syncState.hasSessionToken && !mobileUnavailable && (
+                        {!syncState.hasSessionToken && isMobileTarget && (
                             <p className={styles.reauthNotice}>
                                 安全のため認証情報は保存していません。同期するときにGoogleアカウントを再認証してください。
+                            </p>
+                        )}
+                        {!syncState.encryptionAvailable && !isMobileTarget && (
+                            <p className={styles.reauthNotice}>
+                                この環境ではOSの暗号化保存を利用できないため、アプリ再起動後に再認証が必要です。
                             </p>
                         )}
                         <dl className={styles.details}>

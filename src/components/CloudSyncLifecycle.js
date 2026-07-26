@@ -3,13 +3,18 @@
 import { useEffect } from 'react';
 import { isMobileTarget } from '@/lib/appTarget';
 import { runGoogleDriveBackgroundSync } from '@/lib/sync/googleDriveBrowserSync';
+import { runGoogleDriveDesktopBackgroundSync } from '@/lib/sync/googleDriveDesktopSync';
 
 const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || '';
+const GOOGLE_DESKTOP_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_DESKTOP_CLIENT_ID || '';
 const MINIMUM_SYNC_INTERVAL_MS = 15_000;
 
 export default function CloudSyncLifecycle() {
     useEffect(() => {
-        if (!isMobileTarget || !GOOGLE_CLIENT_ID) return undefined;
+        const clientId = isMobileTarget
+            ? GOOGLE_CLIENT_ID
+            : GOOGLE_DESKTOP_CLIENT_ID;
+        if (!clientId) return undefined;
 
         let disposed = false;
         let lastAttemptAt = 0;
@@ -19,9 +24,9 @@ export default function CloudSyncLifecycle() {
             if (disposed || now - lastAttemptAt < MINIMUM_SYNC_INTERVAL_MS) return;
             lastAttemptAt = now;
             try {
-                const response = await runGoogleDriveBackgroundSync({
-                    clientId: GOOGLE_CLIENT_ID,
-                });
+                const response = isMobileTarget
+                    ? await runGoogleDriveBackgroundSync({ clientId })
+                    : await runGoogleDriveDesktopBackgroundSync({ clientId });
                 if (response.status === 'completed') {
                     window.dispatchEvent(new CustomEvent('radexam-cloud-sync-completed'));
                 }
