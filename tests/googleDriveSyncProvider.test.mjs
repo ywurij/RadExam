@@ -160,6 +160,47 @@ test('retries temporary Drive errors with exponential backoff', async () => {
     assert.deepEqual(delays, [1000, 2000]);
 });
 
+test('retries browser network failures before reporting a Drive connection error', async () => {
+    let attempts = 0;
+    const delays = [];
+    const client = new GoogleDriveAppDataClient({
+        getAccessToken: async () => 'access-token',
+        fetchImpl: async () => {
+            attempts += 1;
+            if (attempts < 3) throw new TypeError('Failed to fetch');
+            return jsonResponse({ files: [] });
+        },
+        sleep: async delay => delays.push(delay),
+    });
+
+    const files = await client.listFiles();
+
+    assert.deepEqual(files, []);
+    assert.equal(attempts, 3);
+    assert.deepEqual(delays, [1000, 2000]);
+});
+
+test('reports a persistent browser network failure as retryable', async () => {
+    const client = new GoogleDriveAppDataClient({
+        getAccessToken: async () => 'access-token',
+        fetchImpl: async () => {
+            throw new TypeError('Failed to fetch');
+        },
+        sleep: async () => {},
+        maxRetries: 1,
+    });
+
+    await assert.rejects(
+        () => client.listFiles(),
+        error => (
+            error instanceof GoogleDriveSyncError
+            && error.retryable
+            && error.reason === 'network-error'
+            && /ネットワーク接続/.test(error.message)
+        )
+    );
+});
+
 class FakeDriveClient {
     constructor() {
         this.files = new Map();

@@ -91,13 +91,30 @@ export class GoogleDriveAppDataClient {
             if (!accessToken) throw new GoogleDriveSyncError('Google Driveの再認証が必要です。', {
                 requiresReauth: true,
             });
-            const response = await this.fetch(url, {
-                ...options,
-                headers: {
-                    Authorization: `Bearer ${accessToken}`,
-                    ...(options.headers || {}),
-                },
-            });
+            let response;
+            try {
+                response = await this.fetch(url, {
+                    ...options,
+                    headers: {
+                        Authorization: `Bearer ${accessToken}`,
+                        ...(options.headers || {}),
+                    },
+                });
+            } catch (cause) {
+                if (attempt < this.maxRetries) {
+                    await this.sleep(Math.min(1000 * (2 ** attempt), 8000));
+                    continue;
+                }
+                const error = new GoogleDriveSyncError(
+                    'Google Driveと通信できませんでした。ネットワーク接続を確認して再試行してください。',
+                    {
+                        reason: 'network-error',
+                        retryable: true,
+                    }
+                );
+                error.cause = cause;
+                throw error;
+            }
             if (response.ok) return response;
             const error = await driveErrorFromResponse(response);
             if (!error.retryable || attempt === this.maxRetries) throw error;
