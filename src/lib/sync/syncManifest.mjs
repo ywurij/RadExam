@@ -3,6 +3,14 @@ import { SYNC_SCHEMA_VERSION } from './syncProtocol.mjs';
 export const SYNC_MANIFEST_VERSION = 1;
 export const MAX_CHANGES_PER_BATCH = 100;
 
+export class SyncManifestConflictError extends Error {
+    constructor(message = 'manifestが別端末で更新されました。') {
+        super(message);
+        this.name = 'SyncManifestConflictError';
+        this.code = 'SYNC_MANIFEST_CONFLICT';
+    }
+}
+
 const cloneValue = value => {
     if (typeof structuredClone === 'function') return structuredClone(value);
     return JSON.parse(JSON.stringify(value));

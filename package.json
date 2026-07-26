@@ -15,7 +15,7 @@
     "start:mobile": "node scripts/run-next-target.mjs mobile start",
     "lint": "eslint",
     "test": "node --test tests/*.test.mjs",
-    "test:sync": "node --test tests/syncProtocol.test.mjs tests/syncEngine.test.mjs",
+    "test:sync": "node --test tests/syncProtocol.test.mjs tests/syncEngine.test.mjs tests/googleDriveSyncProvider.test.mjs tests/googleIdentityWebAuth.test.mjs",
     "app:build": "npm run build",
     "app:dev": "electron .",
     "app:pack": "npm run build:desktop && electron-builder"

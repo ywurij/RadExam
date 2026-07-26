@@ -58,9 +58,13 @@ const pullRemoteBatches = async ({
         conflicts: 0,
     };
     let config = await journal.getConfig();
-    const batches = manifest.batches.filter(
-        batch => batch.generation > (Number(config.lastPulledGeneration) || 0)
-    );
+    const batches = [];
+    for (const batch of manifest.batches) {
+        const alreadyApplied = typeof journal.hasAppliedBatch === 'function'
+            ? await journal.hasAppliedBatch(batch.batchId)
+            : batch.generation <= (Number(config.lastPulledGeneration) || 0);
+        if (!alreadyApplied) batches.push(batch);
+    }
 
     for (const descriptor of batches) {
         const batch = validateSyncChangeBatch(
@@ -86,6 +90,9 @@ const pullRemoteBatches = async ({
             lastPulledGeneration: descriptor.generation,
             lastPulledAt: new Date().toISOString(),
         });
+        if (typeof journal.markBatchApplied === 'function') {
+            await journal.markBatchApplied(descriptor);
+        }
         summary.pulledBatches += 1;
     }
     return summary;

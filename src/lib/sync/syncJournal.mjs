@@ -9,6 +9,7 @@ const TOMBSTONE_PREFIX = 'tombstone:';
 const APPLIED_PREFIX = 'applied:';
 const CONFLICT_PREFIX = 'conflict:';
 const SENT_PREFIX = 'sent:';
+const APPLIED_BATCH_PREFIX = 'applied-batch:';
 
 const padSequence = sequence => String(sequence).padStart(16, '0');
 const changeKey = change => `${CHANGE_PREFIX}${padSequence(change.sequence)}:${change.changeId}`;
@@ -207,6 +208,28 @@ export class SyncJournal {
             left.committedGeneration - right.committedGeneration
             || left.sequence - right.sequence
         ));
+    }
+
+    async hasAppliedBatch(batchId) {
+        if (!batchId) return false;
+        return Boolean(await this.storage.getItem(`${APPLIED_BATCH_PREFIX}${batchId}`));
+    }
+
+    async markBatchApplied(batch, appliedAt = this.now()) {
+        if (!batch?.batchId) throw new Error('適用済みバッチにはbatchIdが必要です。');
+        const key = `${APPLIED_BATCH_PREFIX}${batch.batchId}`;
+        const existing = await this.storage.getItem(key);
+        if (existing) return existing;
+        const record = {
+            batchId: String(batch.batchId),
+            deviceId: String(batch.deviceId || ''),
+            fromSequence: Number(batch.fromSequence) || 0,
+            toSequence: Number(batch.toSequence) || 0,
+            generation: Number(batch.generation) || 0,
+            appliedAt,
+        };
+        await this.storage.setItem(key, record);
+        return record;
     }
 
     async hasAppliedChange(changeId) {

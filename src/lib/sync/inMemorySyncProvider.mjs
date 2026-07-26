@@ -1,15 +1,9 @@
+import { SyncManifestConflictError } from './syncManifest.mjs';
+
 const cloneValue = value => {
     if (typeof structuredClone === 'function') return structuredClone(value);
     return JSON.parse(JSON.stringify(value));
 };
-
-export class SyncManifestConflictError extends Error {
-    constructor(message = 'manifestが別端末で更新されました。') {
-        super(message);
-        this.name = 'SyncManifestConflictError';
-        this.code = 'SYNC_MANIFEST_CONFLICT';
-    }
-}
 
 export const createInMemorySyncCloud = () => ({
     manifest: null,
