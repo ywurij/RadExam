@@ -2,6 +2,7 @@ import {
     connectLocalSyncTracking,
     disconnectLocalSyncTracking,
     initializeLocalSyncTracking,
+    resolveLocalDataSyncConflict,
     synchronizeLocalData,
 } from '@/lib/localDb';
 import {
@@ -70,11 +71,14 @@ export const getGoogleDriveSyncState = async () => {
         initialSyncCompleted: Boolean(config.bootstrapCompleted && config.lastVerifiedAt),
         pendingCount: pendingChanges.length,
         conflictCount: conflicts.length,
+        conflicts,
         hasSessionToken: Boolean(activeSession?.tokenManager?.hasValidToken()),
         dataStatus: !connected
             ? 'not-connected'
             : config.lastSyncError
                 ? 'error'
+                : conflicts.length > 0
+                    ? 'conflict'
                 : pendingChanges.length > 0
                     ? 'local-changes'
                     : config.lastVerifiedAt
@@ -181,6 +185,38 @@ export const runGoogleDriveSync = async ({
         };
     });
 };
+
+export const resolveGoogleDriveSyncConflict = async ({
+    clientId,
+    conflictId,
+    resolution,
+} = {}) => (
+    runExclusive(async () => {
+        const state = await getGoogleDriveSyncState();
+        if (!state.connected) throw new Error('先にGoogle Driveへ接続してください。');
+        const session = await authorizeSession(clientId, { prompt: '' });
+        const user = await session.client.getCurrentUser();
+        const accountId = user?.permissionId || user?.emailAddress;
+        if (String(accountId) !== String(state.config.accountId)) {
+            throw new Error('接続済みとは別のGoogleアカウントです。');
+        }
+        const root = await session.provider.ensureActiveSyncSpace();
+        if (state.config.cloudSyncId && state.config.cloudSyncId !== root.activeSyncId) {
+            throw new Error('クラウド同期が別の端末でリセットされました。この端末を再接続してください。');
+        }
+        const resolved = await resolveLocalDataSyncConflict({
+            conflictId,
+            resolution,
+            resolveBlob: ref => session.provider.downloadBlob(ref.contentHash),
+        });
+        const result = await synchronizeLocalData(session.provider);
+        return {
+            resolved,
+            result,
+            state: await getGoogleDriveSyncState(),
+        };
+    })
+);
 
 export const resetGoogleDriveSync = async ({
     clientId,

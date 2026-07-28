@@ -238,6 +238,28 @@ export class SyncJournal {
         return removals.length;
     }
 
+    async discardChanges(changeIds) {
+        const targets = new Set((changeIds || []).map(String));
+        if (targets.size === 0) return 0;
+        const removals = [];
+        await this.storage.iterate((value, key) => {
+            const stringKey = String(key);
+            if (
+                stringKey.startsWith(CHANGE_PREFIX)
+                && targets.has(String(value?.change?.changeId))
+            ) {
+                removals.push(key);
+            } else if (
+                stringKey.startsWith(TOMBSTONE_PREFIX)
+                && targets.has(String(value?.changeId))
+            ) {
+                removals.push(key);
+            }
+        });
+        await Promise.all(removals.map(key => this.storage.removeItem(key)));
+        return removals.length;
+    }
+
     async listSentChangesAfterGeneration(generation = 0) {
         const minimumGeneration = Number(generation) || 0;
         const changes = [];

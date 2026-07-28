@@ -31,6 +31,7 @@ import {
     recordLocalSyncChanges,
 } from '@/lib/sync/localSyncJournal';
 import { processIncomingSyncChange } from '@/lib/sync/syncReceiver.mjs';
+import { resolveStoredSyncConflict } from '@/lib/sync/syncConflictResolution.mjs';
 import { runSyncCycle } from '@/lib/sync/syncEngine.mjs';
 
 // --- インスタンスの設定 ---
@@ -874,6 +875,113 @@ const localSyncDataStore = {
         }
     },
 };
+
+const buildLocalConflictResolutionChange = async (conflict, { baseVersion }) => {
+    const { entityType, entityId } = conflict;
+    if (entityType === SYNC_ENTITY_TYPES.EXAM) {
+        const exam = await examsStore.getItem(entityId);
+        return exam
+            ? buildUpsertSyncChangeInput({
+                entityType,
+                entityId,
+                nextValue: exam,
+                fields: ['name', 'years', 'genres'],
+                baseVersion,
+            })
+            : buildDeleteSyncChangeInput({ entityType, entityId, baseVersion });
+    }
+    if (entityType === SYNC_ENTITY_TYPES.QUESTION) {
+        const { examId, questionId } = parseQuestionEntityId(entityId);
+        const exam = await examsStore.getItem(examId);
+        const question = (exam?.questions || []).find(
+            item => String(item.id) === String(questionId)
+        );
+        return question
+            ? buildQuestionSyncChangeInput({
+                examId,
+                nextQuestion: question,
+                baseVersion,
+            })
+            : buildDeleteSyncChangeInput({ entityType, entityId, baseVersion });
+    }
+    if (entityType === SYNC_ENTITY_TYPES.PROGRESS) {
+        const progress = await progressStore.getItem(entityId);
+        return progress
+            ? buildUpsertSyncChangeInput({
+                entityType,
+                entityId,
+                nextValue: progress,
+                fields: Object.keys(progress).filter(field => field !== 'updatedAt'),
+                baseVersion,
+            })
+            : buildDeleteSyncChangeInput({ entityType, entityId, baseVersion });
+    }
+    if (entityType === SYNC_ENTITY_TYPES.IMAGE) {
+        const blob = await imageStore.getItem(entityId);
+        if (!blob) return buildDeleteSyncChangeInput({ entityType, entityId, baseVersion });
+        const contentHash = await calculateBlobHash(blob);
+        return buildUpsertSyncChangeInput({
+            entityType,
+            entityId,
+            nextValue: { localKey: entityId, contentHash },
+            fields: ['localKey', 'contentHash'],
+            baseVersion,
+            blobRefs: [{ kind: entityType, localKey: entityId, contentHash }],
+        });
+    }
+    if (entityType === SYNC_ENTITY_TYPES.PDF) {
+        const value = await pdfStore.getItem(entityId);
+        if (!value) return buildDeleteSyncChangeInput({ entityType, entityId, baseVersion });
+        const contentHash = value.contentHash || await calculateBlobHash(value.blob);
+        const metadata = Object.fromEntries(Object.entries({
+            examId: value.examId,
+            year: value.year,
+            name: value.name,
+            type: value.type,
+            size: value.size,
+            contentHash,
+        }).filter(([, item]) => item !== undefined));
+        return buildUpsertSyncChangeInput({
+            entityType,
+            entityId,
+            nextValue: metadata,
+            fields: Object.keys(metadata),
+            baseVersion,
+            blobRefs: [{ kind: entityType, localKey: entityId, contentHash }],
+        });
+    }
+    if (entityType === SYNC_ENTITY_TYPES.PREFERENCE) {
+        const sessionId = resumableSessionIdFromEntity(entityId);
+        const session = getLocalResumableSessions().find(
+            item => String(item.id) === String(sessionId)
+        );
+        return session
+            ? buildUpsertSyncChangeInput({
+                entityType,
+                entityId,
+                nextValue: session,
+                fields: Object.keys(session),
+                baseVersion,
+            })
+            : buildDeleteSyncChangeInput({ entityType, entityId, baseVersion });
+    }
+    throw new Error(`競合解決に未対応のデータです: ${entityType}`);
+};
+
+export const resolveLocalDataSyncConflict = async ({
+    conflictId,
+    resolution,
+    resolveBlob,
+}) => (
+    resolveStoredSyncConflict({
+        conflictId,
+        resolution,
+        journal: localSyncJournal,
+        dataStore: localSyncDataStore,
+        buildLocalResolutionChange: buildLocalConflictResolutionChange,
+        resolveBlob,
+    })
+);
 
 /**
  * クラウドから受信した1変更を、重複・競合・ファイル検証を行ってから反映する。

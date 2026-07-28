@@ -20,6 +20,10 @@ import {
 } from '../src/lib/sync/syncConflict.mjs';
 import { SyncJournal } from '../src/lib/sync/syncJournal.mjs';
 import { processIncomingSyncChange } from '../src/lib/sync/syncReceiver.mjs';
+import {
+    resolveStoredSyncConflict,
+    SYNC_CONFLICT_RESOLUTIONS,
+} from '../src/lib/sync/syncConflictResolution.mjs';
 
 class MemoryStorage {
     constructor() {
@@ -496,6 +500,137 @@ test('holds delete versus edit as a conflict and stores its resolution', async (
     assert.equal(resolved.resolution, 'keep-local');
     assert.deepEqual(await journal.listConflicts(), []);
     assert.equal((await journal.listConflicts({ status: 'resolved' })).length, 1);
+});
+
+test('cloud conflict resolution applies remote fields and republishes non-conflicting local fields', async () => {
+    const journal = new SyncJournal(new MemoryStorage(), {
+        uuid: (() => {
+            let index = 0;
+            return () => `local-${++index}`;
+        })(),
+        now: () => '2026-07-27T00:00:00.000Z',
+    });
+    await journal.configure({
+        enabled: true,
+        deviceId: 'local-device',
+        provider: 'google-drive',
+        accountId: 'account-1',
+        lastPulledGeneration: 4,
+    });
+    const [localChange] = await journal.recordChanges([{
+        entityType: SYNC_ENTITY_TYPES.QUESTION,
+        entityId: 'exam::2025001',
+        changedFields: ['question', 'explanation'],
+        payload: {
+            question: 'この端末の問題文',
+            explanation: 'この端末の解説',
+        },
+    }]);
+    const remoteChange = createSyncChange({
+        changeId: 'remote-change',
+        deviceId: 'remote-device',
+        sequence: 1,
+        entityType: SYNC_ENTITY_TYPES.QUESTION,
+        entityId: 'exam::2025001',
+        changedFields: ['question'],
+        payload: { question: 'クラウドの問題文' },
+    });
+    const conflict = detectSyncConflict({
+        remoteChange,
+        pendingLocalChanges: [localChange],
+    });
+    await journal.recordConflict(conflict);
+    let current = {
+        question: 'この端末の問題文',
+        explanation: 'この端末の解説',
+    };
+
+    const result = await resolveStoredSyncConflict({
+        conflictId: conflict.conflictId,
+        resolution: SYNC_CONFLICT_RESOLUTIONS.KEEP_CLOUD,
+        journal,
+        dataStore: {
+            async applyChange(change) {
+                current = applySyncFieldDelta(current, change);
+            },
+        },
+        buildLocalResolutionChange: async (_stored, { baseVersion }) => ({
+            entityType: SYNC_ENTITY_TYPES.QUESTION,
+            entityId: 'exam::2025001',
+            changedFields: ['question', 'explanation'],
+            payload: current,
+            baseVersion,
+        }),
+    });
+
+    assert.equal(current.question, 'クラウドの問題文');
+    assert.equal(current.explanation, 'この端末の解説');
+    assert.equal(result.recordedChanges.length, 1);
+    assert.equal(result.recordedChanges[0].baseVersion, 'generation:4');
+    assert.equal((await journal.listPendingChanges()).length, 1);
+    assert.equal(await journal.hasAppliedChange('remote-change'), true);
+    assert.equal((await journal.listConflicts()).length, 0);
+});
+
+test('local conflict resolution keeps local data and replaces the stale pending change', async () => {
+    const journal = new SyncJournal(new MemoryStorage(), {
+        uuid: (() => {
+            let index = 0;
+            return () => `local-${++index}`;
+        })(),
+    });
+    await journal.configure({
+        enabled: true,
+        deviceId: 'local-device',
+        provider: 'google-drive',
+        accountId: 'account-1',
+        lastPulledGeneration: 8,
+    });
+    const [staleChange] = await journal.recordChanges([{
+        entityType: SYNC_ENTITY_TYPES.PROGRESS,
+        entityId: 'exam_2025001',
+        changedFields: ['status'],
+        payload: { status: 'correct' },
+    }]);
+    const remoteChange = createSyncChange({
+        changeId: 'remote-change',
+        deviceId: 'remote-device',
+        sequence: 1,
+        entityType: SYNC_ENTITY_TYPES.PROGRESS,
+        entityId: 'exam_2025001',
+        changedFields: ['status'],
+        payload: { status: 'incorrect' },
+    });
+    const conflict = detectSyncConflict({
+        remoteChange,
+        pendingLocalChanges: [staleChange],
+    });
+    await journal.recordConflict(conflict);
+    let applyCount = 0;
+
+    const result = await resolveStoredSyncConflict({
+        conflictId: conflict.conflictId,
+        resolution: SYNC_CONFLICT_RESOLUTIONS.KEEP_LOCAL,
+        journal,
+        dataStore: {
+            async applyChange() {
+                applyCount += 1;
+            },
+        },
+        buildLocalResolutionChange: async (_stored, { baseVersion }) => ({
+            entityType: SYNC_ENTITY_TYPES.PROGRESS,
+            entityId: 'exam_2025001',
+            changedFields: ['status'],
+            payload: { status: 'correct' },
+            baseVersion,
+        }),
+    });
+
+    assert.equal(applyCount, 0);
+    assert.equal(result.recordedChanges.length, 1);
+    assert.notEqual(result.recordedChanges[0].changeId, staleChange.changeId);
+    assert.equal(result.recordedChanges[0].baseVersion, 'generation:8');
+    assert.equal((await journal.listPendingChanges()).length, 1);
 });
 
 const buildIncomingChange = overrides => createSyncChange({

@@ -2,6 +2,7 @@ import {
     connectLocalSyncTracking,
     disconnectLocalSyncTracking,
     initializeLocalSyncTracking,
+    resolveLocalDataSyncConflict,
     synchronizeLocalData,
 } from '@/lib/localDb';
 import {
@@ -81,6 +82,7 @@ export const getGoogleDriveDesktopSyncState = async ({ clientId } = {}) => {
         initialSyncCompleted: Boolean(config.bootstrapCompleted && config.lastVerifiedAt),
         pendingCount: pendingChanges.length,
         conflictCount: conflicts.length,
+        conflicts,
         hasSessionToken: Boolean(credentialStatus?.hasCredentials),
         bridgeAvailable: Boolean(bridge),
         encryptionAvailable: credentialStatus?.encryptionAvailable !== false,
@@ -88,6 +90,8 @@ export const getGoogleDriveDesktopSyncState = async ({ clientId } = {}) => {
             ? 'not-connected'
             : config.lastSyncError
                 ? 'error'
+                : conflicts.length > 0
+                    ? 'conflict'
                 : pendingChanges.length > 0
                     ? 'local-changes'
                     : config.lastVerifiedAt
@@ -173,6 +177,39 @@ export const runGoogleDriveDesktopSync = async ({
         }
         const result = await synchronizeLocalData(session.provider);
         return {
+            result,
+            state: await getGoogleDriveDesktopSyncState({ clientId }),
+        };
+    })
+);
+
+export const resolveGoogleDriveDesktopSyncConflict = async ({
+    clientId,
+    conflictId,
+    resolution,
+} = {}) => (
+    runExclusive(async () => {
+        const state = await getGoogleDriveDesktopSyncState({ clientId });
+        if (!state.connected) throw new Error('先にGoogle Driveへ接続してください。');
+        const session = createSession(clientId);
+        if (!state.hasSessionToken) await session.bridge.authorize(clientId);
+        const user = await session.client.getCurrentUser();
+        const accountId = user?.permissionId || user?.emailAddress;
+        if (String(accountId) !== String(state.config.accountId)) {
+            throw new Error('接続済みとは別のGoogleアカウントです。');
+        }
+        const root = await session.provider.ensureActiveSyncSpace();
+        if (state.config.cloudSyncId && state.config.cloudSyncId !== root.activeSyncId) {
+            throw new Error('クラウド同期が別の端末でリセットされました。この端末を再接続してください。');
+        }
+        const resolved = await resolveLocalDataSyncConflict({
+            conflictId,
+            resolution,
+            resolveBlob: ref => session.provider.downloadBlob(ref.contentHash),
+        });
+        const result = await synchronizeLocalData(session.provider);
+        return {
+            resolved,
             result,
             state: await getGoogleDriveDesktopSyncState({ clientId }),
         };

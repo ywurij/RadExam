@@ -13,6 +13,7 @@ import {
     disconnectGoogleDriveSync,
     getGoogleDriveSyncState,
     resetGoogleDriveSync,
+    resolveGoogleDriveSyncConflict,
     runGoogleDriveSync,
 } from '@/lib/sync/googleDriveBrowserSync';
 import {
@@ -20,6 +21,7 @@ import {
     disconnectGoogleDriveDesktopSync,
     getGoogleDriveDesktopSyncState,
     resetGoogleDriveDesktopSync,
+    resolveGoogleDriveDesktopSyncConflict,
     runGoogleDriveDesktopSync,
 } from '@/lib/sync/googleDriveDesktopSync';
 import styles from './sync.module.scss';
@@ -56,6 +58,7 @@ const describeDataStatus = state => {
     if (!state) return '確認中';
     if (state.dataStatus === 'verified') return '前回確認時点でクラウドと一致';
     if (state.dataStatus === 'local-changes') return `この端末に未送信が${state.pendingCount}件`;
+    if (state.dataStatus === 'conflict') return `確認が必要な競合が${state.conflictCount}件`;
     if (state.dataStatus === 'error') return '前回の確認に失敗';
     return 'まだクラウドとの差を確認していません';
 };
@@ -95,6 +98,43 @@ const describeSyncResult = result => {
         `送信 ${sentChanges}件${result.createdSnapshot ? '（初回全体データ）' : ''}`,
         `競合 ${result.conflicts || 0}件`,
     ].join('・');
+};
+
+const ENTITY_LABELS = {
+    exam: '試験',
+    question: '問題',
+    progress: '学習進捗',
+    image: '画像',
+    pdf: 'PDF',
+    preference: '中断・再開履歴',
+};
+const FIELD_LABELS = {
+    question: '問題文',
+    answer: '正答',
+    explanation: '解説',
+    genre: 'ジャンル',
+    status: '正誤',
+    isLiked: 'お気に入り',
+    currentIndex: '再開位置',
+    '*': '削除と編集',
+};
+const readChangeField = (change, path) => (
+    String(path).split('.').reduce((value, part) => value?.[part], change?.payload)
+);
+const formatConflictValue = value => {
+    if (value === undefined) return '値を削除';
+    if (value === null) return 'なし';
+    const text = typeof value === 'string' ? value : JSON.stringify(value);
+    return text.length > 240 ? `${text.slice(0, 240)}…` : text;
+};
+const describeConflictChange = change => {
+    if (change?.operation === 'delete') return [{ field: 'データ全体', value: '削除' }];
+    return (change?.changedFields || []).map(field => ({
+        field: FIELD_LABELS[field] || field.replace(/^options\./, '選択肢 '),
+        value: (change?.unsetFields || []).includes(field)
+            ? '値を削除'
+            : formatConflictValue(readChangeField(change, field)),
+    }));
 };
 
 export default function CloudSyncPage() {
@@ -172,6 +212,34 @@ export default function CloudSyncPage() {
                 : runGoogleDriveDesktopSync({ clientId })
         ), syncState?.initialSyncCompleted ? 'syncing' : 'initial-sync');
         if (response) setMessage(describeSyncResult(response.result));
+    };
+
+    const handleResolveConflict = async (conflict, resolution) => {
+        const choiceLabel = resolution === 'keep-local'
+            ? 'この端末の内容'
+            : 'クラウドの内容';
+        if (!window.confirm(
+            `${choiceLabel}を採用します。\n`
+            + '採用しなかった側の競合部分は元に戻せません。続けますか？'
+        )) {
+            return;
+        }
+        const response = await runAction(() => (
+            isMobileTarget
+                ? resolveGoogleDriveSyncConflict({
+                    clientId,
+                    conflictId: conflict.conflictId,
+                    resolution,
+                })
+                : resolveGoogleDriveDesktopSyncConflict({
+                    clientId,
+                    conflictId: conflict.conflictId,
+                    resolution,
+                })
+        ), 'resolving-conflict');
+        if (response) {
+            setMessage(`${choiceLabel}を採用し、解決結果を同期しました。`);
+        }
     };
 
     const saveEmergencyBackup = async (
@@ -482,6 +550,80 @@ export default function CloudSyncPage() {
                     </div>
                 )}
             </section>
+
+            {(syncState?.conflicts || []).length > 0 && (
+                <section className={styles.conflictSection}>
+                    <div className={styles.conflictHeader}>
+                        <div>
+                            <span className={styles.eyebrow}>CONFLICTS</span>
+                            <h2>確認が必要な競合</h2>
+                        </div>
+                        <strong>{syncState.conflicts.length}件</strong>
+                    </div>
+                    <p className={styles.conflictIntro}>
+                        同じ項目が複数端末で変更されました。比較して残す内容を選んでください。
+                    </p>
+                    <div className={styles.conflictList}>
+                        {syncState.conflicts.map(conflict => (
+                            <article className={styles.conflictCard} key={conflict.conflictId}>
+                                <div className={styles.conflictTitle}>
+                                    <div>
+                                        <strong>{ENTITY_LABELS[conflict.entityType] || conflict.entityType}</strong>
+                                        <span>{conflict.entityId}</span>
+                                    </div>
+                                    <span>
+                                        {conflict.reason === 'delete-versus-change'
+                                            ? '削除と編集が競合'
+                                            : '同じ項目を編集'}
+                                    </span>
+                                </div>
+                                <p className={styles.conflictingFields}>
+                                    対象：{(conflict.conflictingFields || [])
+                                        .map(field => FIELD_LABELS[field] || field.replace(/^options\./, '選択肢 '))
+                                        .join('、')}
+                                </p>
+                                <div className={styles.conflictComparison}>
+                                    <div>
+                                        <h3>この端末</h3>
+                                        {(conflict.localChanges || []).flatMap(describeConflictChange)
+                                            .map((item, index) => (
+                                                <dl key={`${item.field}-${index}`}>
+                                                    <dt>{item.field}</dt>
+                                                    <dd>{item.value}</dd>
+                                                </dl>
+                                            ))}
+                                    </div>
+                                    <div>
+                                        <h3>クラウド</h3>
+                                        {describeConflictChange(conflict.remoteChange).map((item, index) => (
+                                            <dl key={`${item.field}-${index}`}>
+                                                <dt>{item.field}</dt>
+                                                <dd>{item.value}</dd>
+                                            </dl>
+                                        ))}
+                                    </div>
+                                </div>
+                                <div className={styles.conflictActions}>
+                                    <button
+                                        type="button"
+                                        onClick={() => handleResolveConflict(conflict, 'keep-local')}
+                                        disabled={busy}
+                                    >
+                                        この端末を採用
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => handleResolveConflict(conflict, 'keep-cloud')}
+                                        disabled={busy}
+                                    >
+                                        クラウドを採用
+                                    </button>
+                                </div>
+                            </article>
+                        ))}
+                    </div>
+                </section>
+            )}
 
             {message && <p className={styles.success} role="status">{message}</p>}
             {error && <p className={styles.error} role="alert">{error}</p>}
