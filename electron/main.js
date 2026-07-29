@@ -15,6 +15,7 @@ const {
   createNextServerLaunch,
 } = require('./serverCommand');
 const { GoogleDesktopOAuthManager } = require('./googleDesktopOAuth');
+const { MicrosoftDesktopOAuthManager } = require('./microsoftDesktopOAuth');
 const { loadCloudSyncConfig } = require('./cloudSyncConfig');
 
 // 表示名を変更しても既存の試験・画像・進捗を失わないよう、保存先は旧版と共通にする。
@@ -25,6 +26,7 @@ let nextProcess = null;
 let mainWindow = null;
 let serverPort = 3000;
 let googleOAuthManager = null;
+let microsoftOAuthManager = null;
 let cloudSyncConfig = null;
 
 // 未使用の空きポートを探索してポート衝突を回避
@@ -144,6 +146,18 @@ const registerCloudSyncIpc = () => {
     }
     return googleOAuthManager;
   };
+  const getMicrosoftManager = clientId => {
+    const normalizedClientId = String(clientId || '');
+    if (!microsoftOAuthManager || microsoftOAuthManager.clientId !== normalizedClientId) {
+      microsoftOAuthManager = new MicrosoftDesktopOAuthManager({
+        clientId: normalizedClientId,
+        userDataPath: app.getPath('userData'),
+        safeStorage,
+        shell,
+      });
+    }
+    return microsoftOAuthManager;
+  };
 
   ipcMain.handle('cloud-sync:google-status', (event, clientId) => {
     ensureSender(event);
@@ -160,6 +174,22 @@ const registerCloudSyncIpc = () => {
   ipcMain.handle('cloud-sync:google-clear', (event, clientId) => {
     ensureSender(event);
     return getManager(clientId).clear();
+  });
+  ipcMain.handle('cloud-sync:microsoft-status', (event, clientId) => {
+    ensureSender(event);
+    return getMicrosoftManager(clientId).getStatus();
+  });
+  ipcMain.handle('cloud-sync:microsoft-authorize', async (event, clientId) => {
+    ensureSender(event);
+    return getMicrosoftManager(clientId).authorize();
+  });
+  ipcMain.handle('cloud-sync:microsoft-access-token', async (event, clientId) => {
+    ensureSender(event);
+    return getMicrosoftManager(clientId).getAccessToken();
+  });
+  ipcMain.handle('cloud-sync:microsoft-clear', (event, clientId) => {
+    ensureSender(event);
+    return getMicrosoftManager(clientId).clear();
   });
 };
 

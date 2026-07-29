@@ -24,10 +24,29 @@ import {
     resolveGoogleDriveDesktopSyncConflict,
     runGoogleDriveDesktopSync,
 } from '@/lib/sync/googleDriveDesktopSync';
+import {
+    connectOneDriveSync,
+    disconnectOneDriveSync,
+    getOneDriveSyncState,
+    resetOneDriveSync,
+    resolveOneDriveSyncConflict,
+    runOneDriveSync,
+} from '@/lib/sync/oneDriveBrowserSync';
+import {
+    connectOneDriveDesktopSync,
+    disconnectOneDriveDesktopSync,
+    getOneDriveDesktopSyncState,
+    resetOneDriveDesktopSync,
+    resolveOneDriveDesktopSyncConflict,
+    runOneDriveDesktopSync,
+} from '@/lib/sync/oneDriveDesktopSync';
+import { SYNC_PROVIDERS } from '@/lib/sync/syncProtocol.mjs';
 import styles from './sync.module.scss';
 
 const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || '';
 const GOOGLE_DESKTOP_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_DESKTOP_CLIENT_ID || '';
+const MICROSOFT_CLIENT_ID = process.env.NEXT_PUBLIC_MICROSOFT_CLIENT_ID || '';
+const MICROSOFT_DESKTOP_CLIENT_ID = process.env.NEXT_PUBLIC_MICROSOFT_DESKTOP_CLIENT_ID || '';
 const IS_DEVELOPMENT = process.env.NODE_ENV === 'development';
 
 const formatDateTime = value => {
@@ -139,18 +158,46 @@ const describeConflictChange = change => {
 
 export default function CloudSyncPage() {
     const router = useRouter();
+    const [selectedProvider, setSelectedProvider] = useState(SYNC_PROVIDERS.GOOGLE_DRIVE);
     const [syncState, setSyncState] = useState(null);
     const [busyPhase, setBusyPhase] = useState('');
     const [message, setMessage] = useState('');
     const [error, setError] = useState('');
     const [progress, setProgress] = useState(null);
-    const clientId = isMobileTarget ? GOOGLE_CLIENT_ID : GOOGLE_DESKTOP_CLIENT_ID;
+    const provider = syncState?.connected
+        ? syncState.config.provider
+        : selectedProvider;
+    const isOneDrive = provider === SYNC_PROVIDERS.ONE_DRIVE;
+    const providerName = isOneDrive ? 'OneDrive' : 'Google Drive';
+    const clientId = isOneDrive
+        ? (isMobileTarget ? MICROSOFT_CLIENT_ID : MICROSOFT_DESKTOP_CLIENT_ID)
+        : (isMobileTarget ? GOOGLE_CLIENT_ID : GOOGLE_DESKTOP_CLIENT_ID);
 
     const refreshState = useCallback(async () => {
-        setSyncState(isMobileTarget
-            ? await getGoogleDriveSyncState()
-            : await getGoogleDriveDesktopSyncState({ clientId }));
-    }, [clientId]);
+        const readState = async targetProvider => {
+            const targetClientId = targetProvider === SYNC_PROVIDERS.ONE_DRIVE
+                ? (isMobileTarget ? MICROSOFT_CLIENT_ID : MICROSOFT_DESKTOP_CLIENT_ID)
+                : (isMobileTarget ? GOOGLE_CLIENT_ID : GOOGLE_DESKTOP_CLIENT_ID);
+            if (targetProvider === SYNC_PROVIDERS.ONE_DRIVE) {
+                return isMobileTarget
+                    ? getOneDriveSyncState()
+                    : getOneDriveDesktopSyncState({ clientId: targetClientId });
+            }
+            return isMobileTarget
+                ? getGoogleDriveSyncState()
+                : getGoogleDriveDesktopSyncState({ clientId: targetClientId });
+        };
+        let nextState = await readState(selectedProvider);
+        if (
+            nextState.config.enabled
+            && nextState.config.provider
+            && nextState.config.provider !== selectedProvider
+        ) {
+            setSelectedProvider(nextState.config.provider);
+            nextState = await readState(nextState.config.provider);
+        }
+        setSyncState(nextState);
+    }, [selectedProvider]);
 
     useEffect(() => {
         refreshState().catch(loadError => {
@@ -187,17 +234,25 @@ export default function CloudSyncPage() {
 
     const handleConnect = async () => {
         const response = await runAction(() => (
-            isMobileTarget
-                ? connectGoogleDriveSync({ clientId })
-                : connectGoogleDriveDesktopSync({ clientId })
+            isOneDrive
+                ? isMobileTarget
+                    ? connectOneDriveSync({ clientId })
+                    : connectOneDriveDesktopSync({ clientId })
+                : isMobileTarget
+                    ? connectGoogleDriveSync({ clientId })
+                    : connectGoogleDriveDesktopSync({ clientId })
         ), 'connecting');
         if (response) {
-            setMessage('Google Driveへの接続が完了しました。初回同期を開始します。');
+            setMessage(`${providerName}への接続が完了しました。初回同期を開始します。`);
             await new Promise(resolve => window.requestAnimationFrame(resolve));
             const syncResponse = await runAction(() => (
-                isMobileTarget
-                    ? runGoogleDriveSync({ clientId })
-                    : runGoogleDriveDesktopSync({ clientId })
+                isOneDrive
+                    ? isMobileTarget
+                        ? runOneDriveSync({ clientId })
+                        : runOneDriveDesktopSync({ clientId })
+                    : isMobileTarget
+                        ? runGoogleDriveSync({ clientId })
+                        : runGoogleDriveDesktopSync({ clientId })
             ), 'initial-sync');
             if (syncResponse) {
                 setMessage(`接続と初回同期が完了しました。${describeSyncResult(syncResponse.result)}`);
@@ -207,9 +262,13 @@ export default function CloudSyncPage() {
 
     const handleSync = async () => {
         const response = await runAction(() => (
-            isMobileTarget
-                ? runGoogleDriveSync({ clientId })
-                : runGoogleDriveDesktopSync({ clientId })
+            isOneDrive
+                ? isMobileTarget
+                    ? runOneDriveSync({ clientId })
+                    : runOneDriveDesktopSync({ clientId })
+                : isMobileTarget
+                    ? runGoogleDriveSync({ clientId })
+                    : runGoogleDriveDesktopSync({ clientId })
         ), syncState?.initialSyncCompleted ? 'syncing' : 'initial-sync');
         if (response) setMessage(describeSyncResult(response.result));
     };
@@ -225,17 +284,29 @@ export default function CloudSyncPage() {
             return;
         }
         const response = await runAction(() => (
-            isMobileTarget
-                ? resolveGoogleDriveSyncConflict({
-                    clientId,
-                    conflictId: conflict.conflictId,
-                    resolution,
-                })
-                : resolveGoogleDriveDesktopSyncConflict({
-                    clientId,
-                    conflictId: conflict.conflictId,
-                    resolution,
-                })
+            isOneDrive
+                ? isMobileTarget
+                    ? resolveOneDriveSyncConflict({
+                        clientId,
+                        conflictId: conflict.conflictId,
+                        resolution,
+                    })
+                    : resolveOneDriveDesktopSyncConflict({
+                        clientId,
+                        conflictId: conflict.conflictId,
+                        resolution,
+                    })
+                : isMobileTarget
+                    ? resolveGoogleDriveSyncConflict({
+                        clientId,
+                        conflictId: conflict.conflictId,
+                        resolution,
+                    })
+                    : resolveGoogleDriveDesktopSyncConflict({
+                        clientId,
+                        conflictId: conflict.conflictId,
+                        resolution,
+                    })
         ), 'resolving-conflict');
         if (response) {
             setMessage(`${choiceLabel}を採用し、解決結果を同期しました。`);
@@ -261,7 +332,7 @@ export default function CloudSyncPage() {
     const handleLocalDevelopmentReset = async () => {
         if (!window.confirm(
             'この端末内の試験、学習履歴、画像、PDF、同期履歴を削除します。\n'
-            + 'Google Drive上のデータは削除されません。\n\n'
+            + `${providerName}上のデータは削除されません。\n\n`
             + '実行前に.radexamバックアップを保存します。続けますか？'
         )) {
             return;
@@ -275,7 +346,7 @@ export default function CloudSyncPage() {
             await refreshState();
             setMessage(
                 'この端末内のデータを削除しました。'
-                + 'Google Driveへ再接続すると、クラウドの全体データを受信できます。'
+                + `${providerName}へ再接続すると、クラウドの全体データを受信できます。`
             );
         } catch (resetError) {
             console.error('Failed to reset local development data:', resetError);
@@ -287,7 +358,7 @@ export default function CloudSyncPage() {
 
     const handleReset = async hard => {
         const warning = hard
-            ? '開発用完全リセットでは、Google Drive上のRadExam同期データを完全に削除します。'
+            ? `開発用完全リセットでは、${providerName}上のRadExam同期データを完全に削除します。`
             : '新しい同期領域へ切り替えます。別端末では再接続が必要になります。';
         if (!window.confirm(
             `${warning}\n\n端末内データは削除せず、実行前に.radexamバックアップを保存します。続けますか？`
@@ -304,9 +375,13 @@ export default function CloudSyncPage() {
             return;
         }
         const response = await runAction(() => (
-            isMobileTarget
-                ? resetGoogleDriveSync({ clientId, hard })
-                : resetGoogleDriveDesktopSync({ clientId, hard })
+            isOneDrive
+                ? isMobileTarget
+                    ? resetOneDriveSync({ clientId, hard })
+                    : resetOneDriveDesktopSync({ clientId, hard })
+                : isMobileTarget
+                    ? resetGoogleDriveSync({ clientId, hard })
+                    : resetGoogleDriveDesktopSync({ clientId, hard })
         ), 'resetting');
         if (!response) return;
         setMessage(hard
@@ -314,9 +389,13 @@ export default function CloudSyncPage() {
             : '新しいクラウド同期領域へ切り替えました。初回同期を開始します。');
         await new Promise(resolve => window.requestAnimationFrame(resolve));
         const syncResponse = await runAction(() => (
-            isMobileTarget
-                ? runGoogleDriveSync({ clientId })
-                : runGoogleDriveDesktopSync({ clientId })
+            isOneDrive
+                ? isMobileTarget
+                    ? runOneDriveSync({ clientId })
+                    : runOneDriveDesktopSync({ clientId })
+                : isMobileTarget
+                    ? runGoogleDriveSync({ clientId })
+                    : runGoogleDriveDesktopSync({ clientId })
         ), 'initial-sync');
         if (syncResponse) {
             setMessage(`クラウド同期のリセットが完了しました。${describeSyncResult(syncResponse.result)}`);
@@ -333,14 +412,21 @@ export default function CloudSyncPage() {
             return;
         }
         const response = await runAction(() => (
-            isMobileTarget
-                ? disconnectGoogleDriveSync({ discardPending })
-                : disconnectGoogleDriveDesktopSync({
-                    clientId,
-                    discardPending,
-                })
+            isOneDrive
+                ? isMobileTarget
+                    ? disconnectOneDriveSync({ discardPending })
+                    : disconnectOneDriveDesktopSync({
+                        clientId,
+                        discardPending,
+                    })
+                : isMobileTarget
+                    ? disconnectGoogleDriveSync({ discardPending })
+                    : disconnectGoogleDriveDesktopSync({
+                        clientId,
+                        discardPending,
+                    })
         ));
-        if (response) setMessage('Google Driveとの接続を解除しました。端末内のデータはそのままです。');
+        if (response) setMessage(`${providerName}との接続を解除しました。端末内のデータはそのままです。`);
     };
 
     const connected = Boolean(syncState?.connected);
@@ -356,7 +442,7 @@ export default function CloudSyncPage() {
                 <div>
                     <span className={styles.eyebrow}>CLOUD SYNC</span>
                     <h1>クラウド同期</h1>
-                    <p>端末内のデータを本体として保ち、Google Driveのアプリ専用領域を介して差分を同期します。</p>
+                    <p>端末内のデータを本体として保ち、選択したクラウドのアプリ専用領域を介して差分を同期します。</p>
                 </div>
             </header>
 
@@ -366,10 +452,34 @@ export default function CloudSyncPage() {
             </section>
 
             <section className={styles.card}>
+                {!connected && (
+                    <div className={styles.providerChoice} aria-label="同期先を選択">
+                        <button
+                            type="button"
+                            className={selectedProvider === SYNC_PROVIDERS.GOOGLE_DRIVE
+                                ? styles.providerChoiceActive
+                                : ''}
+                            onClick={() => setSelectedProvider(SYNC_PROVIDERS.GOOGLE_DRIVE)}
+                            disabled={busy}
+                        >
+                            Google Drive
+                        </button>
+                        <button
+                            type="button"
+                            className={selectedProvider === SYNC_PROVIDERS.ONE_DRIVE
+                                ? styles.providerChoiceActive
+                                : ''}
+                            onClick={() => setSelectedProvider(SYNC_PROVIDERS.ONE_DRIVE)}
+                            disabled={busy}
+                        >
+                            OneDrive
+                        </button>
+                    </div>
+                )}
                 <div className={styles.providerHeader}>
-                    <div className={styles.driveMark} aria-hidden="true">G</div>
+                    <div className={styles.driveMark} aria-hidden="true">{isOneDrive ? 'O' : 'G'}</div>
                     <div>
-                        <h2>Google Drive</h2>
+                        <h2>{providerName}</h2>
                         <p>{connected ? '接続済み' : '未接続'}</p>
                     </div>
                     <span className={`${styles.statusBadge} ${connected ? styles.connected : ''}`}>
@@ -383,12 +493,13 @@ export default function CloudSyncPage() {
 
                 {desktopBridgeUnavailable && (
                     <p className={styles.notice}>
-                        Google Driveへの接続は、ブラウザ版ではなくインストールしたMac/PC版アプリから実行してください。
+                        {providerName}への接続は、ブラウザ版ではなくインストールしたMac/PC版アプリから実行してください。
                     </p>
                 )}
                 {!desktopBridgeUnavailable && configurationMissing && (
                     <p className={styles.notice}>
-                        このビルドには{isMobileTarget ? 'Web版' : 'デスクトップ版'}のGoogle OAuthクライアントIDが設定されていません。
+                        このビルドには{isMobileTarget ? 'Web版' : 'デスクトップ版'}の
+                        {isOneDrive ? 'Microsoft' : 'Google'} OAuthクライアントIDが設定されていません。
                     </p>
                 )}
 
@@ -396,12 +507,13 @@ export default function CloudSyncPage() {
                     <>
                         {!syncState.initialSyncCompleted && (
                             <p className={styles.reauthNotice}>
-                                Google Driveへの接続は完了しています。端末データの初回同期はまだ完了していません。
+                                {providerName}への接続は完了しています。端末データの初回同期はまだ完了していません。
                             </p>
                         )}
                         {!syncState.hasSessionToken && isMobileTarget && (
                             <p className={styles.reauthNotice}>
-                                安全のため認証情報は保存していません。同期するときにGoogleアカウントを再認証してください。
+                                安全のため認証情報は長期保存していません。
+                                同期するときに{isOneDrive ? 'Microsoft' : 'Google'}アカウントを再認証してください。
                             </p>
                         )}
                         {!syncState.encryptionAvailable && !isMobileTarget && (
@@ -410,7 +522,7 @@ export default function CloudSyncPage() {
                             </p>
                         )}
                         <dl className={styles.details}>
-                            <div><dt>アカウント</dt><dd>{syncState.config.accountLabel || 'Google Drive'}</dd></div>
+                            <div><dt>アカウント</dt><dd>{syncState.config.accountLabel || providerName}</dd></div>
                             <div><dt>最終同期</dt><dd>{formatDateTime(syncState.config.lastSyncAt)}</dd></div>
                             <div><dt>データ状態</dt><dd>{describeDataStatus(syncState)}</dd></div>
                             <div><dt>未送信（残り）</dt><dd>{syncState.pendingCount}件</dd></div>
@@ -456,7 +568,7 @@ export default function CloudSyncPage() {
                             onClick={handleConnect}
                             disabled={busy || unavailable}
                         >
-                            {busy ? '接続中…' : 'Google Driveへ接続'}
+                            {busy ? '接続中…' : `${providerName}へ接続`}
                         </button>
                     ) : (
                         <>
@@ -536,7 +648,7 @@ export default function CloudSyncPage() {
                     <div className={styles.resetArea}>
                         <strong>モバイル版の受信テスト</strong>
                         <p>
-                            Google Drive上のバックアップは残したまま、この端末内のデータと同期履歴だけを空にします。
+                            {providerName}上のバックアップは残したまま、この端末内のデータと同期履歴だけを空にします。
                             再接続後の初回同期で、クラウドから復元できるか確認できます。
                         </p>
                         <button
