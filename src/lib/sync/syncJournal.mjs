@@ -11,10 +11,19 @@ const CONFLICT_PREFIX = 'conflict:';
 const SENT_PREFIX = 'sent:';
 const APPLIED_BATCH_PREFIX = 'applied-batch:';
 const BOOTSTRAP_SNAPSHOT_KEY = 'bootstrap-snapshot';
+const STORAGE_WRITE_BATCH_SIZE = 25;
 
 const padSequence = sequence => String(sequence).padStart(16, '0');
 const changeKey = change => `${CHANGE_PREFIX}${padSequence(change.sequence)}:${change.changeId}`;
 const tombstoneKey = change => `${TOMBSTONE_PREFIX}${change.entityType}:${change.entityId}`;
+
+const runStorageOperationsInBatches = async (items, operation) => {
+    for (let index = 0; index < items.length; index += STORAGE_WRITE_BATCH_SIZE) {
+        await Promise.all(
+            items.slice(index, index + STORAGE_WRITE_BATCH_SIZE).map(operation)
+        );
+    }
+};
 
 const defaultUuid = () => {
     if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
@@ -226,15 +235,18 @@ export class SyncJournal {
             }
         });
         if (Number.isSafeInteger(committedGeneration) && committedGeneration > 0) {
-            await Promise.all(removals.map(({ change }) => (
+            await runStorageOperationsInBatches(removals, ({ change }) => (
                 this.storage.setItem(`${SENT_PREFIX}${change.changeId}`, {
                     change,
                     committedGeneration,
                     acknowledgedAt: this.now(),
                 })
-            )));
+            ));
         }
-        await Promise.all(removals.map(({ key }) => this.storage.removeItem(key)));
+        await runStorageOperationsInBatches(
+            removals,
+            ({ key }) => this.storage.removeItem(key)
+        );
         return removals.length;
     }
 
@@ -256,7 +268,10 @@ export class SyncJournal {
                 removals.push(key);
             }
         });
-        await Promise.all(removals.map(key => this.storage.removeItem(key)));
+        await runStorageOperationsInBatches(
+            removals,
+            key => this.storage.removeItem(key)
+        );
         return removals.length;
     }
 

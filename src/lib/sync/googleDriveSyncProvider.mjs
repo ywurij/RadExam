@@ -772,7 +772,12 @@ export class GoogleDriveSyncProvider {
 
     async uploadBlob(contentHash, blob) {
         const path = this.path(blobPath(contentHash));
-        const existing = await this.client.findFile(path);
+        // hasBlob()で一覧確認済みの場合、存在しないファイルを再度個別検索しない。
+        // OneDriveでは個別検索ごとにHTTPリクエストが発生するため、初回同期が
+        // ファイル数に比例して長時間停止したように見えるのを防ぐ。
+        const existing = this.blobInventory
+            ? null
+            : await this.client.findFile(path);
         if (!existing) {
             await this.client.writeBlob(path, blob, {
                 kind: 'object',

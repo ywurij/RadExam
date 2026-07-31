@@ -109,6 +109,37 @@ const pullRemoteBatches = async ({
         if (!alreadyApplied) batches.push(batch);
     }
 
+    const [pendingLocalChanges, unresolvedConflicts, sentLocalChanges] = await Promise.all([
+        journal.listPendingChanges(),
+        typeof journal.listConflicts === 'function'
+            ? journal.listConflicts()
+            : Promise.resolve([]),
+        typeof journal.listSentChangesAfterGeneration === 'function'
+            ? journal.listSentChangesAfterGeneration(0)
+            : Promise.resolve([]),
+    ]);
+    const incomingContext = {
+        config,
+        pendingLocalChanges,
+        sentLocalChanges,
+        conflictsByEntity: new Map(unresolvedConflicts.map(conflict => [
+            `${conflict.entityType}:${String(conflict.entityId)}`,
+            conflict,
+        ])),
+    };
+    const totalChanges = batches.reduce(
+        (total, batch) => total + (Number(batch.changeCount) || 0),
+        0
+    );
+    let processedChanges = 0;
+    if (totalChanges > 0) {
+        reportProgress(provider, {
+            phase: 'applying-changes',
+            processedChanges,
+            totalChanges,
+        });
+    }
+
     for (const descriptor of batches) {
         const batch = validateSyncChangeBatch(
             await provider.downloadChangeBatch(descriptor),
@@ -120,6 +151,7 @@ const pullRemoteBatches = async ({
                 journal,
                 dataStore,
                 resolveBlob: ref => provider.downloadBlob(ref.contentHash),
+                context: incomingContext,
             });
             if (result.status === 'needs-blob') {
                 throw new Error(`同期ファイルを取得できませんでした: ${result.blobRef?.contentHash || '不明'}`);
@@ -128,11 +160,20 @@ const pullRemoteBatches = async ({
             if (result.status === 'duplicate') summary.duplicateChanges += 1;
             if (result.status === 'acknowledged') summary.acknowledgedChanges += 1;
             if (result.status === 'conflict') summary.conflicts += 1;
+            processedChanges += 1;
+            if (processedChanges % 10 === 0 || processedChanges === totalChanges) {
+                reportProgress(provider, {
+                    phase: 'applying-changes',
+                    processedChanges,
+                    totalChanges,
+                });
+            }
         }
         config = await journal.configure({
             lastPulledGeneration: descriptor.generation,
             lastPulledAt: new Date().toISOString(),
         });
+        incomingContext.config = config;
         if (typeof journal.markBatchApplied === 'function') {
             await journal.markBatchApplied(descriptor);
         }
@@ -296,6 +337,10 @@ const commitInitialSnapshot = async ({
         change => change.sequence <= cached.descriptor.cutoffSequence
     );
     if (committedSnapshot.snapshotId === cached.descriptor.snapshotId) {
+        reportProgress(provider, {
+            phase: 'finalizing-local-changes',
+            totalChanges: covered.length,
+        });
         await journal.acknowledgeChanges(
             covered.map(change => change.changeId),
             { committedGeneration: committedSnapshot.generation }
@@ -453,16 +498,42 @@ const pushLocalBatch = async ({
         throw new Error('変更の送信にはgetLocalBlob()が必要です。');
     }
 
-    let uploadedBlobs = 0;
+    const missingBlobRefs = [];
     for (const ref of blobRefs) {
         if (await provider.hasBlob(ref.contentHash)) continue;
-        const local = await getLocalBlob(ref);
-        if (!local?.blob || local.contentHash !== ref.contentHash) {
-            throw new Error(`送信ファイルの内容ハッシュが一致しません: ${ref.localKey}`);
-        }
-        await provider.uploadBlob(ref.contentHash, local.blob);
-        uploadedBlobs += 1;
+        missingBlobRefs.push(ref);
     }
+
+    let uploadedBlobs = 0;
+    const blobQueue = [...missingBlobRefs];
+    if (blobQueue.length > 0) {
+        reportProgress(provider, {
+            phase: 'uploading-files',
+            uploadedFiles: 0,
+            totalFiles: blobQueue.length,
+        });
+    }
+    const blobWorkers = Array.from(
+        { length: Math.min(3, blobQueue.length) },
+        async () => {
+            while (blobQueue.length > 0) {
+                const ref = blobQueue.shift();
+                if (!ref) continue;
+                const local = await getLocalBlob(ref);
+                if (!local?.blob || local.contentHash !== ref.contentHash) {
+                    throw new Error(`送信ファイルの内容ハッシュが一致しません: ${ref.localKey}`);
+                }
+                await provider.uploadBlob(ref.contentHash, local.blob);
+                uploadedBlobs += 1;
+                reportProgress(provider, {
+                    phase: 'uploading-files',
+                    uploadedFiles: uploadedBlobs,
+                    totalFiles: missingBlobRefs.length,
+                });
+            }
+        }
+    );
+    await Promise.all(blobWorkers);
 
     const batch = (useBulkPackage ? buildSyncBulkChangePackage : buildSyncChangeBatch)({
         batchId: buildBatchId(pending),
@@ -505,6 +576,10 @@ const pushLocalBatch = async ({
     }
 
     if (!committedBatch) throw new Error('manifestへ変更バッチを登録できませんでした。');
+    reportProgress(provider, {
+        phase: 'finalizing-local-changes',
+        totalChanges: pending.length,
+    });
     await journal.acknowledgeChanges(
         pending.map(change => change.changeId),
         { committedGeneration: committedBatch.generation }

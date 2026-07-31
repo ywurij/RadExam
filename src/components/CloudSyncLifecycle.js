@@ -2,6 +2,7 @@
 
 import { useEffect } from 'react';
 import { isMobileTarget } from '@/lib/appTarget';
+import { refreshLocalExamData } from '@/lib/data';
 import { runGoogleDriveBackgroundSync } from '@/lib/sync/googleDriveBrowserSync';
 import { runGoogleDriveDesktopBackgroundSync } from '@/lib/sync/googleDriveDesktopSync';
 import { runOneDriveBackgroundSync } from '@/lib/sync/oneDriveBrowserSync';
@@ -55,6 +56,7 @@ export default function CloudSyncLifecycle() {
                     if (response.status === 'completed') break;
                 }
                 if (response.status === 'completed') {
+                    await refreshLocalExamData();
                     window.dispatchEvent(new CustomEvent('radexam-cloud-sync-completed'));
                 }
             } catch (error) {

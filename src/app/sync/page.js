@@ -8,6 +8,7 @@ import {
     clearLocalAppDataForDevelopment,
     exportAllLocalData,
 } from '@/lib/localDb';
+import { refreshLocalExamData } from '@/lib/data';
 import {
     connectGoogleDriveSync,
     disconnectGoogleDriveSync,
@@ -93,9 +94,21 @@ const describeProgress = progress => {
     if (progress.phase === 'uploading-snapshot') {
         return `初回同期データを送信中: ${formatBytes(progress.uploadedBytes)} / ${formatBytes(progress.totalBytes)}`;
     }
+    if (progress.phase === 'uploading-changes') {
+        return `変更された画像・PDFを送信中: ${formatBytes(progress.uploadedBytes)} / ${formatBytes(progress.totalBytes)}`;
+    }
+    if (progress.phase === 'uploading-files') {
+        return `変更された画像・PDFを送信中: ${progress.uploadedFiles || 0} / ${progress.totalFiles || 0}件`;
+    }
     if (progress.phase === 'committing-snapshot') return '初回同期データを確定しています';
+    if (progress.phase === 'finalizing-local-changes') {
+        return `送信済みデータを端末内で整理しています（${progress.totalChanges || 0}件）`;
+    }
     if (progress.phase === 'downloading-snapshot') return '初回同期データを受信しています';
     if (progress.phase === 'restoring-snapshot') return '受信したデータを端末へ保存しています';
+    if (progress.phase === 'applying-changes') {
+        return `受信した変更を端末へ反映中: ${progress.processedChanges || 0} / ${progress.totalChanges || 0}件`;
+    }
     if (progress.phase === 'preparing-checkpoint') {
         return `復旧用データを準備しています（前回から${progress.totalChanges || 0}件変更）`;
     }
@@ -212,13 +225,18 @@ export default function CloudSyncPage() {
         };
     }, [refreshState]);
 
-    const runAction = async (action, phase = 'syncing') => {
+    const runAction = async (
+        action,
+        phase = 'syncing',
+        { refreshExams = false } = {}
+    ) => {
         setBusyPhase(phase);
         setMessage('');
         setError('');
         setProgress(null);
         try {
             const actionResult = await action();
+            if (refreshExams) await refreshLocalExamData();
             await refreshState();
             return actionResult;
         } catch (actionError) {
@@ -253,7 +271,7 @@ export default function CloudSyncPage() {
                     : isMobileTarget
                         ? runGoogleDriveSync({ clientId })
                         : runGoogleDriveDesktopSync({ clientId })
-            ), 'initial-sync');
+            ), 'initial-sync', { refreshExams: true });
             if (syncResponse) {
                 setMessage(`接続と初回同期が完了しました。${describeSyncResult(syncResponse.result)}`);
             }
@@ -269,7 +287,9 @@ export default function CloudSyncPage() {
                 : isMobileTarget
                     ? runGoogleDriveSync({ clientId })
                     : runGoogleDriveDesktopSync({ clientId })
-        ), syncState?.initialSyncCompleted ? 'syncing' : 'initial-sync');
+        ), syncState?.initialSyncCompleted ? 'syncing' : 'initial-sync', {
+            refreshExams: true,
+        });
         if (response) setMessage(describeSyncResult(response.result));
     };
 
@@ -307,7 +327,7 @@ export default function CloudSyncPage() {
                         conflictId: conflict.conflictId,
                         resolution,
                     })
-        ), 'resolving-conflict');
+        ), 'resolving-conflict', { refreshExams: true });
         if (response) {
             setMessage(`${choiceLabel}を採用し、解決結果を同期しました。`);
         }
@@ -343,6 +363,7 @@ export default function CloudSyncPage() {
             await saveEmergencyBackup('radexam-before-local-development-reset');
             setBusyPhase('resetting-local');
             await clearLocalAppDataForDevelopment();
+            await refreshLocalExamData();
             await refreshState();
             setMessage(
                 'この端末内のデータを削除しました。'
@@ -396,7 +417,7 @@ export default function CloudSyncPage() {
                 : isMobileTarget
                     ? runGoogleDriveSync({ clientId })
                     : runGoogleDriveDesktopSync({ clientId })
-        ), 'initial-sync');
+        ), 'initial-sync', { refreshExams: true });
         if (syncResponse) {
             setMessage(`クラウド同期のリセットが完了しました。${describeSyncResult(syncResponse.result)}`);
         }

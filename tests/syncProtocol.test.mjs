@@ -54,6 +54,41 @@ class MemoryStorage {
     }
 }
 
+class ConcurrencyLimitedStorage extends MemoryStorage {
+    constructor(limit) {
+        super();
+        this.limit = limit;
+        this.activeOperations = 0;
+        this.maxActiveOperations = 0;
+    }
+
+    async runOperation(operation) {
+        this.activeOperations += 1;
+        this.maxActiveOperations = Math.max(
+            this.maxActiveOperations,
+            this.activeOperations
+        );
+        if (this.activeOperations > this.limit) {
+            this.activeOperations -= 1;
+            throw new Error('storage concurrency limit exceeded');
+        }
+        try {
+            await new Promise(resolve => setTimeout(resolve, 0));
+            return await operation();
+        } finally {
+            this.activeOperations -= 1;
+        }
+    }
+
+    async setItem(key, value) {
+        return this.runOperation(() => super.setItem(key, value));
+    }
+
+    async removeItem(key) {
+        return this.runOperation(() => super.removeItem(key));
+    }
+}
+
 test('does not disconnect while unsent changes remain unless explicitly confirmed', async () => {
     let uuidSequence = 0;
     const journal = new SyncJournal(new MemoryStorage(), {
@@ -303,6 +338,36 @@ test('assigns monotonic sequences and keeps deletion tombstones', async () => {
 
     assert.equal(await journal.acknowledgeChanges([changes[0].changeId]), 1);
     assert.deepEqual((await journal.listPendingChanges()).map(change => change.sequence), [2]);
+});
+
+test('acknowledges large change sets without overwhelming storage', async () => {
+    const storage = new ConcurrencyLimitedStorage(32);
+    let uuidIndex = 0;
+    const journal = new SyncJournal(storage, {
+        uuid: () => `bulk-uuid-${++uuidIndex}`,
+    });
+    await journal.configure({
+        enabled: true,
+        deviceId: 'device-1',
+        provider: 'one-drive',
+        accountId: 'account-1',
+    });
+    const changes = await journal.recordChanges(Array.from(
+        { length: 120 },
+        (_, index) => ({
+            entityType: SYNC_ENTITY_TYPES.QUESTION,
+            entityId: `exam::${index}`,
+            changedFields: ['question'],
+            payload: { question: `Question ${index}` },
+        })
+    ));
+
+    assert.equal(await journal.acknowledgeChanges(
+        changes.map(change => change.changeId),
+        { committedGeneration: 1 }
+    ), 120);
+    assert.deepEqual(await journal.listPendingChanges(), []);
+    assert.ok(storage.maxActiveOperations <= 32);
 });
 
 test('remembers an applied remote change so retries are idempotent', async () => {

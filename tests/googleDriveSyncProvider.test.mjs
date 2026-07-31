@@ -629,3 +629,21 @@ test('loads the cloud object inventory once instead of listing once per blob', a
     assert.equal(await provider.hasBlob('sha256:missing'), false);
     assert.equal(objectLists, 1);
 });
+
+test('does not repeat a missing blob lookup after loading the inventory', async () => {
+    const client = new FakeDriveClient();
+    let fileLookups = 0;
+    client.listFiles = async () => [];
+    client.findFile = async () => {
+        fileLookups += 1;
+        return null;
+    };
+    const provider = new GoogleDriveSyncProvider({ client });
+
+    assert.equal(await provider.hasBlob('sha256:new'), false);
+    await provider.uploadBlob('sha256:new', new Blob(['new-image']));
+
+    assert.equal(fileLookups, 0);
+    assert.equal(client.writes.length, 1);
+    assert.equal(client.writes[0].options.existingFile, null);
+});

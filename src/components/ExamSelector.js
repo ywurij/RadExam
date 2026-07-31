@@ -1,7 +1,13 @@
 "use client";
 
 import { useState, useMemo, useEffect, useRef } from 'react';
-import { getExamTypes, getYears, getGenres, initializeLocalExams } from '@/lib/data';
+import {
+    getExamTypes,
+    getYears,
+    getGenres,
+    initializeLocalExams,
+    LOCAL_EXAMS_CHANGED_EVENT,
+} from '@/lib/data';
 import styles from './ExamSelector.module.scss';
 import { useRouter } from 'next/navigation';
 import { limitResumableSessions } from '@/lib/sessionHistory';
@@ -29,8 +35,14 @@ export default function ExamSelector() {
      const [isShuffle, setIsShuffle] = useState(false);
  
      // Derived options based on selected exam
-     const years = useMemo(() => getYears(selectedExam), [selectedExam]);
-     const genres = useMemo(() => getGenres(selectedExam), [selectedExam]);
+    const years = useMemo(
+        () => getYears(selectedExam),
+        [selectedExam, exams]
+    );
+    const genres = useMemo(
+        () => getGenres(selectedExam),
+        [selectedExam, exams]
+    );
  
     const [sessions, setSessions] = useState([]);
     const [draggingExamId, setDraggingExamId] = useState(null);
@@ -177,6 +189,57 @@ export default function ExamSelector() {
             handleSessionsChanged
         );
     }, []);
+
+    useEffect(() => {
+        const handleLocalExamsChanged = () => {
+            const rawTypes = getExamTypes();
+            let types = rawTypes;
+            try {
+                const savedOrder = JSON.parse(
+                    localStorage.getItem('radexam_exam_order') || '[]'
+                );
+                if (Array.isArray(savedOrder)) {
+                    const orderIndex = new Map(
+                        savedOrder.map((id, index) => [id, index])
+                    );
+                    types = [...rawTypes].sort(
+                        (a, b) => (
+                            orderIndex.get(a.id) ?? Number.MAX_SAFE_INTEGER
+                        ) - (
+                            orderIndex.get(b.id) ?? Number.MAX_SAFE_INTEGER
+                        )
+                    );
+                }
+            } catch (error) {
+                console.error('Failed to reload exam card order:', error);
+            }
+            setExams(types);
+            const nextExamId = types.some(exam => exam.id === selectedExam)
+                ? selectedExam
+                : (types[0]?.id || '');
+            setSelectedExam(nextExamId);
+            setSelectedYear(currentYear => (
+                isYearValidForExam(nextExamId, currentYear)
+                    ? currentYear
+                    : 'all'
+            ));
+            setSelectedGenres(currentGenres => (
+                currentGenres.filter(genre => (
+                    getGenres(nextExamId).includes(genre)
+                ))
+            ));
+        };
+
+        window.addEventListener(
+            LOCAL_EXAMS_CHANGED_EVENT,
+            handleLocalExamsChanged
+        );
+        return () => window.removeEventListener(
+            LOCAL_EXAMS_CHANGED_EVENT,
+            handleLocalExamsChanged
+        );
+    }, [selectedExam]);
+
     const handleStart = () => {
         const params = new URLSearchParams();
         params.set('exam', selectedExam);

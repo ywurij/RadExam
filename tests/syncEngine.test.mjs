@@ -378,6 +378,30 @@ test('packs more than 100 local changes into one bulk delta package', async () =
         'device-b',
         new InMemorySyncProvider(cloud)
     );
+    let pendingScans = 0;
+    let conflictScans = 0;
+    let sentScans = 0;
+    const originalListPending = receivingDevice.journal.listPendingChanges.bind(
+        receivingDevice.journal
+    );
+    const originalListConflicts = receivingDevice.journal.listConflicts.bind(
+        receivingDevice.journal
+    );
+    const originalListSent = receivingDevice.journal.listSentChangesAfterGeneration.bind(
+        receivingDevice.journal
+    );
+    receivingDevice.journal.listPendingChanges = async (...args) => {
+        pendingScans += 1;
+        return originalListPending(...args);
+    };
+    receivingDevice.journal.listConflicts = async (...args) => {
+        conflictScans += 1;
+        return originalListConflicts(...args);
+    };
+    receivingDevice.journal.listSentChangesAfterGeneration = async (...args) => {
+        sentScans += 1;
+        return originalListSent(...args);
+    };
     const received = await syncDevice(receivingDevice);
 
     assert.equal(result.pushedBatches, 1);
@@ -386,6 +410,9 @@ test('packs more than 100 local changes into one bulk delta package', async () =
     assert.deepEqual(cloud.manifest.batches.map(batch => batch.changeCount), [205]);
     assert.equal(cloud.manifest.batches[0].format, 'bulk-delta');
     assert.equal(received.appliedChanges, 205);
+    assert.ok(pendingScans < 10);
+    assert.equal(conflictScans, 1);
+    assert.equal(sentScans, 1);
     assert.deepEqual(await device.journal.listPendingChanges(), []);
 });
 
