@@ -177,6 +177,18 @@ test('pull uses data-store batching and records applied changes after the flush'
     await syncDevice(source);
     let beginCount = 0;
     let endCount = 0;
+    let bulkAppliedLookupCount = 0;
+    let singleAppliedLookupCount = 0;
+    const findAppliedChangeIds = target.journal.findAppliedChangeIds.bind(target.journal);
+    const hasAppliedChange = target.journal.hasAppliedChange.bind(target.journal);
+    target.journal.findAppliedChangeIds = async changeIds => {
+        bulkAppliedLookupCount += 1;
+        return findAppliedChangeIds(changeIds);
+    };
+    target.journal.hasAppliedChange = async changeId => {
+        singleAppliedLookupCount += 1;
+        return hasAppliedChange(changeId);
+    };
     const applied = [];
     const dataStore = {
         beginBatch() { beginCount += 1; },
@@ -195,6 +207,8 @@ test('pull uses data-store batching and records applied changes after the flush'
     assert.equal(beginCount, 1);
     assert.equal(endCount, 1);
     assert.equal(applied.length, 5);
+    assert.equal(bulkAppliedLookupCount, 1);
+    assert.equal(singleAppliedLookupCount, 0);
     assert.equal(await target.journal.hasAppliedChange(applied[0].changeId), true);
 });
 

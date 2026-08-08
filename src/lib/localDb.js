@@ -742,15 +742,38 @@ let remoteApplyBatch = null;
 const loadRemoteBatchExam = async (examId, fallback) => {
     if (!remoteApplyBatch) return (await examsStore.getItem(examId)) || fallback;
     if (!remoteApplyBatch.exams.has(examId)) {
-        remoteApplyBatch.exams.set(examId, (await examsStore.getItem(examId)) || fallback);
+        const stored = (await examsStore.getItem(examId)) || fallback;
+        remoteApplyBatch.exams.set(examId, stored ? {
+            ...stored,
+            questions: Array.isArray(stored.questions) ? [...stored.questions] : [],
+        } : null);
     }
     return remoteApplyBatch.exams.get(examId);
+};
+
+const loadRemoteBatchQuestionIndex = (examId, questions) => {
+    if (!remoteApplyBatch) return null;
+    if (!remoteApplyBatch.questionIndexes.has(examId)) {
+        remoteApplyBatch.questionIndexes.set(examId, new Map(
+            questions.map((question, index) => [String(question?.id), index])
+        ));
+    }
+    return remoteApplyBatch.questionIndexes.get(examId);
+};
+
+const loadRemoteBatchProgress = async entityId => {
+    if (!remoteApplyBatch) return (await progressStore.getItem(entityId)) || {};
+    if (!remoteApplyBatch.progress.has(entityId)) {
+        remoteApplyBatch.progress.set(entityId, (await progressStore.getItem(entityId)) || {});
+    }
+    return remoteApplyBatch.progress.get(entityId);
 };
 
 const applyRemoteExamChange = async change => {
     if (change.operation === SYNC_OPERATIONS.DELETE) {
         if (remoteApplyBatch) {
             remoteApplyBatch.exams.set(change.entityId, null);
+            remoteApplyBatch.questionIndexes.delete(change.entityId);
             return;
         }
         await examsStore.removeItem(change.entityId);
@@ -788,11 +811,21 @@ const applyRemoteQuestionChange = async change => {
         years: [],
         genres: [],
     };
-    const questions = Array.isArray(exam.questions) ? [...exam.questions] : [];
-    const questionIndex = questions.findIndex(question => String(question.id) === questionId);
+    const questions = Array.isArray(exam.questions) ? exam.questions : [];
+    const questionIndexes = loadRemoteBatchQuestionIndex(examId, questions);
+    const questionIndex = questionIndexes
+        ? (questionIndexes.get(questionId) ?? -1)
+        : questions.findIndex(question => String(question.id) === questionId);
 
     if (change.operation === SYNC_OPERATIONS.DELETE) {
-        if (questionIndex >= 0) questions.splice(questionIndex, 1);
+        if (questionIndex >= 0) {
+            if (questionIndexes) {
+                questions[questionIndex] = null;
+                questionIndexes.delete(questionId);
+            } else {
+                questions.splice(questionIndex, 1);
+            }
+        }
     } else {
         const currentQuestion = questionIndex >= 0
             ? questions[questionIndex]
@@ -801,7 +834,10 @@ const applyRemoteQuestionChange = async change => {
             applySyncFieldDelta(currentQuestion, change)
         );
         if (questionIndex >= 0) questions[questionIndex] = nextQuestion;
-        else questions.push(nextQuestion);
+        else {
+            if (questionIndexes) questionIndexes.set(questionId, questions.length);
+            questions.push(nextQuestion);
+        }
     }
 
     const stored = {
@@ -818,14 +854,23 @@ const applyRemoteQuestionChange = async change => {
 
 const applyRemoteProgressChange = async change => {
     if (change.operation === SYNC_OPERATIONS.DELETE) {
+        if (remoteApplyBatch) {
+            remoteApplyBatch.progress.set(change.entityId, null);
+            return;
+        }
         await progressStore.removeItem(change.entityId);
         return;
     }
-    const current = await progressStore.getItem(change.entityId) || {};
-    await progressStore.setItem(change.entityId, {
+    const current = await loadRemoteBatchProgress(change.entityId);
+    const stored = {
         ...applySyncFieldDelta(current, change),
         updatedAt: change.createdAt,
-    });
+    };
+    if (remoteApplyBatch) {
+        remoteApplyBatch.progress.set(change.entityId, stored);
+        return;
+    }
+    await progressStore.setItem(change.entityId, stored);
 };
 
 const applyRemotePreferenceChange = async change => {
@@ -854,6 +899,10 @@ const applyRemotePreferenceChange = async change => {
 };
 
 const applyRemoteImageChange = async (change, blob) => {
+    if (remoteApplyBatch) {
+        remoteApplyBatch.images.set(change.entityId, { change, blob });
+        return;
+    }
     if (change.operation === SYNC_OPERATIONS.DELETE) {
         await imageStore.removeItem(change.entityId);
         return;
@@ -885,19 +934,54 @@ const applyRemotePdfChange = async (change, blob) => {
 
 const localSyncDataStore = {
     beginBatch() {
-        remoteApplyBatch = { exams: new Map() };
+        remoteApplyBatch = {
+            exams: new Map(),
+            questionIndexes: new Map(),
+            progress: new Map(),
+            images: new Map(),
+        };
     },
     async endBatch() {
         const batch = remoteApplyBatch;
         remoteApplyBatch = null;
         if (!batch) return;
-        const entries = [...batch.exams.entries()];
-        for (let index = 0; index < entries.length; index += 4) {
-            await Promise.all(entries.slice(index, index + 4).map(([examId, exam]) => (
+        const examEntries = [...batch.exams.entries()];
+        for (let index = 0; index < examEntries.length; index += 8) {
+            await Promise.all(examEntries.slice(index, index + 8).map(([examId, exam]) => (
                 exam
-                    ? examsStore.setItem(examId, rebuildExamMetadata(exam))
+                    ? examsStore.setItem(examId, rebuildExamMetadata({
+                        ...exam,
+                        questions: (exam.questions || []).filter(Boolean),
+                    }))
                     : examsStore.removeItem(examId)
             )));
+        }
+        const progressEntries = [...batch.progress.entries()];
+        await writeLocalForageEntries(
+            {
+                setItem: (key, value) => value
+                    ? progressStore.setItem(key, value)
+                    : progressStore.removeItem(key),
+            },
+            progressEntries,
+            16
+        );
+        const imageEntries = [...batch.images.entries()];
+        for (let index = 0; index < imageEntries.length; index += 4) {
+            await Promise.all(imageEntries.slice(index, index + 4).map(
+                async ([entityId, { change, blob }]) => {
+                    if (change.operation === SYNC_OPERATIONS.DELETE) {
+                        await imageStore.removeItem(entityId);
+                        return;
+                    }
+                    const verifiedBlob = await verifyReceivedBlob(
+                        change,
+                        blob,
+                        'application/octet-stream'
+                    );
+                    await imageStore.setItem(entityId, verifiedBlob);
+                }
+            ));
         }
     },
     cancelBatch() {
@@ -1479,6 +1563,19 @@ const writeLocalForageEntries = async (store, entries, concurrency = 8) => {
     }
 };
 
+const prepareEntriesWithConcurrency = async (entries, prepare, concurrency = 4) => {
+    const prepared = new Array(entries.length);
+    let nextIndex = 0;
+    await Promise.all(Array.from({ length: Math.min(concurrency, entries.length) }, async () => {
+        while (nextIndex < entries.length) {
+            const index = nextIndex;
+            nextIndex += 1;
+            prepared[index] = await prepare(entries[index]);
+        }
+    }));
+    return prepared;
+};
+
 export const importLocalData = async (jsonData, strategy = 'overwrite', { includePdfs = true } = {}) => {
     if (!jsonData || typeof jsonData !== 'object') {
         throw new Error("Invalid backup data format");
@@ -1511,39 +1608,40 @@ export const importLocalData = async (jsonData, strategy = 'overwrite', { includ
     }
 
     // 現在のデータを消去する前に、すべての画像・PDFを復元可能な形式へ変換する。
-    const preparedImages = [];
-    for (const [key, value] of Object.entries(images || {})) {
-        preparedImages.push([key, isDataUrl(value) ? await dataUrlToBlob(value) : value]);
-    }
+    const preparedImages = await prepareEntriesWithConcurrency(
+        Object.entries(images || {}),
+        async ([key, value]) => [key, isDataUrl(value) ? await dataUrlToBlob(value) : value]
+    );
 
-    const preparedPdfs = [];
+    let preparedPdfs = [];
     if (includePdfs && pdfs && typeof pdfs === 'object') {
-        for (const [key, value] of Object.entries(pdfs)) {
-            preparedPdfs.push([key, {
+        preparedPdfs = await prepareEntriesWithConcurrency(
+            Object.entries(pdfs),
+            async ([key, value]) => [key, {
                 ...value,
                 blob: isDataUrl(value?.blob) ? await dataUrlToBlob(value.blob) : value?.blob,
-            }]);
-        }
+            }],
+            3
+        );
     }
 
-    // 1. 試験データのインポート
-    if (exams && typeof exams === 'object') {
-        await examsStore.clear();
-        await writeLocalForageEntries(examsStore, Object.entries(exams));
-    }
-
-    // 2. 進捗データのインポート
-    if (progress && typeof progress === 'object') {
-        await progressStore.clear();
-        await writeLocalForageEntries(progressStore, Object.entries(progress));
-    }
-
-    // 3. 画像データのインポート
-    await imageStore.clear();
-    await writeLocalForageEntries(imageStore, preparedImages, 4);
-
-    await pdfStore.clear();
-    await writeLocalForageEntries(pdfStore, preparedPdfs, 3);
+    // 変換がすべて成功してから各ストアを消去し、独立したストアへ並列に復元する。
+    await Promise.all([
+        exams && typeof exams === 'object' ? examsStore.clear() : Promise.resolve(),
+        progress && typeof progress === 'object' ? progressStore.clear() : Promise.resolve(),
+        imageStore.clear(),
+        pdfStore.clear(),
+    ]);
+    await Promise.all([
+        exams && typeof exams === 'object'
+            ? writeLocalForageEntries(examsStore, Object.entries(exams))
+            : Promise.resolve(),
+        progress && typeof progress === 'object'
+            ? writeLocalForageEntries(progressStore, Object.entries(progress), 16)
+            : Promise.resolve(),
+        writeLocalForageEntries(imageStore, preparedImages, 4),
+        writeLocalForageEntries(pdfStore, preparedPdfs, 3),
+    ]);
     writeLocalResumableSessions(sessions);
     await markSyncReconciliationSafely('manual-backup-import');
 };

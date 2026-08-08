@@ -149,6 +149,7 @@ const pullRemoteBatches = async ({
             `${conflict.entityType}:${String(conflict.entityId)}`,
             conflict,
         ])),
+        appliedChangeIds: new Set(),
     };
     const totalChanges = batches.reduce(
         (total, batch) => total + (Number(batch.changeCount) || 0),
@@ -168,6 +169,9 @@ const pullRemoteBatches = async ({
             await provider.downloadChangeBatch(descriptor),
             descriptor
         );
+        incomingContext.appliedChangeIds = typeof journal.findAppliedChangeIds === 'function'
+            ? await journal.findAppliedChangeIds(batch.changes.map(change => change.changeId))
+            : null;
         const supportsBatch = (
             typeof dataStore.beginBatch === 'function'
             && typeof dataStore.endBatch === 'function'
@@ -212,7 +216,11 @@ const pullRemoteBatches = async ({
             if (supportsBatch) {
                 await dataStore.endBatch();
                 if (typeof journal.markChangesApplied === 'function') {
-                    await journal.markChangesApplied(appliedChanges);
+                    await journal.markChangesApplied(
+                        appliedChanges,
+                        undefined,
+                        { skipExistingCheck: Boolean(incomingContext.appliedChangeIds) }
+                    );
                 } else {
                     for (const change of appliedChanges) await journal.markChangeApplied(change);
                 }

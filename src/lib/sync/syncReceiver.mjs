@@ -47,7 +47,10 @@ export const processIncomingSyncChange = async ({
     }
     const normalizedChange = validateIncomingSyncChange(change);
 
-    if (await journal.hasAppliedChange(normalizedChange.changeId)) {
+    const previouslyApplied = context?.appliedChangeIds
+        ? context.appliedChangeIds.has(normalizedChange.changeId)
+        : await journal.hasAppliedChange(normalizedChange.changeId);
+    if (previouslyApplied) {
         await journal.acknowledgeChanges([normalizedChange.changeId]);
         removeAcknowledgedPendingChange(context, normalizedChange.changeId);
         return { status: 'duplicate', change: normalizedChange };

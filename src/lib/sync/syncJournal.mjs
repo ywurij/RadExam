@@ -323,6 +323,21 @@ export class SyncJournal {
         return Boolean(await this.storage.getItem(`${APPLIED_PREFIX}${String(changeId)}`));
     }
 
+    async findAppliedChangeIds(changeIds) {
+        const targets = new Set(
+            (changeIds || []).filter(Boolean).map(changeId => String(changeId))
+        );
+        const applied = new Set();
+        if (targets.size === 0) return applied;
+        await this.storage.iterate((_value, key) => {
+            const normalizedKey = String(key);
+            if (!normalizedKey.startsWith(APPLIED_PREFIX)) return;
+            const changeId = normalizedKey.slice(APPLIED_PREFIX.length);
+            if (targets.has(changeId)) applied.add(changeId);
+        });
+        return applied;
+    }
+
     async markChangeApplied(change, appliedAt = this.now()) {
         if (!change?.changeId) {
             throw new Error('適用済みとして記録する変更にはchangeIdが必要です。');
@@ -340,15 +355,17 @@ export class SyncJournal {
         return record;
     }
 
-    async markChangesApplied(changes, appliedAt = this.now()) {
+    async markChangesApplied(changes, appliedAt = this.now(), { skipExistingCheck = false } = {}) {
         const candidates = (changes || []).filter(change => change?.changeId);
         const records = [];
         await runStorageOperationsInBatches(candidates, async change => {
             const key = `${APPLIED_PREFIX}${String(change.changeId)}`;
-            const existing = await this.storage.getItem(key);
-            if (existing) {
-                records.push(existing);
-                return;
+            if (!skipExistingCheck) {
+                const existing = await this.storage.getItem(key);
+                if (existing) {
+                    records.push(existing);
+                    return;
+                }
             }
             const record = {
                 changeId: String(change.changeId),
