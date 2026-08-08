@@ -10,36 +10,44 @@ import {
 } from '@/lib/localDb';
 import { refreshLocalExamData } from '@/lib/data';
 import {
+    checkGoogleDriveUpdates,
     connectGoogleDriveSync,
     disconnectGoogleDriveSync,
     getGoogleDriveSyncState,
     resetGoogleDriveSync,
     resolveGoogleDriveSyncConflict,
-    runGoogleDriveSync,
+    pullGoogleDriveUpdates,
+    pushGoogleDriveChanges,
 } from '@/lib/sync/googleDriveBrowserSync';
 import {
+    checkGoogleDriveDesktopUpdates,
     connectGoogleDriveDesktopSync,
     disconnectGoogleDriveDesktopSync,
     getGoogleDriveDesktopSyncState,
     resetGoogleDriveDesktopSync,
     resolveGoogleDriveDesktopSyncConflict,
-    runGoogleDriveDesktopSync,
+    pullGoogleDriveDesktopUpdates,
+    pushGoogleDriveDesktopChanges,
 } from '@/lib/sync/googleDriveDesktopSync';
 import {
+    checkOneDriveUpdates,
     connectOneDriveSync,
     disconnectOneDriveSync,
     getOneDriveSyncState,
     resetOneDriveSync,
     resolveOneDriveSyncConflict,
-    runOneDriveSync,
+    pullOneDriveUpdates,
+    pushOneDriveChanges,
 } from '@/lib/sync/oneDriveBrowserSync';
 import {
+    checkOneDriveDesktopUpdates,
     connectOneDriveDesktopSync,
     disconnectOneDriveDesktopSync,
     getOneDriveDesktopSyncState,
     resetOneDriveDesktopSync,
     resolveOneDriveDesktopSyncConflict,
-    runOneDriveDesktopSync,
+    pullOneDriveDesktopUpdates,
+    pushOneDriveDesktopChanges,
 } from '@/lib/sync/oneDriveDesktopSync';
 import { SYNC_PROVIDERS } from '@/lib/sync/syncProtocol.mjs';
 import styles from './sync.module.scss';
@@ -76,6 +84,9 @@ const formatDuration = value => {
 
 const describeDataStatus = state => {
     if (!state) return '確認中';
+    if (state.config?.remoteChangesAvailable) {
+        return `クラウドに未取得が${state.config.remoteChangeCount || 0}件`;
+    }
     if (state.dataStatus === 'verified') return '前回確認時点でクラウドと一致';
     if (state.dataStatus === 'local-changes') return `この端末に未送信が${state.pendingCount}件`;
     if (state.dataStatus === 'conflict') return `確認が必要な競合が${state.conflictCount}件`;
@@ -169,7 +180,7 @@ const describeConflictChange = change => {
     }));
 };
 
-export default function CloudSyncPage() {
+export default function CloudSyncPage({ embedded = false }) {
     const router = useRouter();
     const [selectedProvider, setSelectedProvider] = useState(SYNC_PROVIDERS.GOOGLE_DRIVE);
     const [syncState, setSyncState] = useState(null);
@@ -217,10 +228,12 @@ export default function CloudSyncPage() {
             setError(loadError.message || '同期状態を読み出せませんでした。');
         });
         window.addEventListener('radexam-cloud-sync-completed', refreshState);
+        window.addEventListener('radexam-cloud-update-status', refreshState);
         const handleProgress = event => setProgress(event.detail || null);
         window.addEventListener('radexam-cloud-sync-progress', handleProgress);
         return () => {
             window.removeEventListener('radexam-cloud-sync-completed', refreshState);
+            window.removeEventListener('radexam-cloud-update-status', refreshState);
             window.removeEventListener('radexam-cloud-sync-progress', handleProgress);
         };
     }, [refreshState]);
@@ -261,36 +274,52 @@ export default function CloudSyncPage() {
                     : connectGoogleDriveDesktopSync({ clientId })
         ), 'connecting');
         if (response) {
-            setMessage(`${providerName}への接続が完了しました。初回同期を開始します。`);
-            await new Promise(resolve => window.requestAnimationFrame(resolve));
-            const syncResponse = await runAction(() => (
-                isOneDrive
-                    ? isMobileTarget
-                        ? runOneDriveSync({ clientId })
-                        : runOneDriveDesktopSync({ clientId })
-                    : isMobileTarget
-                        ? runGoogleDriveSync({ clientId })
-                        : runGoogleDriveDesktopSync({ clientId })
-            ), 'initial-sync', { refreshExams: true });
-            if (syncResponse) {
-                setMessage(`接続と初回同期が完了しました。${describeSyncResult(syncResponse.result)}`);
-            }
+            setMessage(`${providerName}への接続が完了しました。取得または送信する操作を選んでください。`);
         }
     };
 
-    const handleSync = async () => {
+    const directionalAction = direction => {
+        if (isOneDrive && isMobileTarget) {
+            return direction === 'check' ? checkOneDriveUpdates
+                : direction === 'pull' ? pullOneDriveUpdates : pushOneDriveChanges;
+        }
+        if (isOneDrive) {
+            return direction === 'check' ? checkOneDriveDesktopUpdates
+                : direction === 'pull' ? pullOneDriveDesktopUpdates : pushOneDriveDesktopChanges;
+        }
+        if (isMobileTarget) {
+            return direction === 'check' ? checkGoogleDriveUpdates
+                : direction === 'pull' ? pullGoogleDriveUpdates : pushGoogleDriveChanges;
+        }
+        return direction === 'check' ? checkGoogleDriveDesktopUpdates
+            : direction === 'pull' ? pullGoogleDriveDesktopUpdates : pushGoogleDriveDesktopChanges;
+    };
+
+    const handleCheck = async () => {
+        const response = await runAction(
+            () => directionalAction('check')({ clientId }),
+            'checking'
+        );
+        if (response) setMessage(response.result.updatesAvailable
+            ? `クラウドに未取得の更新があります（${response.result.remoteChangeCount || 0}件）。`
+            : '更新を確認しました。クラウドに未取得の更新はありません。');
+    };
+
+    const handlePull = async () => {
         const response = await runAction(() => (
-            isOneDrive
-                ? isMobileTarget
-                    ? runOneDriveSync({ clientId })
-                    : runOneDriveDesktopSync({ clientId })
-                : isMobileTarget
-                    ? runGoogleDriveSync({ clientId })
-                    : runGoogleDriveDesktopSync({ clientId })
-        ), syncState?.initialSyncCompleted ? 'syncing' : 'initial-sync', {
+            directionalAction('pull')({ clientId })
+        ), 'pulling', {
             refreshExams: true,
         });
-        if (response) setMessage(describeSyncResult(response.result));
+        if (response) setMessage(`クラウドから更新を取得しました。受信 ${response.result.appliedChanges || 0}件。`);
+    };
+
+    const handlePush = async () => {
+        const response = await runAction(
+            () => directionalAction('push')({ clientId }),
+            'pushing'
+        );
+        if (response) setMessage(`この端末の変更を送信しました。送信 ${response.result.sentChanges || 0}件。`);
     };
 
     const handleResolveConflict = async (conflict, resolution) => {
@@ -406,18 +435,13 @@ export default function CloudSyncPage() {
         ), 'resetting');
         if (!response) return;
         setMessage(hard
-            ? `クラウド上の同期データ${response.deletedFiles}件を削除しました。初回同期を開始します。`
-            : '新しいクラウド同期領域へ切り替えました。初回同期を開始します。');
+            ? `クラウド上の同期データ${response.deletedFiles}件を削除しました。この端末から初回データを送信します。`
+            : '新しいクラウド同期領域へ切り替えました。この端末から初回データを送信します。');
         await new Promise(resolve => window.requestAnimationFrame(resolve));
-        const syncResponse = await runAction(() => (
-            isOneDrive
-                ? isMobileTarget
-                    ? runOneDriveSync({ clientId })
-                    : runOneDriveDesktopSync({ clientId })
-                : isMobileTarget
-                    ? runGoogleDriveSync({ clientId })
-                    : runGoogleDriveDesktopSync({ clientId })
-        ), 'initial-sync', { refreshExams: true });
+        const syncResponse = await runAction(
+            () => directionalAction('push')({ clientId }),
+            'pushing'
+        );
         if (syncResponse) {
             setMessage(`クラウド同期のリセットが完了しました。${describeSyncResult(syncResponse.result)}`);
         }
@@ -455,21 +479,25 @@ export default function CloudSyncPage() {
     const configurationMissing = !clientId;
     const unavailable = desktopBridgeUnavailable || configurationMissing;
     const busy = Boolean(busyPhase);
+    const Root = embedded ? 'section' : 'main';
 
     return (
-        <main className={styles.container}>
-            <header className={styles.header}>
+        <Root className={`${styles.container} ${embedded ? styles.embedded : ''}`}>
+            {!embedded && <header className={styles.header}>
                 <button type="button" onClick={() => router.push('/')} className={styles.backButton}>← 戻る</button>
                 <div>
                     <span className={styles.eyebrow}>CLOUD SYNC</span>
                     <h1>クラウド同期</h1>
                     <p>端末内のデータを本体として保ち、選択したクラウドのアプリ専用領域を介して差分を同期します。</p>
                 </div>
-            </header>
+            </header>}
 
             <section className={styles.localFirst}>
-                <strong>オフラインでも利用できます</strong>
-                <p>同期できない間も問題演習や編集は端末内へ保存され、次回の同期時に送信されます。</p>
+                <strong>端末内のデータが本体です</strong>
+                <p>
+                    オフラインでも利用できます。Mac/PC版で作成した内容は「送信」、
+                    モバイル版で受け取るときは「取得」を押してください。
+                </p>
             </section>
 
             <section className={styles.card}>
@@ -544,7 +572,9 @@ export default function CloudSyncPage() {
                         )}
                         <dl className={styles.details}>
                             <div><dt>アカウント</dt><dd>{syncState.config.accountLabel || providerName}</dd></div>
-                            <div><dt>最終同期</dt><dd>{formatDateTime(syncState.config.lastSyncAt)}</dd></div>
+                            <div><dt>最終確認</dt><dd>{formatDateTime(syncState.config.lastCheckedAt)}</dd></div>
+                            <div><dt>最終取得</dt><dd>{formatDateTime(syncState.config.lastPullAt)}</dd></div>
+                            <div><dt>最終送信</dt><dd>{formatDateTime(syncState.config.lastPushAt)}</dd></div>
                             <div><dt>データ状態</dt><dd>{describeDataStatus(syncState)}</dd></div>
                             <div><dt>未送信（残り）</dt><dd>{syncState.pendingCount}件</dd></div>
                             <div><dt>競合</dt><dd>{syncState.conflictCount}件</dd></div>
@@ -569,9 +599,8 @@ export default function CloudSyncPage() {
                             </div>
                         </dl>
                         <p className={styles.statusHelp}>
-                            「未送信（残り）0件」は、送るデータが残っていない状態です。
-                            各端末で0件かつクラウド更新番号が同じなら、
-                            同じクラウド変更まで反映されています。
+                            起動時・復帰時には更新の有無だけを確認します。
+                            実際のデータは「取得」または「送信」を押したときに移動します。
                         </p>
                         {syncState.config.lastSyncError && (
                             <p className={styles.syncError}>
@@ -596,24 +625,32 @@ export default function CloudSyncPage() {
                             <button
                                 type="button"
                                 className={styles.primaryButton}
-                                onClick={handleSync}
+                                onClick={handlePull}
                                 disabled={busy || unavailable}
                             >
-                                {busy
-                                    ? busyPhase === 'connecting'
-                                        ? '接続中…'
-                                        : busyPhase === 'initial-sync'
-                                            ? '初回同期中…'
-                                            : busyPhase === 'backup'
-                                                ? 'バックアップ作成中…'
-                                                : busyPhase === 'resetting'
-                                                    ? 'リセット中…'
-                                                    : '同期中…'
-                                    : !syncState.initialSyncCompleted
-                                        ? '初回同期を開始'
-                                    : syncState.hasSessionToken
-                                        ? '今すぐ同期'
-                                        : '再認証して同期'}
+                                {busyPhase === 'pulling'
+                                    ? '取得中…'
+                                    : syncState.initialSyncCompleted
+                                        ? '↓ クラウドから更新を取得'
+                                        : '↓ クラウドから初回取得'}
+                            </button>
+                            <button
+                                type="button"
+                                className={styles.primaryButton}
+                                onClick={handlePush}
+                                disabled={busy || unavailable || syncState.config.remoteChangesAvailable}
+                            >
+                                {busyPhase === 'pushing'
+                                    ? '送信中…'
+                                    : `↑ この端末の変更を送信（${syncState.pendingCount || 0}件）`}
+                            </button>
+                            <button
+                                type="button"
+                                className={styles.secondaryButton}
+                                onClick={handleCheck}
+                                disabled={busy || unavailable}
+                            >
+                                {busyPhase === 'checking' ? '確認中…' : '更新だけ確認'}
                             </button>
                             <button
                                 type="button"
@@ -626,6 +663,11 @@ export default function CloudSyncPage() {
                         </>
                     )}
                 </div>
+                {connected && syncState.config.remoteChangesAvailable && (
+                    <p className={styles.syncError}>
+                        クラウドに未取得の更新があります。送信前に更新を取得してください。
+                    </p>
+                )}
                 {busy && describeProgress(progress) && (
                     <div className={styles.progress} role="status">
                         <span>{describeProgress(progress)}</span>
@@ -765,6 +807,6 @@ export default function CloudSyncPage() {
                 <strong>手動バックアップも引き続き利用できます</strong>
                 <p>従来の.radexamファイルは、緊急復旧やクラウドを使わないデータ移動用として維持されます。</p>
             </aside>
-        </main>
+        </Root>
     );
 }

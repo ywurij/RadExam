@@ -1,7 +1,10 @@
 import {
+    checkLocalDataSyncUpdates,
     connectLocalSyncTracking,
     disconnectLocalSyncTracking,
     initializeLocalSyncTracking,
+    pullLocalDataFromCloud,
+    pushLocalDataToCloud,
     resolveLocalDataSyncConflict,
     synchronizeLocalData,
 } from '@/lib/localDb';
@@ -189,6 +192,47 @@ export const runOneDriveSync = async ({
     })
 );
 
+const runOneDriveDirection = ({ clientId, interactive = true, action }) => (
+    runExclusive(async () => {
+        const state = await getOneDriveSyncState();
+        if (!state.connected) throw new Error('先にOneDriveへ接続してください。');
+        const session = await authorizeSession(clientId, { interactive });
+        const user = await session.client.getCurrentUser();
+        const { accountId, accountLabel } = verifyAccount(user, state);
+        const root = await session.provider.ensureActiveSyncSpace();
+        if (state.config.cloudSyncId && state.config.cloudSyncId !== root.activeSyncId) {
+            const error = new Error('クラウド同期が別の端末でリセットされました。この端末を再接続してください。');
+            error.code = 'CLOUD_SYNC_RESET';
+            throw error;
+        }
+        if (!state.config.bootstrapCompleted) {
+            session.provider.reportProgress({ phase: 'preparing-local-data' });
+            await initializeLocalSyncTracking({
+                provider: SYNC_PROVIDERS.ONE_DRIVE,
+                accountId,
+                accountLabel,
+                deviceName: getDeviceName(),
+                cloudSyncId: root.activeSyncId,
+            });
+        }
+        const result = await action(session.provider);
+        return { result, state: await getOneDriveSyncState() };
+    })
+);
+
+export const checkOneDriveUpdates = options => runOneDriveDirection({
+    ...options,
+    action: checkLocalDataSyncUpdates,
+});
+export const pullOneDriveUpdates = options => runOneDriveDirection({
+    ...options,
+    action: pullLocalDataFromCloud,
+});
+export const pushOneDriveChanges = options => runOneDriveDirection({
+    ...options,
+    action: pushLocalDataToCloud,
+});
+
 export const resolveOneDriveSyncConflict = async ({
     clientId,
     conflictId,
@@ -209,7 +253,7 @@ export const resolveOneDriveSyncConflict = async ({
             resolution,
             resolveBlob: ref => session.provider.downloadBlob(ref.contentHash),
         });
-        const result = await synchronizeLocalData(session.provider);
+        const result = await pushLocalDataToCloud(session.provider);
         return { resolved, result, state: await getOneDriveSyncState() };
     })
 );
@@ -259,6 +303,6 @@ export const runOneDriveBackgroundSync = async ({ clientId } = {}) => {
     if (!activeSession?.tokenManager?.hasValidToken()) {
         return { status: 'skipped', reason: 'reauth-required' };
     }
-    const response = await runOneDriveSync({ clientId, interactive: false });
+    const response = await checkOneDriveUpdates({ clientId, interactive: false });
     return { status: 'completed', ...response };
 };

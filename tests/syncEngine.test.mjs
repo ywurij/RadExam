@@ -10,7 +10,12 @@ import {
     createInMemorySyncCloud,
     InMemorySyncProvider,
 } from '../src/lib/sync/inMemorySyncProvider.mjs';
-import { runSyncCycle } from '../src/lib/sync/syncEngine.mjs';
+import {
+    checkSyncUpdates,
+    runSyncCycle,
+    runSyncPull,
+    runSyncPush,
+} from '../src/lib/sync/syncEngine.mjs';
 
 class MemoryStorage {
     constructor() {
@@ -100,6 +105,95 @@ const syncDevice = device => runSyncCycle({
         );
         return { blob, contentHash: ref.contentHash };
     },
+});
+
+test('checks cloud updates without applying or sending data', async () => {
+    const cloud = createInMemorySyncCloud();
+    const source = await createDevice('device-a', new InMemorySyncProvider(cloud));
+    const target = await createDevice('device-b', new InMemorySyncProvider(cloud));
+    await source.journal.recordChanges([{
+        entityType: SYNC_ENTITY_TYPES.PROGRESS,
+        entityId: 'check-only',
+        changedFields: ['status'],
+        payload: { status: 'correct' },
+    }]);
+    await syncDevice(source);
+    await target.journal.recordChanges([{
+        entityType: SYNC_ENTITY_TYPES.PROGRESS,
+        entityId: 'local-only',
+        changedFields: ['status'],
+        payload: { status: 'review' },
+    }]);
+
+    const result = await checkSyncUpdates({ provider: target.provider, journal: target.journal });
+
+    assert.equal(result.updatesAvailable, true);
+    assert.equal(result.remoteChangeCount, 1);
+    assert.equal(target.dataStore.get(SYNC_ENTITY_TYPES.PROGRESS, 'check-only'), undefined);
+    assert.equal((await target.journal.listPendingChanges()).length, 1);
+    assert.equal(cloud.manifest.batches.length, 1);
+});
+
+test('pull applies remote changes without sending local changes', async () => {
+    const cloud = createInMemorySyncCloud();
+    const source = await createDevice('device-a', new InMemorySyncProvider(cloud));
+    const target = await createDevice('device-b', new InMemorySyncProvider(cloud));
+    await source.journal.recordChanges([{
+        entityType: SYNC_ENTITY_TYPES.PROGRESS,
+        entityId: 'remote-change',
+        changedFields: ['status'],
+        payload: { status: 'correct' },
+    }]);
+    await syncDevice(source);
+    await target.journal.recordChanges([{
+        entityType: SYNC_ENTITY_TYPES.PROGRESS,
+        entityId: 'local-change',
+        changedFields: ['status'],
+        payload: { status: 'review' },
+    }]);
+
+    const result = await runSyncPull({
+        provider: target.provider,
+        journal: target.journal,
+        dataStore: target.dataStore,
+    });
+
+    assert.equal(result.appliedChanges, 1);
+    assert.equal(target.dataStore.get(SYNC_ENTITY_TYPES.PROGRESS, 'remote-change').status, 'correct');
+    assert.equal((await target.journal.listPendingChanges()).length, 1);
+    assert.equal(cloud.manifest.batches.length, 1);
+});
+
+test('push requires remote changes to be pulled first', async () => {
+    const cloud = createInMemorySyncCloud();
+    const source = await createDevice('device-a', new InMemorySyncProvider(cloud));
+    const target = await createDevice('device-b', new InMemorySyncProvider(cloud));
+    await source.journal.recordChanges([{
+        entityType: SYNC_ENTITY_TYPES.PROGRESS,
+        entityId: 'remote-first',
+        changedFields: ['status'],
+        payload: { status: 'correct' },
+    }]);
+    await syncDevice(source);
+    await target.journal.recordChanges([{
+        entityType: SYNC_ENTITY_TYPES.PROGRESS,
+        entityId: 'local-second',
+        changedFields: ['status'],
+        payload: { status: 'review' },
+    }]);
+
+    await assert.rejects(
+        runSyncPush({ provider: target.provider, journal: target.journal }),
+        error => error.code === 'REMOTE_UPDATES_REQUIRED'
+    );
+    await runSyncPull({
+        provider: target.provider,
+        journal: target.journal,
+        dataStore: target.dataStore,
+    });
+    const result = await runSyncPush({ provider: target.provider, journal: target.journal });
+    assert.equal(result.pushedChanges, 1);
+    assert.equal(cloud.manifest.batches.length, 2);
 });
 
 test('syncs creation and deletion of a resumable session between devices', async () => {

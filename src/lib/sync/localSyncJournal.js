@@ -28,7 +28,32 @@ export const checkAndStoreLocalSyncConflict = async remoteChange => {
     if (!conflict) return null;
     return localSyncJournal.recordConflict(conflict);
 };
-export const listLocalSyncConflicts = options => localSyncJournal.listConflicts(options);
+export const reconcileEquivalentLocalSyncConflicts = async () => {
+    const conflicts = await localSyncJournal.listConflicts();
+    let resolvedCount = 0;
+    for (const conflict of conflicts) {
+        const stillConflicts = detectSyncConflict({
+            remoteChange: conflict.remoteChange,
+            pendingLocalChanges: conflict.localChanges || [],
+            detectedAt: conflict.detectedAt,
+        });
+        if (stillConflicts) continue;
+        await localSyncJournal.markChangeApplied(conflict.remoteChange);
+        await localSyncJournal.discardChanges(conflict.localChangeIds || []);
+        await localSyncJournal.resolveConflict(conflict.conflictId, {
+            choice: 'equivalent-values',
+            automatic: true,
+        });
+        resolvedCount += 1;
+    }
+    return resolvedCount;
+};
+export const listLocalSyncConflicts = async options => {
+    if (!options?.status || options.status === 'pending') {
+        await reconcileEquivalentLocalSyncConflicts();
+    }
+    return localSyncJournal.listConflicts(options);
+};
 export const resolveLocalSyncConflict = (conflictId, resolution) => (
     localSyncJournal.resolveConflict(conflictId, resolution)
 );

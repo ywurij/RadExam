@@ -2,7 +2,6 @@
 
 import { useEffect } from 'react';
 import { isMobileTarget } from '@/lib/appTarget';
-import { refreshLocalExamData } from '@/lib/data';
 import { runGoogleDriveBackgroundSync } from '@/lib/sync/googleDriveBrowserSync';
 import { runGoogleDriveDesktopBackgroundSync } from '@/lib/sync/googleDriveDesktopSync';
 import { runOneDriveBackgroundSync } from '@/lib/sync/oneDriveBrowserSync';
@@ -13,7 +12,6 @@ const GOOGLE_DESKTOP_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_DESKTOP_CLIENT_I
 const MICROSOFT_CLIENT_ID = process.env.NEXT_PUBLIC_MICROSOFT_CLIENT_ID || '';
 const MICROSOFT_DESKTOP_CLIENT_ID = process.env.NEXT_PUBLIC_MICROSOFT_DESKTOP_CLIENT_ID || '';
 const MINIMUM_SYNC_INTERVAL_MS = 15_000;
-const EDIT_SYNC_DELAY_MS = 45_000;
 const PERIODIC_SYNC_INTERVAL_MS = 15 * 60_000;
 
 export default function CloudSyncLifecycle() {
@@ -28,9 +26,8 @@ export default function CloudSyncLifecycle() {
 
         let disposed = false;
         let lastAttemptAt = 0;
-        let editSyncTimer = null;
 
-        const requestSync = async () => {
+        const requestUpdateCheck = async () => {
             const now = Date.now();
             if (disposed || now - lastAttemptAt < MINIMUM_SYNC_INTERVAL_MS) return;
             lastAttemptAt = now;
@@ -56,34 +53,28 @@ export default function CloudSyncLifecycle() {
                     if (response.status === 'completed') break;
                 }
                 if (response.status === 'completed') {
-                    await refreshLocalExamData();
-                    window.dispatchEvent(new CustomEvent('radexam-cloud-sync-completed'));
+                    window.dispatchEvent(new CustomEvent('radexam-cloud-update-status', {
+                        detail: response.result || response,
+                    }));
                 }
             } catch (error) {
-                // 通常利用は止めず、同期画面に保存されたエラーを表示する。
-                console.warn('Background cloud sync failed:', error);
+                // 通常利用は止めず、データ管理画面に保存されたエラーを表示する。
+                console.warn('Background cloud update check failed:', error);
             }
         };
         const handleVisibilityChange = () => {
-            if (document.visibilityState === 'visible') requestSync();
-        };
-        const handleLocalChange = () => {
-            if (editSyncTimer) window.clearTimeout(editSyncTimer);
-            editSyncTimer = window.setTimeout(requestSync, EDIT_SYNC_DELAY_MS);
+            if (document.visibilityState === 'visible') requestUpdateCheck();
         };
 
-        requestSync();
-        const periodicTimer = window.setInterval(requestSync, PERIODIC_SYNC_INTERVAL_MS);
+        requestUpdateCheck();
+        const periodicTimer = window.setInterval(requestUpdateCheck, PERIODIC_SYNC_INTERVAL_MS);
         document.addEventListener('visibilitychange', handleVisibilityChange);
-        window.addEventListener('online', requestSync);
-        window.addEventListener('radexam-local-sync-change', handleLocalChange);
+        window.addEventListener('online', requestUpdateCheck);
         return () => {
             disposed = true;
-            if (editSyncTimer) window.clearTimeout(editSyncTimer);
             window.clearInterval(periodicTimer);
             document.removeEventListener('visibilitychange', handleVisibilityChange);
-            window.removeEventListener('online', requestSync);
-            window.removeEventListener('radexam-local-sync-change', handleLocalChange);
+            window.removeEventListener('online', requestUpdateCheck);
         };
     }, []);
 

@@ -1,7 +1,10 @@
 import {
+    checkLocalDataSyncUpdates,
     connectLocalSyncTracking,
     disconnectLocalSyncTracking,
     initializeLocalSyncTracking,
+    pullLocalDataFromCloud,
+    pushLocalDataToCloud,
     resolveLocalDataSyncConflict,
     synchronizeLocalData,
 } from '@/lib/localDb';
@@ -186,6 +189,50 @@ export const runGoogleDriveSync = async ({
     });
 };
 
+const runGoogleDriveDirection = ({ clientId, interactive = true, action }) => (
+    runExclusive(async () => {
+        const state = await getGoogleDriveSyncState();
+        if (!state.connected) throw new Error('先にGoogle Driveへ接続してください。');
+        const session = await authorizeSession(clientId, { prompt: interactive ? '' : undefined });
+        const user = await session.client.getCurrentUser();
+        const accountId = user?.permissionId || user?.emailAddress;
+        if (String(accountId) !== String(state.config.accountId)) {
+            throw new Error('接続済みとは別のGoogleアカウントです。正しいアカウントで再認証してください。');
+        }
+        const root = await session.provider.ensureActiveSyncSpace();
+        if (state.config.cloudSyncId && state.config.cloudSyncId !== root.activeSyncId) {
+            const error = new Error('クラウド同期が別の端末でリセットされました。この端末を再接続してください。');
+            error.code = 'CLOUD_SYNC_RESET';
+            throw error;
+        }
+        if (!state.config.bootstrapCompleted) {
+            session.provider.reportProgress({ phase: 'preparing-local-data' });
+            await initializeLocalSyncTracking({
+                provider: SYNC_PROVIDERS.GOOGLE_DRIVE,
+                accountId,
+                accountLabel: user?.emailAddress || user?.displayName || 'Google Drive',
+                deviceName: getDeviceName(),
+                cloudSyncId: root.activeSyncId,
+            });
+        }
+        const result = await action(session.provider);
+        return { result, state: await getGoogleDriveSyncState() };
+    })
+);
+
+export const checkGoogleDriveUpdates = options => runGoogleDriveDirection({
+    ...options,
+    action: checkLocalDataSyncUpdates,
+});
+export const pullGoogleDriveUpdates = options => runGoogleDriveDirection({
+    ...options,
+    action: pullLocalDataFromCloud,
+});
+export const pushGoogleDriveChanges = options => runGoogleDriveDirection({
+    ...options,
+    action: pushLocalDataToCloud,
+});
+
 export const resolveGoogleDriveSyncConflict = async ({
     clientId,
     conflictId,
@@ -209,7 +256,7 @@ export const resolveGoogleDriveSyncConflict = async ({
             resolution,
             resolveBlob: ref => session.provider.downloadBlob(ref.contentHash),
         });
-        const result = await synchronizeLocalData(session.provider);
+        const result = await pushLocalDataToCloud(session.provider);
         return {
             resolved,
             result,
@@ -273,6 +320,6 @@ export const runGoogleDriveBackgroundSync = async ({ clientId } = {}) => {
     if (!activeSession?.tokenManager?.hasValidToken()) {
         return { status: 'skipped', reason: 'reauth-required' };
     }
-    const response = await runGoogleDriveSync({ clientId, interactive: false });
+    const response = await checkGoogleDriveUpdates({ clientId, interactive: false });
     return { status: 'completed', ...response };
 };

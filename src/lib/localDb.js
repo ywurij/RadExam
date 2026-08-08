@@ -32,7 +32,12 @@ import {
 } from '@/lib/sync/localSyncJournal';
 import { processIncomingSyncChange } from '@/lib/sync/syncReceiver.mjs';
 import { resolveStoredSyncConflict } from '@/lib/sync/syncConflictResolution.mjs';
-import { runSyncCycle } from '@/lib/sync/syncEngine.mjs';
+import {
+    checkSyncUpdates,
+    runSyncCycle,
+    runSyncPull,
+    runSyncPush,
+} from '@/lib/sync/syncEngine.mjs';
 
 // --- インスタンスの設定 ---
 
@@ -1023,8 +1028,7 @@ export const getLocalSyncBlob = async ({ kind, localKey, contentHash } = {}) => 
 /**
  * 接続済みのクラウドアダプターを使って、受信してから送信する1同期サイクルを実行する。
  */
-export const synchronizeLocalData = async provider => (
-    runSyncCycle({
+const createLocalSyncOptions = provider => ({
         provider,
         journal: localSyncJournal,
         dataStore: localSyncDataStore,
@@ -1048,8 +1052,18 @@ export const synchronizeLocalData = async provider => (
             const backup = await parseBackupArchiveBlob(blob);
             await importLocalData(backup, 'overwrite');
         },
-    })
-);
+    });
+
+export const checkLocalDataSyncUpdates = provider => checkSyncUpdates({
+    provider,
+    journal: localSyncJournal,
+});
+
+export const pullLocalDataFromCloud = provider => runSyncPull(createLocalSyncOptions(provider));
+
+export const pushLocalDataToCloud = provider => runSyncPush(createLocalSyncOptions(provider));
+
+export const synchronizeLocalData = provider => runSyncCycle(createLocalSyncOptions(provider));
 
 // --- カスタム試験 (Custom Exams) 関連のAPI ---
 

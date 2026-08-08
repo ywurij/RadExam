@@ -1,7 +1,10 @@
 import {
+    checkLocalDataSyncUpdates,
     connectLocalSyncTracking,
     disconnectLocalSyncTracking,
     initializeLocalSyncTracking,
+    pullLocalDataFromCloud,
+    pushLocalDataToCloud,
     resolveLocalDataSyncConflict,
     synchronizeLocalData,
 } from '@/lib/localDb';
@@ -183,6 +186,58 @@ export const runGoogleDriveDesktopSync = async ({
     })
 );
 
+const runGoogleDriveDesktopDirection = ({ clientId, interactive = true, action }) => (
+    runExclusive(async () => {
+        const state = await getGoogleDriveDesktopSyncState({ clientId });
+        if (!state.connected) throw new Error('先にGoogle Driveへ接続してください。');
+        const session = createSession(clientId);
+        if (!state.hasSessionToken) {
+            if (!interactive) {
+                const error = new Error('Google Driveへの再認証が必要です。');
+                error.requiresReauth = true;
+                throw error;
+            }
+            await session.bridge.authorize(clientId);
+        }
+        const user = await session.client.getCurrentUser();
+        const accountId = user?.permissionId || user?.emailAddress;
+        if (String(accountId) !== String(state.config.accountId)) {
+            throw new Error('接続済みとは別のGoogleアカウントです。接続を解除してから再接続してください。');
+        }
+        const root = await session.provider.ensureActiveSyncSpace();
+        if (state.config.cloudSyncId && state.config.cloudSyncId !== root.activeSyncId) {
+            const error = new Error('クラウド同期が別の端末でリセットされました。この端末を再接続してください。');
+            error.code = 'CLOUD_SYNC_RESET';
+            throw error;
+        }
+        if (!state.config.bootstrapCompleted) {
+            session.provider.reportProgress({ phase: 'preparing-local-data' });
+            await initializeLocalSyncTracking({
+                provider: SYNC_PROVIDERS.GOOGLE_DRIVE,
+                accountId,
+                accountLabel: user?.emailAddress || user?.displayName || 'Google Drive',
+                deviceName: `RadExam ${globalThis.navigator?.platform || 'Mac/PC'}`,
+                cloudSyncId: root.activeSyncId,
+            });
+        }
+        const result = await action(session.provider);
+        return { result, state: await getGoogleDriveDesktopSyncState({ clientId }) };
+    })
+);
+
+export const checkGoogleDriveDesktopUpdates = options => runGoogleDriveDesktopDirection({
+    ...options,
+    action: checkLocalDataSyncUpdates,
+});
+export const pullGoogleDriveDesktopUpdates = options => runGoogleDriveDesktopDirection({
+    ...options,
+    action: pullLocalDataFromCloud,
+});
+export const pushGoogleDriveDesktopChanges = options => runGoogleDriveDesktopDirection({
+    ...options,
+    action: pushLocalDataToCloud,
+});
+
 export const resolveGoogleDriveDesktopSyncConflict = async ({
     clientId,
     conflictId,
@@ -207,7 +262,7 @@ export const resolveGoogleDriveDesktopSyncConflict = async ({
             resolution,
             resolveBlob: ref => session.provider.downloadBlob(ref.contentHash),
         });
-        const result = await synchronizeLocalData(session.provider);
+        const result = await pushLocalDataToCloud(session.provider);
         return {
             resolved,
             result,
@@ -275,7 +330,7 @@ export const runGoogleDriveDesktopBackgroundSync = async ({ clientId } = {}) => 
     if (globalThis.navigator?.onLine === false) {
         return { status: 'skipped', reason: 'offline' };
     }
-    const response = await runGoogleDriveDesktopSync({
+    const response = await checkGoogleDriveDesktopUpdates({
         clientId,
         interactive: false,
     });

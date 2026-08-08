@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import PdfClipper from '@/components/PdfClipper';
 import StructuredLegendEditor, { createStructuredLegendFromText } from '@/components/StructuredLegendEditor';
+import CloudSyncPage from '@/app/sync/page';
 import adminStyles from './AdminEdit.module.scss';
 
 import { initializeLocalExams, getExamTypes } from '@/lib/data';
@@ -2902,7 +2903,7 @@ export default function AdminPage() {
     const [previewImageModal, setPreviewImageModal] = useState(null);
     const [importMode, setImportMode] = useState('new'); // 'new' or 'existing'
     const [examCategory, setExamCategory] = useState('1'); // '1': 放射線科, '2': 放射線診断, '3': 核医学, '4': IVR
-    const [activeTab, setActiveTab] = useState('import'); // 'import', 'manage'
+    const [activeTab, setActiveTab] = useState('import'); // 'import', 'cloud', 'manage'
     const [editingExamId, setEditingExamId] = useState('');
     const [editingExamName, setEditingExamName] = useState('');
     const [editingQuestions, setEditingQuestions] = useState([]);
@@ -5004,7 +5005,7 @@ export default function AdminPage() {
             }}>
                 <div>
                     <h1 style={{ fontSize: '1.8rem', fontWeight: 800, margin: 0, color: '#1a202c' }}>
-                        ⚙️ 試験管理ダッシュボード
+                        ⚙️ データ管理ダッシュボード
                     </h1>
                     <p style={{ margin: '0.2rem 0 0 0', color: '#718096', fontSize: '0.9rem' }}>
                         PDFから抽出した試験問題の追加、管理、バックアップをアプリ上で行います。
@@ -5041,6 +5042,20 @@ export default function AdminPage() {
                     📥 試験データインポート
                 </button>
                 <button
+                    onClick={() => setActiveTab('cloud')}
+                    style={{
+                        padding: '0.5rem 1rem',
+                        background: activeTab === 'cloud' ? '#3182ce' : '#fff',
+                        color: activeTab === 'cloud' ? '#fff' : '#4a5568',
+                        border: '1px solid #cbd5e0',
+                        borderRadius: '0.375rem',
+                        fontWeight: 'bold',
+                        cursor: 'pointer'
+                    }}
+                >
+                    ☁️ 端末間共有
+                </button>
+                <button
                     onClick={() => setActiveTab('manage')}
                     style={{
                         padding: '0.5rem 1rem',
@@ -5055,6 +5070,18 @@ export default function AdminPage() {
                     🛠 データ管理 / バックアップ
                 </button>
             </div>
+
+            {activeTab === 'cloud' && (
+                <div style={{
+                    background: '#fff',
+                    padding: '1.5rem',
+                    borderRadius: '0.5rem',
+                    boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+                    marginBottom: '1.5rem'
+                }}>
+                    <CloudSyncPage embedded />
+                </div>
+            )}
 
             {activeTab === 'import' && (
                 parsedQuestions.length === 0 ? (

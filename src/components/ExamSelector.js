@@ -325,13 +325,10 @@ export default function ExamSelector() {
                     <button type="button" onClick={() => router.push('/usage')}>
                         ❓ 使い方
                     </button>
-                    <button type="button" onClick={() => router.push('/sync')}>
-                        ☁️ クラウド同期
-                    </button>
                     {isMobileTarget ? <button type="button" onClick={() => router.push('/data')} className={styles.dataButton}>
-                        ⇄ データ転送
+                        ⇄ データ管理
                     </button> : APP_FEATURES.examManagement && <button type="button" onClick={() => router.push('/admin')} className={styles.adminButton}>
-                        ⚙️ 試験管理
+                        ⚙️ データ管理
                     </button>}
             </div>
 
@@ -342,7 +339,7 @@ export default function ExamSelector() {
                 {!isLoadingExams && exams.length === 0 && <div className={styles.emptyState}>
                     <strong>試験データがまだありません</strong>
                     <p>{isMobileTarget ? 'Mac/PC版で書き出したRadExamバックアップ（.radexam）を登録してください。' : '試験管理からPDFまたはバックアップデータを登録してください。'}</p>
-                    <button type="button" onClick={() => router.push(isMobileTarget ? '/data' : '/admin')}>{isMobileTarget ? 'データ転送を開く' : '試験管理を開く'}</button>
+                    <button type="button" onClick={() => router.push(isMobileTarget ? '/data' : '/admin')}>データ管理を開く</button>
                 </div>}
                 <div className={styles.examGrid} onPointerMove={(event) => {
                     if (!draggingExamId) return;

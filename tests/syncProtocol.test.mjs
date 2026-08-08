@@ -529,6 +529,47 @@ test('holds the same option edit as a conflict', () => {
     assert.equal(conflict.remoteChange.changeId, 'remote-1');
 });
 
+test('does not conflict when different devices record the same field value', () => {
+    const remoteChange = {
+        changeId: 'remote-same',
+        deviceId: 'remote-device',
+        entityType: SYNC_ENTITY_TYPES.QUESTION,
+        entityId: 'exam::2025001',
+        operation: SYNC_OPERATIONS.UPSERT,
+        changedFields: ['question', 'options.c'],
+        payload: { question: '同じ問題文', options: { c: '同じ選択肢' } },
+    };
+    const localChange = {
+        changeId: 'local-same',
+        deviceId: 'local-device',
+        entityType: SYNC_ENTITY_TYPES.QUESTION,
+        entityId: 'exam::2025001',
+        operation: SYNC_OPERATIONS.UPSERT,
+        changedFields: ['question', 'options'],
+        payload: { question: '同じ問題文', options: { c: '同じ選択肢' } },
+    };
+
+    assert.equal(detectSyncConflict({
+        remoteChange,
+        pendingLocalChanges: [localChange],
+    }), null);
+});
+
+test('does not conflict when both devices delete the same entity', () => {
+    const makeDelete = (changeId, deviceId) => ({
+        changeId,
+        deviceId,
+        entityType: SYNC_ENTITY_TYPES.QUESTION,
+        entityId: 'exam::deleted',
+        operation: SYNC_OPERATIONS.DELETE,
+        changedFields: [],
+    });
+    assert.equal(detectSyncConflict({
+        remoteChange: makeDelete('remote-delete', 'remote-device'),
+        pendingLocalChanges: [makeDelete('local-delete', 'local-device')],
+    }), null);
+});
+
 test('holds delete versus edit as a conflict and stores its resolution', async () => {
     const remoteChange = {
         changeId: 'remote-delete',

@@ -629,6 +629,217 @@ const pushLocalBatches = async ({
     return total;
 };
 
+const inspectRemoteUpdates = async ({ journal, manifest }) => {
+    const config = await journal.getConfig();
+    const unappliedBatches = [];
+    for (const batch of manifest.batches) {
+        const alreadyApplied = typeof journal.hasAppliedBatch === 'function'
+            ? await journal.hasAppliedBatch(batch.batchId)
+            : batch.generation <= (Number(config.lastPulledGeneration) || 0);
+        if (!alreadyApplied) unappliedBatches.push(batch);
+    }
+    const snapshotAvailable = Boolean(
+        manifest.latestSnapshot
+        && !config.lastAppliedSnapshotId
+        && Number(config.lastPulledGeneration || 0) === 0
+        && Number(config.lastPushedGeneration || 0) === 0
+    );
+    return {
+        cloudGeneration: Number(manifest.generation) || 0,
+        remoteBatchCount: unappliedBatches.length,
+        remoteChangeCount: unappliedBatches.reduce(
+            (total, batch) => total + (Number(batch.changeCount) || 0),
+            0
+        ),
+        snapshotAvailable,
+        updatesAvailable: snapshotAvailable || unappliedBatches.length > 0,
+    };
+};
+
+const assertSyncReady = async ({ provider, journal, dataStoreRequired = false, dataStore }) => {
+    assertSyncProvider(provider);
+    if (!journal || (dataStoreRequired && !dataStore?.applyChange)) {
+        throw new Error(dataStoreRequired
+            ? '同期にはjournalとdataStoreが必要です。'
+            : '同期にはjournalが必要です。');
+    }
+    const config = await journal.getConfig();
+    return Boolean(config.enabled && config.bootstrapCompleted);
+};
+
+const recordSyncFailure = async (journal, error) => {
+    try {
+        await journal.configure({
+            lastSyncError: error instanceof Error ? error.message : String(error),
+            lastSyncErrorAt: new Date().toISOString(),
+        });
+    } catch {
+        // 元の同期エラーを優先する。
+    }
+};
+
+export const checkSyncUpdates = async ({ provider, journal }) => {
+    if (!await assertSyncReady({ provider, journal })) return { status: 'disabled' };
+    const startedAtMs = Date.now();
+    try {
+        const remote = await readManifestForSync(provider);
+        const manifest = validateSyncManifest(remote.manifest);
+        const summary = await inspectRemoteUpdates({ journal, manifest });
+        const checkedAt = new Date().toISOString();
+        const pendingChanges = (await journal.listPendingChanges()).length;
+        await journal.configure({
+            lastCheckedAt: checkedAt,
+            lastKnownCloudGeneration: summary.cloudGeneration,
+            remoteChangesAvailable: summary.updatesAvailable,
+            remoteChangeCount: summary.remoteChangeCount,
+            lastSyncError: null,
+            lastSyncErrorAt: null,
+        });
+        return {
+            status: 'completed',
+            ...summary,
+            pendingChanges,
+            checkedAt,
+            durationMs: Date.now() - startedAtMs,
+        };
+    } catch (error) {
+        await recordSyncFailure(journal, error);
+        throw error;
+    }
+};
+
+export const runSyncPull = async ({
+    provider,
+    journal,
+    dataStore,
+    restoreLocalSnapshot,
+}) => {
+    if (!await assertSyncReady({ provider, journal, dataStore, dataStoreRequired: true })) {
+        return { status: 'disabled' };
+    }
+    const startedAtMs = Date.now();
+    try {
+        const remote = await readManifestForSync(provider);
+        const manifest = validateSyncManifest(remote.manifest);
+        const snapshotPull = await restoreRemoteSnapshotIfNeeded({
+            provider,
+            journal,
+            manifest,
+            restoreLocalSnapshot,
+        });
+        const pull = await pullRemoteBatches({ provider, journal, dataStore, manifest });
+        const finishedAt = new Date().toISOString();
+        const remaining = await inspectRemoteUpdates({ journal, manifest });
+        await journal.configure({
+            lastPullAt: finishedAt,
+            lastSyncAt: finishedAt,
+            lastVerifiedAt: finishedAt,
+            lastKnownCloudGeneration: remaining.cloudGeneration,
+            remoteChangesAvailable: remaining.updatesAvailable,
+            remoteChangeCount: remaining.remoteChangeCount,
+            lastSyncDurationMs: Date.now() - startedAtMs,
+            lastSyncReceivedChanges: pull.appliedChanges,
+            lastSyncSentChanges: 0,
+            lastSyncError: null,
+            lastSyncErrorAt: null,
+        });
+        return {
+            status: 'completed',
+            ...snapshotPull,
+            ...pull,
+            ...remaining,
+            finishedAt,
+            pendingChanges: (await journal.listPendingChanges()).length,
+            durationMs: Date.now() - startedAtMs,
+        };
+    } catch (error) {
+        await recordSyncFailure(journal, error);
+        throw error;
+    }
+};
+
+export const runSyncPush = async ({
+    provider,
+    journal,
+    getLocalBlob,
+    maxManifestRetries = 3,
+    maxPushBatches = 20,
+    createLocalSnapshot,
+    snapshotThreshold = MAX_CHANGES_PER_BATCH + 1,
+}) => {
+    if (!await assertSyncReady({ provider, journal })) return { status: 'disabled' };
+    const startedAtMs = Date.now();
+    try {
+        const remote = await readManifestForSync(provider);
+        const manifest = validateSyncManifest(remote.manifest);
+        const remoteUpdates = await inspectRemoteUpdates({ journal, manifest });
+        if (remoteUpdates.updatesAvailable) {
+            const error = new Error('クラウドに未取得の更新があります。先に「クラウドから更新を取得」を実行してください。');
+            error.code = 'REMOTE_UPDATES_REQUIRED';
+            throw error;
+        }
+        const snapshotPush = await commitInitialSnapshot({
+            provider,
+            journal,
+            manifest,
+            revision: remote.revision,
+            createLocalSnapshot,
+            maxManifestRetries,
+            snapshotThreshold,
+        });
+        const push = await pushLocalBatches({
+            provider,
+            journal,
+            getLocalBlob,
+            maxManifestRetries,
+            maxPushBatches,
+            remoteHint: snapshotPush.createdSnapshot ? null : remote,
+        });
+        const periodicSnapshot = await commitPeriodicSnapshotIfDue({
+            provider,
+            journal,
+            createLocalSnapshot,
+            maxManifestRetries,
+        });
+        const finishedAt = new Date().toISOString();
+        const finalConfig = await journal.getConfig();
+        const lastKnownCloudGeneration = Math.max(
+            remoteUpdates.cloudGeneration,
+            Number(finalConfig.lastPushedGeneration) || 0
+        );
+        const sentChanges = (snapshotPush.coveredChanges || 0) + (push.pushedChanges || 0);
+        await journal.configure({
+            lastPushAt: finishedAt,
+            lastSyncAt: finishedAt,
+            lastVerifiedAt: finishedAt,
+            lastKnownCloudGeneration,
+            remoteChangesAvailable: false,
+            remoteChangeCount: 0,
+            lastSyncDurationMs: Date.now() - startedAtMs,
+            lastSyncSentChanges: sentChanges,
+            lastSyncReceivedChanges: 0,
+            lastSyncCreatedSnapshot: Boolean(snapshotPush.createdSnapshot),
+            lastSyncSnapshotChanges: snapshotPush.coveredChanges || 0,
+            lastSyncError: null,
+            lastSyncErrorAt: null,
+        });
+        return {
+            status: 'completed',
+            ...snapshotPush,
+            ...push,
+            ...periodicSnapshot,
+            finishedAt,
+            lastKnownCloudGeneration,
+            pendingChanges: (await journal.listPendingChanges()).length,
+            sentChanges,
+            durationMs: Date.now() - startedAtMs,
+        };
+    } catch (error) {
+        await recordSyncFailure(journal, error);
+        throw error;
+    }
+};
+
 export const runSyncCycle = async ({
     provider,
     journal,

@@ -1,7 +1,10 @@
 import {
+    checkLocalDataSyncUpdates,
     connectLocalSyncTracking,
     disconnectLocalSyncTracking,
     initializeLocalSyncTracking,
+    pullLocalDataFromCloud,
+    pushLocalDataToCloud,
     resolveLocalDataSyncConflict,
     synchronizeLocalData,
 } from '@/lib/localDb';
@@ -191,6 +194,55 @@ export const runOneDriveDesktopSync = async ({
     })
 );
 
+const runOneDriveDesktopDirection = ({ clientId, interactive = true, action }) => (
+    runExclusive(async () => {
+        const state = await getOneDriveDesktopSyncState({ clientId });
+        if (!state.connected) throw new Error('先にOneDriveへ接続してください。');
+        const session = createSession(clientId);
+        if (!state.hasSessionToken) {
+            if (!interactive) {
+                const error = new Error('OneDriveへの再認証が必要です。');
+                error.requiresReauth = true;
+                throw error;
+            }
+            await session.bridge.authorize(clientId);
+        }
+        const user = await session.client.getCurrentUser();
+        const { accountId, accountLabel } = verifyAccount(user, state);
+        const root = await session.provider.ensureActiveSyncSpace();
+        if (state.config.cloudSyncId && state.config.cloudSyncId !== root.activeSyncId) {
+            const error = new Error('クラウド同期が別の端末でリセットされました。この端末を再接続してください。');
+            error.code = 'CLOUD_SYNC_RESET';
+            throw error;
+        }
+        if (!state.config.bootstrapCompleted) {
+            session.provider.reportProgress({ phase: 'preparing-local-data' });
+            await initializeLocalSyncTracking({
+                provider: SYNC_PROVIDERS.ONE_DRIVE,
+                accountId,
+                accountLabel,
+                deviceName: `RadExam ${globalThis.navigator?.platform || 'Mac/PC'}`,
+                cloudSyncId: root.activeSyncId,
+            });
+        }
+        const result = await action(session.provider);
+        return { result, state: await getOneDriveDesktopSyncState({ clientId }) };
+    })
+);
+
+export const checkOneDriveDesktopUpdates = options => runOneDriveDesktopDirection({
+    ...options,
+    action: checkLocalDataSyncUpdates,
+});
+export const pullOneDriveDesktopUpdates = options => runOneDriveDesktopDirection({
+    ...options,
+    action: pullLocalDataFromCloud,
+});
+export const pushOneDriveDesktopChanges = options => runOneDriveDesktopDirection({
+    ...options,
+    action: pushLocalDataToCloud,
+});
+
 export const resolveOneDriveDesktopSyncConflict = async ({
     clientId,
     conflictId,
@@ -212,7 +264,7 @@ export const resolveOneDriveDesktopSyncConflict = async ({
             resolution,
             resolveBlob: ref => session.provider.downloadBlob(ref.contentHash),
         });
-        const result = await synchronizeLocalData(session.provider);
+        const result = await pushLocalDataToCloud(session.provider);
         return {
             resolved,
             result,
@@ -277,6 +329,6 @@ export const runOneDriveDesktopBackgroundSync = async ({ clientId } = {}) => {
     if (globalThis.navigator?.onLine === false) {
         return { status: 'skipped', reason: 'offline' };
     }
-    const response = await runOneDriveDesktopSync({ clientId, interactive: false });
+    const response = await checkOneDriveDesktopUpdates({ clientId, interactive: false });
     return { status: 'completed', ...response };
 };

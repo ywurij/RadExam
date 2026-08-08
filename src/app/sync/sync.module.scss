@@ -339,6 +339,13 @@
   p { margin: 0.2rem 0 0; }
 }
 
+.embedded {
+  max-width: none;
+  min-height: auto;
+  padding: 0;
+  background: transparent;
+}
+
 @media (max-width: 520px) {
   .header { grid-template-columns: 1fr; }
   .backButton { width: fit-content; }

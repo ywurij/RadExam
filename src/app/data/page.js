@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { getAllLocalExams, exportAllLocalData, importLocalData } from '@/lib/localDb';
 import { createBackupArchiveBlob, readBackupFile } from '@/lib/backupArchive.mjs';
 import { initializeLocalExams } from '@/lib/data';
+import CloudSyncPage from '@/app/sync/page';
 import styles from './data.module.scss';
 
 const getBackupSummary = (backup) => {
@@ -108,9 +109,9 @@ export default function DataTransferPage() {
             <header className={styles.header}>
                 <button type="button" onClick={() => router.push('/')} className={styles.backButton}>← 戻る</button>
                 <div>
-                    <span className={styles.eyebrow}>MOBILE DATA</span>
-                    <h1>試験データ転送</h1>
-                    <p>Mac/PC版で書き出したRadExamバックアップ（.radexam）を、この端末へ手動登録します。</p>
+                    <span className={styles.eyebrow}>DATA MANAGEMENT</span>
+                    <h1>データ管理</h1>
+                    <p>クラウドを使った端末間共有と、緊急復旧用のRadExamバックアップを管理します。</p>
                 </div>
             </header>
 
@@ -120,10 +121,12 @@ export default function DataTransferPage() {
                 <div><strong>端末内</strong><span>保存先</span></div>
             </section>
 
+            <CloudSyncPage embedded />
+
             <section className={styles.card}>
                 <div className={styles.step}>1</div>
                 <div className={styles.cardBody}>
-                    <h2>この端末へ登録</h2>
+                    <h2>バックアップから復元</h2>
                     <p>バックアップ内の試験、画像、学習履歴、問題に紐づく参照PDFを登録します。</p>
                     <input ref={inputRef} type="file" accept=".radexam,.json,application/json,application/x-radexam-backup" onChange={handleImport} hidden />
                     <button type="button" className={styles.primaryButton} onClick={() => inputRef.current?.click()} disabled={busy}>
@@ -135,7 +138,7 @@ export default function DataTransferPage() {
             <section className={styles.card}>
                 <div className={styles.step}>2</div>
                 <div className={styles.cardBody}>
-                    <h2>編集・学習結果を持ち出す</h2>
+                    <h2>緊急復旧用バックアップを保存</h2>
                     <p>この端末で編集した解説・ジャンルと、正誤・お気に入りをRadExamバックアップ（.radexam）に保存します。</p>
                     <button type="button" className={styles.secondaryButton} onClick={handleExport} disabled={busy || exams.length === 0}>
                         モバイルデータを書き出す
