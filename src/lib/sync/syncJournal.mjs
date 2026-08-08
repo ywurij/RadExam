@@ -340,6 +340,28 @@ export class SyncJournal {
         return record;
     }
 
+    async markChangesApplied(changes, appliedAt = this.now()) {
+        const candidates = (changes || []).filter(change => change?.changeId);
+        const records = [];
+        await runStorageOperationsInBatches(candidates, async change => {
+            const key = `${APPLIED_PREFIX}${String(change.changeId)}`;
+            const existing = await this.storage.getItem(key);
+            if (existing) {
+                records.push(existing);
+                return;
+            }
+            const record = {
+                changeId: String(change.changeId),
+                deviceId: String(change.deviceId || ''),
+                sequence: Number(change.sequence) || 0,
+                appliedAt,
+            };
+            await this.storage.setItem(key, record);
+            records.push(record);
+        });
+        return records;
+    }
+
     async recordConflict(conflict) {
         if (!conflict?.conflictId) {
             throw new Error('競合の保存にはconflictIdが必要です。');

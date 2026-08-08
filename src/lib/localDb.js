@@ -738,30 +738,48 @@ const verifyReceivedBlob = async (change, value, type) => {
     return blob;
 };
 
+let remoteApplyBatch = null;
+const loadRemoteBatchExam = async (examId, fallback) => {
+    if (!remoteApplyBatch) return (await examsStore.getItem(examId)) || fallback;
+    if (!remoteApplyBatch.exams.has(examId)) {
+        remoteApplyBatch.exams.set(examId, (await examsStore.getItem(examId)) || fallback);
+    }
+    return remoteApplyBatch.exams.get(examId);
+};
+
 const applyRemoteExamChange = async change => {
     if (change.operation === SYNC_OPERATIONS.DELETE) {
+        if (remoteApplyBatch) {
+            remoteApplyBatch.exams.set(change.entityId, null);
+            return;
+        }
         await examsStore.removeItem(change.entityId);
         return;
     }
-    const current = await examsStore.getItem(change.entityId) || {
+    const current = await loadRemoteBatchExam(change.entityId, {
         id: change.entityId,
         name: change.entityId,
         questions: [],
         years: [],
         genres: [],
-    };
+    });
     const next = applySyncFieldDelta(current, change);
-    await examsStore.setItem(change.entityId, {
+    const stored = {
         ...next,
         id: change.entityId,
         questions: Array.isArray(next.questions) ? next.questions : [],
         updatedAt: change.createdAt,
-    });
+    };
+    if (remoteApplyBatch) {
+        remoteApplyBatch.exams.set(change.entityId, stored);
+        return;
+    }
+    await examsStore.setItem(change.entityId, stored);
 };
 
 const applyRemoteQuestionChange = async change => {
     const { examId, questionId } = parseQuestionEntityId(change.entityId);
-    const currentExam = await examsStore.getItem(examId);
+    const currentExam = await loadRemoteBatchExam(examId, null);
     if (!currentExam && change.operation === SYNC_OPERATIONS.DELETE) return;
     const exam = currentExam || {
         id: examId,
@@ -786,11 +804,16 @@ const applyRemoteQuestionChange = async change => {
         else questions.push(nextQuestion);
     }
 
-    await examsStore.setItem(examId, rebuildExamMetadata({
+    const stored = {
         ...exam,
         questions,
         updatedAt: change.createdAt,
-    }));
+    };
+    if (remoteApplyBatch) {
+        remoteApplyBatch.exams.set(examId, stored);
+        return;
+    }
+    await examsStore.setItem(examId, rebuildExamMetadata(stored));
 };
 
 const applyRemoteProgressChange = async change => {
@@ -861,6 +884,25 @@ const applyRemotePdfChange = async (change, blob) => {
 };
 
 const localSyncDataStore = {
+    beginBatch() {
+        remoteApplyBatch = { exams: new Map() };
+    },
+    async endBatch() {
+        const batch = remoteApplyBatch;
+        remoteApplyBatch = null;
+        if (!batch) return;
+        const entries = [...batch.exams.entries()];
+        for (let index = 0; index < entries.length; index += 4) {
+            await Promise.all(entries.slice(index, index + 4).map(([examId, exam]) => (
+                exam
+                    ? examsStore.setItem(examId, rebuildExamMetadata(exam))
+                    : examsStore.removeItem(examId)
+            )));
+        }
+    },
+    cancelBatch() {
+        remoteApplyBatch = null;
+    },
     async applyChange(change, { blob } = {}) {
         switch (change.entityType) {
             case SYNC_ENTITY_TYPES.EXAM:
@@ -1429,6 +1471,14 @@ export const exportAllLocalData = async ({ includePdfs = true } = {}) => {
  * @param {Object} jsonData - インポートするバックアップデータ
  * @param {string} strategy - 'overwrite' (上書き)
  */
+const writeLocalForageEntries = async (store, entries, concurrency = 8) => {
+    for (let index = 0; index < entries.length; index += concurrency) {
+        await Promise.all(
+            entries.slice(index, index + concurrency).map(([key, value]) => store.setItem(key, value))
+        );
+    }
+};
+
 export const importLocalData = async (jsonData, strategy = 'overwrite', { includePdfs = true } = {}) => {
     if (!jsonData || typeof jsonData !== 'object') {
         throw new Error("Invalid backup data format");
@@ -1479,29 +1529,21 @@ export const importLocalData = async (jsonData, strategy = 'overwrite', { includ
     // 1. 試験データのインポート
     if (exams && typeof exams === 'object') {
         await examsStore.clear();
-        for (const [key, value] of Object.entries(exams)) {
-            await examsStore.setItem(key, value);
-        }
+        await writeLocalForageEntries(examsStore, Object.entries(exams));
     }
 
     // 2. 進捗データのインポート
     if (progress && typeof progress === 'object') {
         await progressStore.clear();
-        for (const [key, value] of Object.entries(progress)) {
-            await progressStore.setItem(key, value);
-        }
+        await writeLocalForageEntries(progressStore, Object.entries(progress));
     }
 
     // 3. 画像データのインポート
     await imageStore.clear();
-    for (const [key, value] of preparedImages) {
-        await imageStore.setItem(key, value);
-    }
+    await writeLocalForageEntries(imageStore, preparedImages, 4);
 
     await pdfStore.clear();
-    for (const [key, value] of preparedPdfs) {
-        await pdfStore.setItem(key, value);
-    }
+    await writeLocalForageEntries(pdfStore, preparedPdfs, 3);
     writeLocalResumableSessions(sessions);
     await markSyncReconciliationSafely('manual-backup-import');
 };

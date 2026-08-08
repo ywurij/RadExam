@@ -40,6 +40,7 @@ export const processIncomingSyncChange = async ({
     dataStore,
     resolveBlob,
     context = null,
+    deferAppliedMark = false,
 }) => {
     if (!journal || !dataStore?.applyChange) {
         throw new Error('受信変更の処理にはjournalとdataStoreが必要です。');
@@ -139,6 +140,6 @@ export const processIncomingSyncChange = async ({
     }
 
     await dataStore.applyChange(normalizedChange, { blob });
-    await journal.markChangeApplied(normalizedChange);
+    if (!deferAppliedMark) await journal.markChangeApplied(normalizedChange);
     return { status: 'applied', change: normalizedChange };
 };

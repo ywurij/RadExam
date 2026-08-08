@@ -164,6 +164,40 @@ test('pull applies remote changes without sending local changes', async () => {
     assert.equal(cloud.manifest.batches.length, 1);
 });
 
+test('pull uses data-store batching and records applied changes after the flush', async () => {
+    const cloud = createInMemorySyncCloud();
+    const source = await createDevice('device-a', new InMemorySyncProvider(cloud));
+    const target = await createDevice('device-b', new InMemorySyncProvider(cloud));
+    await source.journal.recordChanges(Array.from({ length: 5 }, (_, index) => ({
+        entityType: SYNC_ENTITY_TYPES.PROGRESS,
+        entityId: `batched-${index}`,
+        changedFields: ['status'],
+        payload: { status: 'correct' },
+    })));
+    await syncDevice(source);
+    let beginCount = 0;
+    let endCount = 0;
+    const applied = [];
+    const dataStore = {
+        beginBatch() { beginCount += 1; },
+        async applyChange(change) { applied.push(change); },
+        async endBatch() { endCount += 1; },
+        cancelBatch() {},
+    };
+
+    const result = await runSyncPull({
+        provider: target.provider,
+        journal: target.journal,
+        dataStore,
+    });
+
+    assert.equal(result.appliedChanges, 5);
+    assert.equal(beginCount, 1);
+    assert.equal(endCount, 1);
+    assert.equal(applied.length, 5);
+    assert.equal(await target.journal.hasAppliedChange(applied[0].changeId), true);
+});
+
 test('push requires remote changes to be pulled first', async () => {
     const cloud = createInMemorySyncCloud();
     const source = await createDevice('device-a', new InMemorySyncProvider(cloud));

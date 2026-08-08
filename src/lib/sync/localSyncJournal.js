@@ -30,7 +30,7 @@ export const checkAndStoreLocalSyncConflict = async remoteChange => {
 };
 export const reconcileEquivalentLocalSyncConflicts = async () => {
     const conflicts = await localSyncJournal.listConflicts();
-    let resolvedCount = 0;
+    const equivalent = [];
     for (const conflict of conflicts) {
         const stillConflicts = detectSyncConflict({
             remoteChange: conflict.remoteChange,
@@ -38,15 +38,22 @@ export const reconcileEquivalentLocalSyncConflicts = async () => {
             detectedAt: conflict.detectedAt,
         });
         if (stillConflicts) continue;
-        await localSyncJournal.markChangeApplied(conflict.remoteChange);
-        await localSyncJournal.discardChanges(conflict.localChangeIds || []);
+        equivalent.push(conflict);
+    }
+    if (equivalent.length === 0) return 0;
+    await localSyncJournal.markChangesApplied(
+        equivalent.map(conflict => conflict.remoteChange)
+    );
+    await localSyncJournal.discardChanges(
+        equivalent.flatMap(conflict => conflict.localChangeIds || [])
+    );
+    for (const conflict of equivalent) {
         await localSyncJournal.resolveConflict(conflict.conflictId, {
             choice: 'equivalent-values',
             automatic: true,
         });
-        resolvedCount += 1;
     }
-    return resolvedCount;
+    return equivalent.length;
 };
 export const listLocalSyncConflicts = async options => {
     if (!options?.status || options.status === 'pending') {

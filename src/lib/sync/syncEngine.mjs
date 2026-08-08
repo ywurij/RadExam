@@ -52,6 +52,7 @@ const readManifestForSync = provider => provider.readManifest({
 const MAX_STANDARD_DELTA_BYTES = 5 * 1024 * 1024;
 const STRUCTURAL_BULK_THRESHOLD = 25;
 const BINARY_BULK_THRESHOLD = 10;
+const SNAPSHOT_PULL_CHANGE_THRESHOLD = 300;
 const STRUCTURAL_ENTITY_TYPES = new Set(['exam', 'question']);
 
 const shouldUseBulkPackage = changes => {
@@ -87,6 +88,26 @@ const buildBatchId = changes => {
     return `${first.deviceId}-${first.sequence}-${last.sequence}`;
 };
 
+const prefetchIncomingBlobs = async ({ provider, changes }) => {
+    const refs = new Map();
+    for (const change of changes) {
+        if (!['image', 'pdf'].includes(change.entityType) || change.operation === 'delete') continue;
+        for (const ref of change.blobRefs || []) {
+            if (ref?.contentHash && !refs.has(ref.contentHash)) refs.set(ref.contentHash, ref);
+        }
+    }
+    const queue = [...refs.keys()];
+    const blobs = new Map();
+    await Promise.all(Array.from({ length: Math.min(3, queue.length) }, async () => {
+        while (queue.length > 0) {
+            const contentHash = queue.shift();
+            if (!contentHash) continue;
+            blobs.set(contentHash, await provider.downloadBlob(contentHash));
+        }
+    }));
+    return blobs;
+};
+
 const pullRemoteBatches = async ({
     provider,
     journal,
@@ -103,9 +124,11 @@ const pullRemoteBatches = async ({
     let config = await journal.getConfig();
     const batches = [];
     for (const batch of manifest.batches) {
-        const alreadyApplied = typeof journal.hasAppliedBatch === 'function'
-            ? await journal.hasAppliedBatch(batch.batchId)
-            : batch.generation <= (Number(config.lastPulledGeneration) || 0);
+        const alreadyApplied = (
+            batch.generation <= (Number(config.lastPulledGeneration) || 0)
+            || (typeof journal.hasAppliedBatch === 'function'
+                && await journal.hasAppliedBatch(batch.batchId))
+        );
         if (!alreadyApplied) batches.push(batch);
     }
 
@@ -145,29 +168,58 @@ const pullRemoteBatches = async ({
             await provider.downloadChangeBatch(descriptor),
             descriptor
         );
-        for (const change of batch.changes) {
-            const result = await processIncomingSyncChange({
-                change,
-                journal,
-                dataStore,
-                resolveBlob: ref => provider.downloadBlob(ref.contentHash),
-                context: incomingContext,
+        const supportsBatch = (
+            typeof dataStore.beginBatch === 'function'
+            && typeof dataStore.endBatch === 'function'
+        );
+        const appliedChanges = [];
+        try {
+            if (supportsBatch) await dataStore.beginBatch();
+            const prefetchedBlobs = await prefetchIncomingBlobs({
+                provider,
+                changes: batch.changes,
             });
-            if (result.status === 'needs-blob') {
-                throw new Error(`同期ファイルを取得できませんでした: ${result.blobRef?.contentHash || '不明'}`);
-            }
-            if (result.status === 'applied') summary.appliedChanges += 1;
-            if (result.status === 'duplicate') summary.duplicateChanges += 1;
-            if (result.status === 'acknowledged') summary.acknowledgedChanges += 1;
-            if (result.status === 'conflict') summary.conflicts += 1;
-            processedChanges += 1;
-            if (processedChanges % 10 === 0 || processedChanges === totalChanges) {
-                reportProgress(provider, {
-                    phase: 'applying-changes',
-                    processedChanges,
-                    totalChanges,
+            for (const change of batch.changes) {
+                const result = await processIncomingSyncChange({
+                    change,
+                    journal,
+                    dataStore,
+                    resolveBlob: ref => prefetchedBlobs.has(ref.contentHash)
+                        ? prefetchedBlobs.get(ref.contentHash)
+                        : provider.downloadBlob(ref.contentHash),
+                    context: incomingContext,
+                    deferAppliedMark: supportsBatch,
                 });
+                if (result.status === 'needs-blob') {
+                    throw new Error(`同期ファイルを取得できませんでした: ${result.blobRef?.contentHash || '不明'}`);
+                }
+                if (result.status === 'applied') {
+                    summary.appliedChanges += 1;
+                    if (supportsBatch) appliedChanges.push(result.change);
+                }
+                if (result.status === 'duplicate') summary.duplicateChanges += 1;
+                if (result.status === 'acknowledged') summary.acknowledgedChanges += 1;
+                if (result.status === 'conflict') summary.conflicts += 1;
+                processedChanges += 1;
+                if (processedChanges % 10 === 0 || processedChanges === totalChanges) {
+                    reportProgress(provider, {
+                        phase: 'applying-changes',
+                        processedChanges,
+                        totalChanges,
+                    });
+                }
             }
+            if (supportsBatch) {
+                await dataStore.endBatch();
+                if (typeof journal.markChangesApplied === 'function') {
+                    await journal.markChangesApplied(appliedChanges);
+                } else {
+                    for (const change of appliedChanges) await journal.markChangeApplied(change);
+                }
+            }
+        } catch (error) {
+            await dataStore.cancelBatch?.();
+            throw error;
         }
         config = await journal.configure({
             lastPulledGeneration: descriptor.generation,
@@ -187,6 +239,7 @@ const restoreRemoteSnapshotIfNeeded = async ({
     journal,
     manifest,
     restoreLocalSnapshot,
+    allowCheckpointRestore = false,
 }) => {
     const snapshot = manifest.latestSnapshot;
     if (!snapshot) return { restoredSnapshot: false };
@@ -199,8 +252,7 @@ const restoreRemoteSnapshotIfNeeded = async ({
         || Number(config.lastPulledGeneration) > 0
         || Number(config.lastPushedGeneration) > 0
     ) {
-        // 定期スナップショットは既存端末を上書きせず、初期復元にだけ使う。
-        return { restoredSnapshot: false };
+        if (!allowCheckpointRestore) return { restoredSnapshot: false };
     }
     const pending = await journal.listPendingChanges();
     if (pending.length > 0) {
@@ -721,11 +773,25 @@ export const runSyncPull = async ({
     try {
         const remote = await readManifestForSync(provider);
         const manifest = validateSyncManifest(remote.manifest);
+        const config = await journal.getConfig();
+        const remoteSummary = await inspectRemoteUpdates({ journal, manifest });
+        const [pending, conflicts] = await Promise.all([
+            journal.listPendingChanges(),
+            typeof journal.listConflicts === 'function' ? journal.listConflicts() : [],
+        ]);
+        const allowCheckpointRestore = Boolean(
+            manifest.latestSnapshot
+            && remoteSummary.remoteChangeCount >= SNAPSHOT_PULL_CHANGE_THRESHOLD
+            && Number(manifest.latestSnapshot.generation) > (Number(config.lastPulledGeneration) || 0)
+            && pending.length === 0
+            && conflicts.length === 0
+        );
         const snapshotPull = await restoreRemoteSnapshotIfNeeded({
             provider,
             journal,
             manifest,
             restoreLocalSnapshot,
+            allowCheckpointRestore,
         });
         const pull = await pullRemoteBatches({ provider, journal, dataStore, manifest });
         const finishedAt = new Date().toISOString();
