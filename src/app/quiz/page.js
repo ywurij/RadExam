@@ -354,7 +354,7 @@ function QuizContent() {
                 <button
                     onClick={handleBackToResults}
                     className={styles.navBtn}
-                    style={{ border: '2px solid #3b82f6', color: '#3b82f6' }}
+                    style={{ border: '2px solid #3b82f6', color: 'var(--accent)' }}
                 >
                     結果に戻る
                 </button>

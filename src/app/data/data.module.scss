@@ -3,8 +3,8 @@
   min-height: 100dvh;
   margin: 0 auto;
   padding: max(1.25rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right)) max(2rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
-  color: #172033;
-  background: #f8fafc;
+  color: var(--text-primary);
+  background: var(--surface);
 }
 
 .header {
@@ -15,18 +15,18 @@
   margin-bottom: 1.5rem;
 
   h1 { margin: 0.2rem 0 0.35rem; font-size: clamp(1.7rem, 6vw, 2.4rem); }
-  p { margin: 0; color: #64748b; line-height: 1.6; }
+  p { margin: 0; color: var(--text-secondary); line-height: 1.6; }
 }
 
-.eyebrow { color: #2563eb; font-size: 0.72rem; font-weight: 800; letter-spacing: 0.14em; }
+.eyebrow { color: var(--accent); font-size: 0.72rem; font-weight: 800; letter-spacing: 0.14em; }
 
 .backButton {
   min-height: 44px;
   padding: 0 0.8rem;
-  border: 1px solid #dbe3ef;
+  border: 1px solid var(--border-color);
   border-radius: 0.8rem;
-  background: #fff;
-  color: #334155;
+  background: var(--surface-raised);
+  color: var(--text-primary);
   font-weight: 700;
 }
 
@@ -35,14 +35,14 @@
   grid-template-columns: repeat(3, 1fr);
   margin-bottom: 1rem;
   overflow: hidden;
-  border: 1px solid #dbe3ef;
+  border: 1px solid var(--border-color);
   border-radius: 1rem;
-  background: #fff;
+  background: var(--surface-raised);
 
   div { display: flex; flex-direction: column; align-items: center; gap: 0.2rem; padding: 1rem 0.5rem; }
-  div + div { border-left: 1px solid #e8edf4; }
-  strong { font-size: 1.25rem; color: #1d4ed8; }
-  span { color: #64748b; font-size: 0.76rem; }
+  div + div { border-left: 1px solid var(--border-color); }
+  strong { font-size: 1.25rem; color: var(--accent); }
+  span { color: var(--text-secondary); font-size: 0.76rem; }
 }
 
 .card {
@@ -51,9 +51,9 @@
   gap: 0.85rem;
   margin-top: 1rem;
   padding: 1.15rem;
-  border: 1px solid #dbe3ef;
+  border: 1px solid var(--border-color);
   border-radius: 1rem;
-  background: #fff;
+  background: var(--surface-raised);
   box-shadow: 0 12px 30px rgba(15, 23, 42, 0.06);
 }
 
@@ -63,15 +63,15 @@
   height: 2.25rem;
   place-items: center;
   border-radius: 50%;
-  background: #e8f0ff;
-  color: #1d4ed8;
+  background: var(--accent-soft);
+  color: var(--accent);
   font-weight: 800;
 }
 
 .cardBody {
   min-width: 0;
   h2 { margin: 0.2rem 0 0.45rem; font-size: 1.1rem; }
-  p { margin: 0 0 1rem; color: #64748b; font-size: 0.9rem; line-height: 1.6; }
+  p { margin: 0 0 1rem; color: var(--text-secondary); font-size: 0.9rem; line-height: 1.6; }
 }
 
 .primaryButton, .secondaryButton {
@@ -86,19 +86,19 @@
   &:disabled { cursor: not-allowed; opacity: 0.5; }
 }
 
-.primaryButton { border: 0; background: #2563eb; color: #fff; }
-.secondaryButton { border: 1px solid #93b4ef; background: #f3f7ff; color: #1d4ed8; }
+.primaryButton { border: 0; background: var(--accent); color: #fff; }
+.secondaryButton { border: 1px solid #93b4ef; background: var(--accent-soft); color: var(--accent); }
 
 .dangerCard { border-color: #fecaca; }
-.dangerStep { background: #fee2e2; color: #b91c1c; }
+.dangerStep { background: var(--danger-soft); color: var(--danger-text); }
 .dangerButton {
   width: 100%;
   min-height: 48px;
   padding: 0.7rem 1rem;
   border: 1px solid #ef4444;
   border-radius: 0.8rem;
-  background: #fff1f2;
-  color: #b91c1c;
+  background: var(--danger-soft);
+  color: var(--danger-text);
   font-size: 1rem;
   font-weight: 800;
   cursor: pointer;
@@ -107,15 +107,15 @@
 }
 
 .success, .error { margin: 1rem 0 0; padding: 0.9rem 1rem; border-radius: 0.8rem; line-height: 1.5; }
-.success { background: #ecfdf5; color: #047857; }
-.error { background: #fff1f2; color: #be123c; }
+.success { background: var(--success-soft); color: var(--success-text); }
+.error { background: var(--danger-soft); color: var(--danger-text); }
 
 .note {
   margin-top: 1.25rem;
   padding: 1rem;
   border-radius: 0.9rem;
-  background: #f8fafc;
-  color: #475569;
+  background: var(--surface);
+  color: var(--text-secondary);
   font-size: 0.85rem;
   line-height: 1.6;
 

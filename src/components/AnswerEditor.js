@@ -315,7 +315,7 @@ const MenuBar = ({ editor }) => {
 
                         {modalType === 'image' && (
                             <div style={{ marginBottom: '1rem' }}>
-                                <label style={{ display: 'block', fontSize: '0.8rem', color: '#666', marginBottom: '0.5rem' }}>
+                                <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
                                     ローカル画像を挿入:
                                 </label>
                                 <input
@@ -409,7 +409,7 @@ const MenuBar = ({ editor }) => {
                                 )}
 
                                 {!isSearching && searchResults.length === 0 && inputValue.length > 1 && (
-                                    <div style={{ padding: '0.5rem', color: '#718096', fontSize: '0.9rem' }}>結果なし</div>
+                                    <div style={{ padding: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>結果なし</div>
                                 )}
 
                                 {searchResults
@@ -466,7 +466,7 @@ const MenuBar = ({ editor }) => {
                         {/* LaTeX Cheat Sheet */}
                         {modalType === 'math' && (
                             <div className={styles.cheatSheet}>
-                                <div style={{ fontSize: '0.8rem', marginBottom: '0.5rem', color: '#666' }}>よく使う記号 (クリックで挿入):</div>
+                                <div style={{ fontSize: '0.8rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>よく使う記号 (クリックで挿入):</div>
                                 {Object.entries(LATEX_CHEAT_SHEET).map(([category, items]) => (
                                     <div key={category} className={styles.cheatSheetGroup}>
                                         <span className={styles.cheatCategory}>{category}:</span>

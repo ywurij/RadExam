@@ -8,7 +8,7 @@
 .title {
     font-size: 1.5rem;
     font-weight: bold;
-    color: #1f2937;
+    color: var(--text-primary);
     margin: 0;
 }
 
@@ -21,7 +21,7 @@
 }
 
 .scoreCard {
-    background: #fff;
+    background: var(--surface-raised);
     padding: 2rem;
     border-radius: 1rem;
     box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
@@ -31,7 +31,7 @@
 }
 
 .scoreLabel {
-    color: #6b7280;
+    color: var(--text-secondary);
     font-size: 1rem;
     margin-bottom: 0.5rem;
 }
@@ -39,17 +39,17 @@
 .scoreValue {
     font-size: 3rem;
     font-weight: 800;
-    color: #3b82f6;
+    color: var(--accent);
     margin-bottom: 0.5rem;
 }
 
 .scoreDetail {
-    color: #374151;
+    color: var(--text-primary);
     font-weight: 500;
 }
 
 .listContainer {
-    background: #fff;
+    background: var(--surface-raised);
     border-radius: 0.5rem;
     box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1);
     overflow: hidden;
@@ -64,13 +64,13 @@
     th,
     td {
         padding: 1rem;
-        border-bottom: 1px solid #e5e7eb;
+        border-bottom: 1px solid var(--border-color);
     }
 
     th {
-        background: #f9fafb;
+        background: var(--surface-soft);
         font-weight: 600;
-        color: #374151;
+        color: var(--text-primary);
         font-size: 0.875rem;
     }
 
@@ -124,12 +124,12 @@
     border: none;
     cursor: pointer;
     font-size: 1.25rem;
-    color: #9ca3af;
+    color: var(--text-secondary);
     transition: color 0.2s;
     padding: 0;
 
     &:hover {
-        color: #3b82f6;
+        color: var(--accent);
     }
 }
 
@@ -139,7 +139,7 @@
 }
 
 .homeBtn {
-    background: #3b82f6;
+    background: var(--accent);
     color: white;
     padding: 1rem 3rem;
     border-radius: 0.5rem;
@@ -150,7 +150,7 @@
     transition: background 0.2s;
 
     &:hover {
-        background: #2563eb;
+        background: var(--accent);
     }
 }
 
@@ -167,7 +167,7 @@
 
 .infoIcon {
     margin-left: 0.5rem;
-    color: #9ca3af;
+    color: var(--text-secondary);
     font-size: 0.8rem;
 }
 
@@ -185,10 +185,10 @@
     background: white;
     padding: 1rem;
     border-radius: 0.5rem;
-    border: 1px solid #e5e7eb;
+    border: 1px solid var(--border-color);
     box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
     font-size: 0.875rem;
-    color: #374151;
+    color: var(--text-primary);
     text-align: left;
 }
 
@@ -205,7 +205,7 @@
 
     li {
         margin-bottom: 0.25rem;
-        background: #f3f4f6;
+        background: var(--surface-soft);
         padding: 0.25rem 0.5rem;
         border-radius: 0.25rem;
     }
@@ -243,7 +243,7 @@
 .modalTitle {
     margin-top: 0;
     font-size: 1.25rem;
-    color: #111827;
+    color: var(--text-primary);
     border-bottom: 2px solid #f3f4f6;
     padding-bottom: 1rem;
     margin-bottom: 1rem;
@@ -257,7 +257,7 @@
     border: none;
     font-size: 1.5rem;
     cursor: pointer;
-    color: #6b7280;
+    color: var(--text-secondary);
     line-height: 1;
 }
 
@@ -267,8 +267,8 @@
 }
 
 .secondaryBtn {
-    background: #e5e7eb;
-    color: #374151;
+    background: var(--surface-muted);
+    color: var(--text-primary);
     border: none;
     padding: 0.5rem 1.5rem;
     border-radius: 0.5rem;
@@ -276,7 +276,7 @@
     font-weight: 600;
 
     &:hover {
-        background: #d1d5db;
+        background: var(--surface-muted);
     }
 }
 

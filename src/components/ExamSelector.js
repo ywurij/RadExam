@@ -410,8 +410,8 @@ export default function ExamSelector() {
                             <button className={statusFilter.includes('liked') ? styles.activeToggle : ''} onClick={() => toggleStatus('liked')}>お気に入り</button>
                         </div>
                         {statusFilter.length > 1 && (
-                            <div className={styles.toggleGroup} style={{ borderLeft: '1px solid #e2e8f0', paddingLeft: '1rem' }}>
-                                <small style={{ marginRight: '0.5rem', fontWeight: 600, color: '#4a5568' }}>条件:</small>
+                            <div className={styles.toggleGroup} style={{ borderLeft: '1px solid var(--border-color)', paddingLeft: '1rem' }}>
+                                <small style={{ marginRight: '0.5rem', fontWeight: 600, color: 'var(--text-secondary)' }}>条件:</small>
                                 <button className={logicFilter === 'or' ? styles.activeToggle : ''} onClick={() => setLogicFilter('or')} style={{ fontSize: '0.75rem', padding: '0.25rem 0.75rem' }}>OR (いずれか)</button>
                                 <button className={logicFilter === 'and' ? styles.activeToggle : ''} onClick={() => setLogicFilter('and')} style={{ fontSize: '0.75rem', padding: '0.25rem 0.75rem' }}>AND (すべて)</button>
                             </div>

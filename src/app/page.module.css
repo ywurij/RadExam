@@ -1,10 +1,4 @@
 .page {
-  --background: #fafafa;
-  --foreground: #fff;
-
-  --text-primary: #000;
-  --text-secondary: #666;
-
   --button-primary-hover: #383838;
   --button-secondary-hover: #f2f2f2;
   --button-secondary-border: #ebebeb;
@@ -14,7 +8,7 @@
   align-items: center;
   justify-content: center;
   font-family: var(--font-geist-sans);
-  background-color: var(--background);
+  background-color: var(--surface);
 }
 
 .main {
@@ -25,7 +19,7 @@
   flex-direction: column;
   align-items: flex-start;
   justify-content: space-between;
-  background-color: var(--foreground);
+  background-color: var(--surface-raised);
   padding: 120px 60px;
 }
 
@@ -85,7 +79,7 @@
 
 a.primary {
   background: var(--text-primary);
-  color: var(--background);
+  color: var(--surface-raised);
   gap: 8px;
 }
 
@@ -122,20 +116,12 @@ a.secondary {
   }
 }
 
-@media (prefers-color-scheme: dark) {
-  .logo {
-    filter: invert();
-  }
+:global(html[data-theme='dark']) .logo {
+  filter: invert();
+}
 
-  .page {
-    --background: #000;
-    --foreground: #000;
-
-    --text-primary: #ededed;
-    --text-secondary: #999;
-
-    --button-primary-hover: #ccc;
-    --button-secondary-hover: #1a1a1a;
-    --button-secondary-border: #1a1a1a;
-  }
+:global(html[data-theme='dark']) .page {
+  --button-primary-hover: var(--accent-hover);
+  --button-secondary-hover: var(--surface-soft);
+  --button-secondary-border: var(--border-color);
 }
