@@ -28,8 +28,7 @@ export const checkAndStoreLocalSyncConflict = async remoteChange => {
     if (!conflict) return null;
     return localSyncJournal.recordConflict(conflict);
 };
-export const reconcileEquivalentLocalSyncConflicts = async () => {
-    const conflicts = await localSyncJournal.listConflicts();
+const reconcileEquivalentConflicts = async conflicts => {
     const equivalent = [];
     for (const conflict of conflicts) {
         const stillConflicts = detectSyncConflict({
@@ -40,7 +39,7 @@ export const reconcileEquivalentLocalSyncConflicts = async () => {
         if (stillConflicts) continue;
         equivalent.push(conflict);
     }
-    if (equivalent.length === 0) return 0;
+    if (equivalent.length === 0) return new Set();
     await localSyncJournal.markChangesApplied(
         equivalent.map(conflict => conflict.remoteChange)
     );
@@ -53,13 +52,38 @@ export const reconcileEquivalentLocalSyncConflicts = async () => {
             automatic: true,
         });
     }
-    return equivalent.length;
+    return new Set(equivalent.map(conflict => conflict.conflictId));
+};
+export const reconcileEquivalentLocalSyncConflicts = async () => {
+    const conflicts = await localSyncJournal.listConflicts();
+    return (await reconcileEquivalentConflicts(conflicts)).size;
 };
 export const listLocalSyncConflicts = async options => {
-    if (!options?.status || options.status === 'pending') {
-        await reconcileEquivalentLocalSyncConflicts();
-    }
-    return localSyncJournal.listConflicts(options);
+    const conflicts = await localSyncJournal.listConflicts(options);
+    if (options?.status && options.status !== 'pending') return conflicts;
+    const resolvedIds = await reconcileEquivalentConflicts(conflicts);
+    return resolvedIds.size > 0
+        ? conflicts.filter(conflict => !resolvedIds.has(conflict.conflictId))
+        : conflicts;
+};
+export const getLocalSyncJournalState = async () => {
+    const [config, pullState] = await Promise.all([
+        localSyncJournal.getConfig(),
+        localSyncJournal.readPullState(),
+    ]);
+    const resolvedIds = await reconcileEquivalentConflicts(
+        pullState.unresolvedConflicts
+    );
+    const conflicts = resolvedIds.size > 0
+        ? pullState.unresolvedConflicts.filter(
+            conflict => !resolvedIds.has(conflict.conflictId)
+        )
+        : pullState.unresolvedConflicts;
+    return {
+        config,
+        pendingChanges: pullState.pendingLocalChanges,
+        conflicts,
+    };
 };
 export const resolveLocalSyncConflict = (conflictId, resolution) => (
     localSyncJournal.resolveConflict(conflictId, resolution)

@@ -8,11 +8,7 @@ import {
     resolveLocalDataSyncConflict,
     synchronizeLocalData,
 } from '@/lib/localDb';
-import {
-    getLocalSyncJournalConfig,
-    listLocalSyncConflicts,
-    listPendingLocalSyncChanges,
-} from './localSyncJournal';
+import { getLocalSyncJournalState } from './localSyncJournal';
 import { MicrosoftOneDriveWebTokenManager } from './microsoftIdentityWebAuth';
 import {
     OneDriveAppFolderClient,
@@ -53,6 +49,12 @@ const createSession = clientId => {
     return activeSession;
 };
 
+const getSessionUser = async (session, { refresh = false } = {}) => {
+    if (!refresh && session.user) return session.user;
+    session.user = await session.client.getCurrentUser();
+    return session.user;
+};
+
 const getDeviceName = () => {
     const platform = globalThis.navigator?.userAgentData?.platform
         || globalThis.navigator?.platform
@@ -71,11 +73,7 @@ const runExclusive = task => {
 };
 
 export const getOneDriveSyncState = async () => {
-    const [config, pendingChanges, conflicts] = await Promise.all([
-        getLocalSyncJournalConfig(),
-        listPendingLocalSyncChanges(),
-        listLocalSyncConflicts(),
-    ]);
+    const { config, pendingChanges, conflicts } = await getLocalSyncJournalState();
     const connected = Boolean(
         config.enabled
         && config.provider === SYNC_PROVIDERS.ONE_DRIVE
@@ -113,6 +111,7 @@ const authorizeSession = async (clientId, { interactive }) => {
             throw error;
         }
         token = await session.tokenManager.requestAccessToken();
+        session.user = null;
     }
     return session;
 };
@@ -134,7 +133,7 @@ const verifyAccount = (user, state) => {
 export const connectOneDriveSync = async ({ clientId }) => (
     runExclusive(async () => {
         const session = await authorizeSession(clientId, { interactive: true });
-        const user = await session.client.getCurrentUser();
+        const user = await getSessionUser(session, { refresh: true });
         const { accountId, accountLabel } = verifyAccount(user);
         const root = await session.provider.ensureActiveSyncSpace();
         await connectLocalSyncTracking({
@@ -160,7 +159,7 @@ export const runOneDriveSync = async ({
         const state = await getOneDriveSyncState();
         if (!state.connected) throw new Error('先にOneDriveへ接続してください。');
         const session = await authorizeSession(clientId, { interactive });
-        const user = await session.client.getCurrentUser();
+        const user = await getSessionUser(session);
         const { accountId, accountLabel } = verifyAccount(user, state);
         const root = await session.provider.ensureActiveSyncSpace();
         if (state.config.cloudSyncId && state.config.cloudSyncId !== root.activeSyncId) {
@@ -197,7 +196,7 @@ const runOneDriveDirection = ({ clientId, interactive = true, action }) => (
         const state = await getOneDriveSyncState();
         if (!state.connected) throw new Error('先にOneDriveへ接続してください。');
         const session = await authorizeSession(clientId, { interactive });
-        const user = await session.client.getCurrentUser();
+        const user = await getSessionUser(session);
         const { accountId, accountLabel } = verifyAccount(user, state);
         const root = await session.provider.ensureActiveSyncSpace();
         if (state.config.cloudSyncId && state.config.cloudSyncId !== root.activeSyncId) {
@@ -242,7 +241,7 @@ export const resolveOneDriveSyncConflict = async ({
         const state = await getOneDriveSyncState();
         if (!state.connected) throw new Error('先にOneDriveへ接続してください。');
         const session = await authorizeSession(clientId, { interactive: true });
-        const user = await session.client.getCurrentUser();
+        const user = await getSessionUser(session);
         verifyAccount(user, state);
         const root = await session.provider.ensureActiveSyncSpace();
         if (state.config.cloudSyncId && state.config.cloudSyncId !== root.activeSyncId) {
@@ -266,7 +265,7 @@ export const resetOneDriveSync = async ({
         const state = await getOneDriveSyncState();
         if (!state.connected) throw new Error('先にOneDriveへ接続してください。');
         const session = await authorizeSession(clientId, { interactive: true });
-        const user = await session.client.getCurrentUser();
+        const user = await getSessionUser(session);
         const { accountId, accountLabel } = verifyAccount(user, state);
         let deletedFiles = 0;
         if (hard) {

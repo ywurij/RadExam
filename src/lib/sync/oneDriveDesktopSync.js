@@ -8,11 +8,7 @@ import {
     resolveLocalDataSyncConflict,
     synchronizeLocalData,
 } from '@/lib/localDb';
-import {
-    getLocalSyncJournalConfig,
-    listLocalSyncConflicts,
-    listPendingLocalSyncChanges,
-} from './localSyncJournal';
+import { getLocalSyncJournalState } from './localSyncJournal';
 import {
     OneDriveAppFolderClient,
     OneDriveSyncProvider,
@@ -56,6 +52,12 @@ const createSession = clientId => {
     return activeSession;
 };
 
+const getSessionUser = async (session, { refresh = false } = {}) => {
+    if (!refresh && session.user) return session.user;
+    session.user = await session.client.getCurrentUser();
+    return session.user;
+};
+
 const runExclusive = task => {
     if (activeSync) return activeSync;
     activeSync = Promise.resolve()
@@ -82,14 +84,13 @@ const verifyAccount = (user, state) => {
 
 export const getOneDriveDesktopSyncState = async ({ clientId } = {}) => {
     const bridge = getBridge();
-    const [config, pendingChanges, conflicts, credentialStatus] = await Promise.all([
-        getLocalSyncJournalConfig(),
-        listPendingLocalSyncChanges(),
-        listLocalSyncConflicts(),
+    const [journalState, credentialStatus] = await Promise.all([
+        getLocalSyncJournalState(),
         bridge && clientId
             ? bridge.getStatus(clientId).catch(() => null)
             : Promise.resolve(null),
     ]);
+    const { config, pendingChanges, conflicts } = journalState;
     const connected = Boolean(
         config.enabled
         && config.provider === SYNC_PROVIDERS.ONE_DRIVE
@@ -125,7 +126,7 @@ export const connectOneDriveDesktopSync = async ({ clientId }) => (
         }
         const session = createSession(clientId);
         await session.bridge.authorize(clientId);
-        const user = await session.client.getCurrentUser();
+        const user = await getSessionUser(session, { refresh: true });
         const { accountId, accountLabel } = verifyAccount(user);
         const root = await session.provider.ensureActiveSyncSpace();
         await connectLocalSyncTracking({
@@ -158,8 +159,9 @@ export const runOneDriveDesktopSync = async ({
                 throw error;
             }
             await session.bridge.authorize(clientId);
+            session.user = null;
         }
-        const user = await session.client.getCurrentUser();
+        const user = await getSessionUser(session);
         const { accountId, accountLabel } = verifyAccount(user, state);
         const root = await session.provider.ensureActiveSyncSpace();
         if (state.config.cloudSyncId && state.config.cloudSyncId !== root.activeSyncId) {
@@ -206,8 +208,9 @@ const runOneDriveDesktopDirection = ({ clientId, interactive = true, action }) =
                 throw error;
             }
             await session.bridge.authorize(clientId);
+            session.user = null;
         }
-        const user = await session.client.getCurrentUser();
+        const user = await getSessionUser(session);
         const { accountId, accountLabel } = verifyAccount(user, state);
         const root = await session.provider.ensureActiveSyncSpace();
         if (state.config.cloudSyncId && state.config.cloudSyncId !== root.activeSyncId) {
@@ -253,7 +256,8 @@ export const resolveOneDriveDesktopSyncConflict = async ({
         if (!state.connected) throw new Error('先にOneDriveへ接続してください。');
         const session = createSession(clientId);
         if (!state.hasSessionToken) await session.bridge.authorize(clientId);
-        const user = await session.client.getCurrentUser();
+        if (!state.hasSessionToken) session.user = null;
+        const user = await getSessionUser(session);
         verifyAccount(user, state);
         const root = await session.provider.ensureActiveSyncSpace();
         if (state.config.cloudSyncId && state.config.cloudSyncId !== root.activeSyncId) {
@@ -282,7 +286,8 @@ export const resetOneDriveDesktopSync = async ({
         if (!state.connected) throw new Error('先にOneDriveへ接続してください。');
         const session = createSession(clientId);
         if (!state.hasSessionToken) await session.bridge.authorize(clientId);
-        const user = await session.client.getCurrentUser();
+        if (!state.hasSessionToken) session.user = null;
+        const user = await getSessionUser(session);
         const { accountId, accountLabel } = verifyAccount(user, state);
         let deletedFiles = 0;
         if (hard) {

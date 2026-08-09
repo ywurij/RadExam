@@ -164,7 +164,7 @@ test('pull applies remote changes without sending local changes', async () => {
     assert.equal(cloud.manifest.batches.length, 1);
 });
 
-test('pull uses data-store batching and records applied changes after the flush', async () => {
+test('pull uses one batch marker without per-change history writes', async () => {
     const cloud = createInMemorySyncCloud();
     const source = await createDevice('device-a', new InMemorySyncProvider(cloud));
     const target = await createDevice('device-b', new InMemorySyncProvider(cloud));
@@ -207,9 +207,49 @@ test('pull uses data-store batching and records applied changes after the flush'
     assert.equal(beginCount, 1);
     assert.equal(endCount, 1);
     assert.equal(applied.length, 5);
-    assert.equal(bulkAppliedLookupCount, 1);
+    assert.equal(bulkAppliedLookupCount, 0);
     assert.equal(singleAppliedLookupCount, 0);
-    assert.equal(await target.journal.hasAppliedChange(applied[0].changeId), true);
+    assert.equal(await target.journal.hasAppliedChange(applied[0].changeId), false);
+    assert.equal(await target.journal.hasAppliedBatch(cloud.manifest.batches[0].batchId), true);
+});
+
+test('pull skips redundant history writes for an already-sent echoed batch', async () => {
+    const cloud = createInMemorySyncCloud();
+    const device = await createDevice('device-a', new InMemorySyncProvider(cloud));
+    await device.journal.recordChanges(Array.from({ length: 20 }, (_, index) => ({
+        entityType: SYNC_ENTITY_TYPES.PROGRESS,
+        entityId: `echoed-${index}`,
+        changedFields: ['status'],
+        payload: { status: 'correct' },
+    })));
+    await runSyncPush({ provider: device.provider, journal: device.journal });
+    let bulkMarkCount = 0;
+    let acknowledgeCount = 0;
+    const markChangesApplied = device.journal.markChangesApplied.bind(device.journal);
+    const acknowledgeChanges = device.journal.acknowledgeChanges.bind(device.journal);
+    device.journal.markChangesApplied = async (...args) => {
+        bulkMarkCount += 1;
+        return markChangesApplied(...args);
+    };
+    device.journal.acknowledgeChanges = async (...args) => {
+        acknowledgeCount += 1;
+        return acknowledgeChanges(...args);
+    };
+
+    const result = await runSyncPull({
+        provider: device.provider,
+        journal: device.journal,
+        dataStore: {
+            beginBatch() {},
+            async applyChange() {},
+            async endBatch() {},
+            cancelBatch() {},
+        },
+    });
+
+    assert.equal(result.acknowledgedChanges, 20);
+    assert.equal(bulkMarkCount, 0);
+    assert.equal(acknowledgeCount, 0);
 });
 
 test('push requires remote changes to be pulled first', async () => {
@@ -523,6 +563,7 @@ test('packs more than 100 local changes into one bulk delta package', async () =
     let pendingScans = 0;
     let conflictScans = 0;
     let sentScans = 0;
+    let combinedStateScans = 0;
     const originalListPending = receivingDevice.journal.listPendingChanges.bind(
         receivingDevice.journal
     );
@@ -530,6 +571,9 @@ test('packs more than 100 local changes into one bulk delta package', async () =
         receivingDevice.journal
     );
     const originalListSent = receivingDevice.journal.listSentChangesAfterGeneration.bind(
+        receivingDevice.journal
+    );
+    const originalReadPullState = receivingDevice.journal.readPullState.bind(
         receivingDevice.journal
     );
     receivingDevice.journal.listPendingChanges = async (...args) => {
@@ -544,6 +588,10 @@ test('packs more than 100 local changes into one bulk delta package', async () =
         sentScans += 1;
         return originalListSent(...args);
     };
+    receivingDevice.journal.readPullState = async (...args) => {
+        combinedStateScans += 1;
+        return originalReadPullState(...args);
+    };
     const received = await syncDevice(receivingDevice);
 
     assert.equal(result.pushedBatches, 1);
@@ -551,10 +599,13 @@ test('packs more than 100 local changes into one bulk delta package', async () =
     assert.equal(result.pushedBulkPackages, 1);
     assert.deepEqual(cloud.manifest.batches.map(batch => batch.changeCount), [205]);
     assert.equal(cloud.manifest.batches[0].format, 'bulk-delta');
+    assert.equal(cloud.manifest.batches[0].entityCounts.progress, 205);
+    assert.ok(cloud.manifest.batches[0].byteSize > 0);
     assert.equal(received.appliedChanges, 205);
     assert.ok(pendingScans < 10);
-    assert.equal(conflictScans, 1);
-    assert.equal(sentScans, 1);
+    assert.equal(conflictScans, 0);
+    assert.equal(sentScans, 0);
+    assert.equal(combinedStateScans, 1);
     assert.deepEqual(await device.journal.listPendingChanges(), []);
 });
 
@@ -573,6 +624,90 @@ test('uses a bulk delta package for many structural question edits below 100 cha
     assert.equal(result.pushedChanges, 25);
     assert.equal(result.pushedBulkPackages, 1);
     assert.equal(cloud.manifest.batches[0].format, 'bulk-delta');
+});
+
+test('reuses one pending queue and prefetches multiple standard batches', async () => {
+    const cloud = createInMemorySyncCloud();
+    const source = await createDevice('device-a', new InMemorySyncProvider(cloud));
+    source.provider.uploadBulkChangePackage = undefined;
+    await source.journal.recordChanges(Array.from({ length: 205 }, (_, index) => ({
+        entityType: SYNC_ENTITY_TYPES.PROGRESS,
+        entityId: `standard-${index}`,
+        changedFields: ['status'],
+        payload: { status: 'correct' },
+    })));
+    let pendingScans = 0;
+    const listPendingChanges = source.journal.listPendingChanges.bind(source.journal);
+    source.journal.listPendingChanges = async (...args) => {
+        pendingScans += 1;
+        return listPendingChanges(...args);
+    };
+
+    const pushed = await runSyncPush({
+        provider: source.provider,
+        journal: source.journal,
+        snapshotThreshold: Number.MAX_SAFE_INTEGER,
+    });
+
+    assert.equal(pushed.pushedBatches, 3);
+    assert.equal(pushed.pushedChanges, 205);
+    assert.equal(pendingScans, 1);
+    assert.deepEqual(cloud.manifest.batches.map(batch => batch.changeCount), [100, 100, 5]);
+
+    const target = await createDevice('device-b', new InMemorySyncProvider(cloud));
+    let activeDownloads = 0;
+    let maximumDownloads = 0;
+    const downloadChangeBatch = target.provider.downloadChangeBatch.bind(target.provider);
+    target.provider.downloadChangeBatch = async descriptor => {
+        activeDownloads += 1;
+        maximumDownloads = Math.max(maximumDownloads, activeDownloads);
+        await new Promise(resolve => setTimeout(resolve, 5));
+        try {
+            return await downloadChangeBatch(descriptor);
+        } finally {
+            activeDownloads -= 1;
+        }
+    };
+    const pulled = await runSyncPull({
+        provider: target.provider,
+        journal: target.journal,
+        dataStore: target.dataStore,
+    });
+
+    assert.equal(pulled.appliedChanges, 205);
+    assert.equal(maximumDownloads, 3);
+});
+
+test('update checks skip per-batch storage lookups for old generations', async () => {
+    const cloud = createInMemorySyncCloud();
+    const source = await createDevice('device-a', new InMemorySyncProvider(cloud));
+    const target = await createDevice('device-b', new InMemorySyncProvider(cloud));
+    await source.journal.recordChanges([{
+        entityType: SYNC_ENTITY_TYPES.PROGRESS,
+        entityId: 'already-pulled',
+        changedFields: ['status'],
+        payload: { status: 'correct' },
+    }]);
+    await syncDevice(source);
+    await runSyncPull({
+        provider: target.provider,
+        journal: target.journal,
+        dataStore: target.dataStore,
+    });
+    let batchLookups = 0;
+    const hasAppliedBatch = target.journal.hasAppliedBatch.bind(target.journal);
+    target.journal.hasAppliedBatch = async batchId => {
+        batchLookups += 1;
+        return hasAppliedBatch(batchId);
+    };
+
+    const checked = await checkSyncUpdates({
+        provider: target.provider,
+        journal: target.journal,
+    });
+
+    assert.equal(checked.updatesAvailable, false);
+    assert.equal(batchLookups, 0);
 });
 
 test('uses one snapshot for a large initial sync and leaves later edits as deltas', async () => {

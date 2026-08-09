@@ -152,21 +152,20 @@ export class SyncJournal {
             };
             await this.storage.setItem(CONFIG_KEY, reservedConfig);
 
-            const changes = [];
+            const changes = candidates.map((candidate, index) => createSyncChange({
+                ...candidate,
+                changeId: candidate.changeId || this.uuid(),
+                deviceId: config.deviceId || this.uuid(),
+                sequence: startingSequence + index,
+                baseVersion: candidate.baseVersion
+                    || `generation:${Math.max(
+                        Number(config.lastPulledGeneration) || 0,
+                        Number(config.lastPushedGeneration) || 0
+                    )}`,
+                createdAt: candidate.createdAt || this.now(),
+            }));
             try {
-                for (let index = 0; index < candidates.length; index += 1) {
-                    const change = createSyncChange({
-                        ...candidates[index],
-                        changeId: candidates[index].changeId || this.uuid(),
-                        deviceId: config.deviceId || this.uuid(),
-                        sequence: startingSequence + index,
-                        baseVersion: candidates[index].baseVersion
-                            || `generation:${Math.max(
-                                Number(config.lastPulledGeneration) || 0,
-                                Number(config.lastPushedGeneration) || 0
-                            )}`,
-                        createdAt: candidates[index].createdAt || this.now(),
-                    });
+                await runStorageOperationsInBatches(changes, async change => {
                     await this.storage.setItem(changeKey(change), {
                         status: 'pending',
                         change,
@@ -182,8 +181,7 @@ export class SyncJournal {
                             deletedAt: change.createdAt,
                         });
                     }
-                    changes.push(change);
-                }
+                });
             } catch (error) {
                 await this.storage.setItem(CONFIG_KEY, {
                     ...reservedConfig,
@@ -207,6 +205,47 @@ export class SyncJournal {
         return records.sort((left, right) => (
             left.sequence - right.sequence || left.changeId.localeCompare(right.changeId)
         ));
+    }
+
+    async readPullState() {
+        const pendingLocalChanges = [];
+        const unresolvedConflicts = [];
+        const sentLocalChanges = [];
+        await this.storage.iterate((value, key) => {
+            const normalizedKey = String(key);
+            if (
+                normalizedKey.startsWith(CHANGE_PREFIX)
+                && value?.status === 'pending'
+                && value.change
+            ) {
+                pendingLocalChanges.push(value.change);
+            } else if (
+                normalizedKey.startsWith(CONFLICT_PREFIX)
+                && value?.status === 'pending'
+            ) {
+                unresolvedConflicts.push(value);
+            } else if (
+                normalizedKey.startsWith(SENT_PREFIX)
+                && value?.change
+            ) {
+                sentLocalChanges.push({
+                    ...value.change,
+                    committedGeneration: Number(value.committedGeneration) || 0,
+                });
+            }
+        });
+        pendingLocalChanges.sort((left, right) => (
+            left.sequence - right.sequence || left.changeId.localeCompare(right.changeId)
+        ));
+        unresolvedConflicts.sort((left, right) => (
+            String(left.detectedAt).localeCompare(String(right.detectedAt))
+            || String(left.conflictId).localeCompare(String(right.conflictId))
+        ));
+        sentLocalChanges.sort((left, right) => (
+            left.committedGeneration - right.committedGeneration
+            || left.sequence - right.sequence
+        ));
+        return { pendingLocalChanges, unresolvedConflicts, sentLocalChanges };
     }
 
     async getBootstrapSnapshot() {
@@ -248,6 +287,26 @@ export class SyncJournal {
             ({ key }) => this.storage.removeItem(key)
         );
         return removals.length;
+    }
+
+    async acknowledgeKnownChanges(changes, { committedGeneration = null } = {}) {
+        const candidates = (changes || []).filter(change => change?.changeId);
+        if (candidates.length === 0) return 0;
+        const acknowledgedAt = this.now();
+        if (Number.isSafeInteger(committedGeneration) && committedGeneration > 0) {
+            await runStorageOperationsInBatches(candidates, change => (
+                this.storage.setItem(`${SENT_PREFIX}${change.changeId}`, {
+                    change,
+                    committedGeneration,
+                    acknowledgedAt,
+                })
+            ));
+        }
+        await runStorageOperationsInBatches(
+            candidates,
+            change => this.storage.removeItem(changeKey(change))
+        );
+        return candidates.length;
     }
 
     async discardChanges(changeIds) {

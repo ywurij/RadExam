@@ -560,6 +560,7 @@ export class GoogleDriveSyncProvider {
         this.client = client;
         this.onProgress = onProgress;
         this.blobInventory = null;
+        this.blobFiles = null;
         this.syncId = syncId || LEGACY_SYNC_ID;
     }
 
@@ -574,6 +575,7 @@ export class GoogleDriveSyncProvider {
     setSyncId(syncId) {
         this.syncId = syncId || LEGACY_SYNC_ID;
         this.blobInventory = null;
+        this.blobFiles = null;
         return this.syncId;
     }
 
@@ -757,16 +759,23 @@ export class GoogleDriveSyncProvider {
         return stored.value;
     }
 
-    async hasBlob(contentHash) {
+    async loadBlobInventory() {
         if (!this.blobInventory) {
             const files = await this.client.listFiles({ kind: 'object' });
-            this.blobInventory = new Set(files.filter(file => (
-                (file.appProperties?.radexamSyncId || LEGACY_SYNC_ID) === this.syncId
-            )).map(file => (
-                file.appProperties?.contentHash
-                || String(file.appProperties?.radexamPath || '').replace(/^objects\//, '')
-            )).filter(Boolean));
+            this.blobFiles = new Map();
+            for (const file of files) {
+                if ((file.appProperties?.radexamSyncId || LEGACY_SYNC_ID) !== this.syncId) continue;
+                const contentHash = file.appProperties?.contentHash
+                    || String(file.appProperties?.radexamPath || '').replace(/^objects\//, '');
+                if (contentHash) this.blobFiles.set(contentHash, file);
+            }
+            this.blobInventory = new Set(this.blobFiles.keys());
         }
+        return this.blobFiles;
+    }
+
+    async hasBlob(contentHash) {
+        await this.loadBlobInventory();
         return this.blobInventory.has(contentHash);
     }
 
@@ -778,8 +787,9 @@ export class GoogleDriveSyncProvider {
         const existing = this.blobInventory
             ? null
             : await this.client.findFile(path);
+        let written = existing;
         if (!existing) {
-            await this.client.writeBlob(path, blob, {
+            written = await this.client.writeBlob(path, blob, {
                 kind: 'object',
                 existingFile: null,
                 appProperties: {
@@ -789,11 +799,19 @@ export class GoogleDriveSyncProvider {
             });
         }
         this.blobInventory?.add(contentHash);
+        if (written && this.blobFiles) this.blobFiles.set(contentHash, written);
         return { objectKey: path };
     }
 
     async downloadBlob(contentHash) {
-        return (await this.client.readBlob(this.path(blobPath(contentHash)))).blob;
+        const files = await this.loadBlobInventory();
+        const file = files.get(contentHash);
+        if (!file?.id) {
+            throw new GoogleDriveSyncError(
+                `クラウドに同期ファイルがありません: ${contentHash}`
+            );
+        }
+        return (await this.client.downloadFile(file.id)).blob();
     }
 
     async uploadSnapshot(snapshotId, blob, descriptor = {}) {

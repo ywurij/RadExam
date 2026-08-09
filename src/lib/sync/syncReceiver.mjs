@@ -28,10 +28,22 @@ const conflictEntityKey = change => (
 );
 
 const removeAcknowledgedPendingChange = (context, changeId) => {
-    if (!context?.pendingLocalChanges) return;
+    if (!context?.pendingLocalChanges) return null;
+    const removed = context.pendingLocalChanges.find(
+        change => change.changeId === changeId
+    );
     context.pendingLocalChanges = context.pendingLocalChanges.filter(
         change => change.changeId !== changeId
     );
+    if (removed && context.pendingChangesByEntity) {
+        const key = conflictEntityKey(removed);
+        const remaining = (context.pendingChangesByEntity.get(key) || []).filter(
+            change => change.changeId !== changeId
+        );
+        if (remaining.length > 0) context.pendingChangesByEntity.set(key, remaining);
+        else context.pendingChangesByEntity.delete(key);
+    }
+    return removed || null;
 };
 
 export const processIncomingSyncChange = async ({
@@ -51,17 +63,27 @@ export const processIncomingSyncChange = async ({
         ? context.appliedChangeIds.has(normalizedChange.changeId)
         : await journal.hasAppliedChange(normalizedChange.changeId);
     if (previouslyApplied) {
-        await journal.acknowledgeChanges([normalizedChange.changeId]);
-        removeAcknowledgedPendingChange(context, normalizedChange.changeId);
-        return { status: 'duplicate', change: normalizedChange };
+        if (!deferAppliedMark) {
+            await journal.acknowledgeChanges([normalizedChange.changeId]);
+        }
+        const pendingChange = removeAcknowledgedPendingChange(
+            context,
+            normalizedChange.changeId
+        );
+        return { status: 'duplicate', change: normalizedChange, pendingChange };
     }
 
     const config = context?.config || await journal.getConfig();
     if (config.deviceId && normalizedChange.deviceId === config.deviceId) {
-        await journal.markChangeApplied(normalizedChange);
-        await journal.acknowledgeChanges([normalizedChange.changeId]);
-        removeAcknowledgedPendingChange(context, normalizedChange.changeId);
-        return { status: 'acknowledged', change: normalizedChange };
+        if (!deferAppliedMark) {
+            await journal.markChangeApplied(normalizedChange);
+            await journal.acknowledgeChanges([normalizedChange.changeId]);
+        }
+        const pendingChange = removeAcknowledgedPendingChange(
+            context,
+            normalizedChange.changeId
+        );
+        return { status: 'acknowledged', change: normalizedChange, pendingChange };
     }
 
     if (context?.conflictsByEntity) {
@@ -89,11 +111,13 @@ export const processIncomingSyncChange = async ({
         }
     }
 
-    const pendingLocalChanges = context?.pendingLocalChanges
-        || await journal.listPendingChanges();
+    const entityKey = conflictEntityKey(normalizedChange);
+    const pendingLocalChanges = context?.pendingChangesByEntity
+        ? (context.pendingChangesByEntity.get(entityKey) || [])
+        : context?.pendingLocalChanges || await journal.listPendingChanges();
     const baseGeneration = parseBaseGeneration(normalizedChange.baseVersion);
-    const sentLocalChanges = context?.sentLocalChanges
-        ? context.sentLocalChanges.filter(change => (
+    const sentLocalChanges = context?.sentChangesByEntity
+        ? (context.sentChangesByEntity.get(entityKey) || []).filter(change => (
             Number(change.committedGeneration) > baseGeneration
         ))
         : typeof journal.listSentChangesAfterGeneration === 'function'

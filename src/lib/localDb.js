@@ -537,7 +537,13 @@ const collectLocalSyncSeedData = async () => {
     const pdfs = {};
     const preferences = {};
 
-    for (const [examId, exam] of await collectStoreEntries(examsStore)) {
+    const [examEntries, progressEntries, pdfEntries] = await Promise.all([
+        collectStoreEntries(examsStore),
+        collectStoreEntries(progressStore),
+        collectStoreEntries(pdfStore),
+    ]);
+
+    await prepareEntriesWithConcurrency(examEntries, async ([examId, exam]) => {
         const questions = await Promise.all((exam?.questions || []).map(async question => {
             const enrichedImages = await Promise.all((question?.images || []).map(async image => {
                 const localKey = image?.storageKey || extractLocalImageKey(image?.path);
@@ -559,22 +565,17 @@ const collectLocalSyncSeedData = async () => {
                     ...(contentHash ? { contentHash } : {}),
                 };
             }));
-            return {
-                ...question,
-                images: enrichedImages,
-            };
+            return { ...question, images: enrichedImages };
         }));
-        exams[examId] = {
-            ...exam,
-            questions,
-        };
-    }
+        exams[examId] = { ...exam, questions };
+        return examId;
+    }, 2);
 
-    for (const [questionId, value] of await collectStoreEntries(progressStore)) {
+    for (const [questionId, value] of progressEntries) {
         progress[questionId] = value;
     }
 
-    for (const [localKey, value] of await collectStoreEntries(pdfStore)) {
+    await prepareEntriesWithConcurrency(pdfEntries, async ([localKey, value]) => {
         let contentHash = value?.contentHash || '';
         if (!value?.blob) {
             throw new Error(`同期対象のPDFを読み出せませんでした: ${localKey}`);
@@ -588,7 +589,8 @@ const collectLocalSyncSeedData = async () => {
             size: value?.size,
             ...(contentHash ? { contentHash } : {}),
         };
-    }
+        return localKey;
+    }, 3);
 
     for (const session of getLocalResumableSessions()) {
         preferences[resumableSessionEntityId(session.id)] = session;
@@ -878,13 +880,16 @@ const applyRemotePreferenceChange = async change => {
     if (!sessionId) {
         throw new Error(`未対応の同期設定です: ${change.entityId}`);
     }
-    const sessions = getLocalResumableSessions();
+    const sessions = remoteApplyBatch
+        ? remoteApplyBatch.sessions
+        : getLocalResumableSessions();
     const currentIndex = sessions.findIndex(
         session => String(session.id) === sessionId
     );
     if (change.operation === SYNC_OPERATIONS.DELETE) {
         if (currentIndex >= 0) sessions.splice(currentIndex, 1);
-        writeLocalResumableSessions(sessions);
+        if (remoteApplyBatch) remoteApplyBatch.sessionsDirty = true;
+        else writeLocalResumableSessions(sessions);
         return;
     }
     const current = currentIndex >= 0 ? sessions[currentIndex] : { id: sessionId };
@@ -895,7 +900,8 @@ const applyRemotePreferenceChange = async change => {
     };
     if (currentIndex >= 0) sessions[currentIndex] = next;
     else sessions.push(next);
-    writeLocalResumableSessions(sessions);
+    if (remoteApplyBatch) remoteApplyBatch.sessionsDirty = true;
+    else writeLocalResumableSessions(sessions);
 };
 
 const applyRemoteImageChange = async (change, blob) => {
@@ -912,6 +918,28 @@ const applyRemoteImageChange = async (change, blob) => {
 };
 
 const applyRemotePdfChange = async (change, blob) => {
+    if (remoteApplyBatch) {
+        let current = remoteApplyBatch.pdfs.get(change.entityId);
+        if (current === undefined) {
+            const stored = await pdfStore.getItem(change.entityId) || {};
+            current = { ...stored };
+            delete current.blob;
+        } else if (current === null) {
+            current = {};
+        } else {
+            current = current.metadata;
+        }
+        if (change.operation === SYNC_OPERATIONS.DELETE) {
+            remoteApplyBatch.pdfs.set(change.entityId, null);
+            return;
+        }
+        remoteApplyBatch.pdfs.set(change.entityId, {
+            change,
+            blob,
+            metadata: applySyncFieldDelta(current, change),
+        });
+        return;
+    }
     if (change.operation === SYNC_OPERATIONS.DELETE) {
         await pdfStore.removeItem(change.entityId);
         return;
@@ -939,50 +967,81 @@ const localSyncDataStore = {
             questionIndexes: new Map(),
             progress: new Map(),
             images: new Map(),
+            pdfs: new Map(),
+            sessions: getLocalResumableSessions(),
+            sessionsDirty: false,
         };
     },
     async endBatch() {
         const batch = remoteApplyBatch;
         remoteApplyBatch = null;
         if (!batch) return;
-        const examEntries = [...batch.exams.entries()];
-        for (let index = 0; index < examEntries.length; index += 8) {
-            await Promise.all(examEntries.slice(index, index + 8).map(([examId, exam]) => (
-                exam
-                    ? examsStore.setItem(examId, rebuildExamMetadata({
-                        ...exam,
-                        questions: (exam.questions || []).filter(Boolean),
-                    }))
-                    : examsStore.removeItem(examId)
-            )));
-        }
-        const progressEntries = [...batch.progress.entries()];
-        await writeLocalForageEntries(
+        const writeExams = async () => {
+            const entries = [...batch.exams.entries()];
+            for (let index = 0; index < entries.length; index += 8) {
+                await Promise.all(entries.slice(index, index + 8).map(([examId, exam]) => (
+                    exam
+                        ? examsStore.setItem(examId, rebuildExamMetadata({
+                            ...exam,
+                            questions: (exam.questions || []).filter(Boolean),
+                        }))
+                        : examsStore.removeItem(examId)
+                )));
+            }
+        };
+        const writeProgress = () => writeLocalForageEntries(
             {
                 setItem: (key, value) => value
                     ? progressStore.setItem(key, value)
                     : progressStore.removeItem(key),
             },
-            progressEntries,
+            [...batch.progress.entries()],
             16
         );
-        const imageEntries = [...batch.images.entries()];
-        for (let index = 0; index < imageEntries.length; index += 4) {
-            await Promise.all(imageEntries.slice(index, index + 4).map(
-                async ([entityId, { change, blob }]) => {
-                    if (change.operation === SYNC_OPERATIONS.DELETE) {
-                        await imageStore.removeItem(entityId);
-                        return;
+        const writeImages = async () => {
+            const entries = [...batch.images.entries()];
+            for (let index = 0; index < entries.length; index += 4) {
+                await Promise.all(entries.slice(index, index + 4).map(
+                    async ([entityId, { change, blob }]) => {
+                        if (change.operation === SYNC_OPERATIONS.DELETE) {
+                            await imageStore.removeItem(entityId);
+                            return;
+                        }
+                        const verifiedBlob = await verifyReceivedBlob(
+                            change,
+                            blob,
+                            'application/octet-stream'
+                        );
+                        await imageStore.setItem(entityId, verifiedBlob);
                     }
-                    const verifiedBlob = await verifyReceivedBlob(
-                        change,
-                        blob,
-                        'application/octet-stream'
-                    );
-                    await imageStore.setItem(entityId, verifiedBlob);
-                }
-            ));
-        }
+                ));
+            }
+        };
+        const writePdfs = async () => {
+            const entries = [...batch.pdfs.entries()];
+            for (let index = 0; index < entries.length; index += 3) {
+                await Promise.all(entries.slice(index, index + 3).map(
+                    async ([entityId, pending]) => {
+                        if (!pending) {
+                            await pdfStore.removeItem(entityId);
+                            return;
+                        }
+                        const verifiedBlob = await verifyReceivedBlob(
+                            pending.change,
+                            pending.blob,
+                            pending.metadata.type || 'application/pdf'
+                        );
+                        await pdfStore.setItem(entityId, {
+                            ...pending.metadata,
+                            blob: verifiedBlob,
+                            updatedAt: pending.change.createdAt,
+                        });
+                    }
+                ));
+            }
+        };
+        await Promise.all([writeExams(), writeProgress(), writeImages(), writePdfs()]);
+        if (batch.sessionsDirty) writeLocalResumableSessions(batch.sessions);
     },
     cancelBatch() {
         remoteApplyBatch = null;
@@ -1480,29 +1539,34 @@ export const exportAllLocalData = async ({ includePdfs = true } = {}) => {
         sessions: getLocalResumableSessions(),
     };
 
-    // 試験データをエクスポート用に追加
-    await examsStore.iterate((value, key) => {
-        backup.exams[key] = value;
-    });
-
-    // 進捗データをエクスポート用に追加
-    await progressStore.iterate((value, key) => {
-        backup.progress[key] = value;
-    });
+    // 独立したストアは同時に読み出す。
+    await Promise.all([
+        examsStore.iterate((value, key) => {
+            backup.exams[key] = value;
+        }),
+        progressStore.iterate((value, key) => {
+            backup.progress[key] = value;
+        }),
+    ]);
 
     // 問題データが実際に参照している画像をキー指定で取得する。
     // imageStore.iterate()だけに依存すると、一部環境でBlobが列挙されず、
     // 参照だけが残った不完全なバックアップになることがある。
     const referencedImageKeys = collectReferencedImageKeys(backup.exams);
     const missingImageKeys = [];
-    for (const key of referencedImageKeys) {
-        const value = await imageStore.getItem(key);
-        if (value == null) {
-            missingImageKeys.push(key);
-            continue;
-        }
-        backup.images[key] = await binaryValueToDataUrl(value);
-    }
+    await prepareEntriesWithConcurrency(
+        referencedImageKeys.map(key => [key, null]),
+        async ([key]) => {
+            const value = await imageStore.getItem(key);
+            if (value == null) {
+                missingImageKeys.push(key);
+                return null;
+            }
+            backup.images[key] = await binaryValueToDataUrl(value);
+            return key;
+        },
+        4
+    );
 
     if (missingImageKeys.length > 0) {
         throw new Error(
@@ -1522,14 +1586,19 @@ export const exportAllLocalData = async ({ includePdfs = true } = {}) => {
         // 取りこぼされるため、問題のsourcePagesが参照する保存キーを直接取得する。
         const referencedPdfKeys = collectReferencedPdfKeys(backup.exams);
         const missingPdfKeys = [];
-        for (const key of referencedPdfKeys) {
-            const value = await pdfStore.getItem(key);
-            if (value == null) {
-                missingPdfKeys.push(key);
-                continue;
-            }
-            pdfRecords.set(key, value);
-        }
+        await prepareEntriesWithConcurrency(
+            referencedPdfKeys.map(key => [key, null]),
+            async ([key]) => {
+                const value = await pdfStore.getItem(key);
+                if (value == null) {
+                    missingPdfKeys.push(key);
+                    return null;
+                }
+                pdfRecords.set(key, value);
+                return key;
+            },
+            3
+        );
 
         if (missingPdfKeys.length > 0) {
             throw new Error(
@@ -1539,12 +1608,20 @@ export const exportAllLocalData = async ({ includePdfs = true } = {}) => {
             );
         }
 
-        await Promise.all([...pdfRecords].map(async ([key, value]) => {
-            backup.pdfs[key] = {
-                ...value,
-                blob: await binaryValueToDataUrl(value?.blob, `PDF「${value?.name || key}」`),
-            };
-        }));
+        await prepareEntriesWithConcurrency(
+            [...pdfRecords],
+            async ([key, value]) => {
+                backup.pdfs[key] = {
+                    ...value,
+                    blob: await binaryValueToDataUrl(
+                        value?.blob,
+                        `PDF「${value?.name || key}」`
+                    ),
+                };
+                return key;
+            },
+            3
+        );
     }
 
     return backup;

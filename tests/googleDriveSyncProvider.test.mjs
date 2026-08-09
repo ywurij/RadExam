@@ -630,6 +630,37 @@ test('loads the cloud object inventory once instead of listing once per blob', a
     assert.equal(objectLists, 1);
 });
 
+test('downloads known blobs directly from the shared object inventory', async () => {
+    const client = new FakeDriveClient();
+    let objectLists = 0;
+    let directDownloads = 0;
+    client.listFiles = async ({ kind } = {}) => {
+        if (kind !== 'object') return [];
+        objectLists += 1;
+        return [{
+            id: 'blob-file-1',
+            appProperties: {
+                radexamKind: 'object',
+                radexamPath: 'objects/sha256:known',
+                contentHash: 'sha256:known',
+            },
+        }];
+    };
+    client.downloadFile = async fileId => {
+        directDownloads += 1;
+        assert.equal(fileId, 'blob-file-1');
+        return new Response(new Blob(['known-blob']));
+    };
+    client.readBlob = async () => {
+        throw new Error('path lookup should not be used');
+    };
+    const provider = new GoogleDriveSyncProvider({ client });
+
+    assert.equal(await (await provider.downloadBlob('sha256:known')).text(), 'known-blob');
+    assert.equal(objectLists, 1);
+    assert.equal(directDownloads, 1);
+});
+
 test('does not repeat a missing blob lookup after loading the inventory', async () => {
     const client = new FakeDriveClient();
     let fileLookups = 0;

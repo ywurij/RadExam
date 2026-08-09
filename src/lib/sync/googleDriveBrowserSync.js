@@ -8,11 +8,7 @@ import {
     resolveLocalDataSyncConflict,
     synchronizeLocalData,
 } from '@/lib/localDb';
-import {
-    getLocalSyncJournalConfig,
-    listLocalSyncConflicts,
-    listPendingLocalSyncChanges,
-} from './localSyncJournal';
+import { getLocalSyncJournalState } from './localSyncJournal';
 import {
     GoogleDriveAppDataClient,
     GoogleDriveSyncProvider,
@@ -51,6 +47,12 @@ const createSession = clientId => {
     return activeSession;
 };
 
+const getSessionUser = async (session, { refresh = false } = {}) => {
+    if (!refresh && session.user) return session.user;
+    session.user = await session.client.getCurrentUser();
+    return session.user;
+};
+
 const getDeviceName = () => {
     const platform = globalThis.navigator?.userAgentData?.platform
         || globalThis.navigator?.platform
@@ -59,11 +61,7 @@ const getDeviceName = () => {
 };
 
 export const getGoogleDriveSyncState = async () => {
-    const [config, pendingChanges, conflicts] = await Promise.all([
-        getLocalSyncJournalConfig(),
-        listPendingLocalSyncChanges(),
-        listLocalSyncConflicts(),
-    ]);
+    const { config, pendingChanges, conflicts } = await getLocalSyncJournalState();
     const connected = Boolean(
         config.enabled
         && config.provider === SYNC_PROVIDERS.GOOGLE_DRIVE
@@ -110,6 +108,7 @@ const authorizeSession = async (clientId, { prompt }) => {
             throw error;
         }
         await session.tokenManager.requestAccessToken({ prompt });
+        session.user = null;
     }
     return session;
 };
@@ -117,7 +116,7 @@ const authorizeSession = async (clientId, { prompt }) => {
 export const connectGoogleDriveSync = async ({ clientId }) => {
     return runExclusive(async () => {
         const session = await authorizeSession(clientId, { prompt: 'consent' });
-        const user = await session.client.getCurrentUser();
+        const user = await getSessionUser(session, { refresh: true });
         const accountId = user?.permissionId || user?.emailAddress;
         if (!accountId) throw new Error('Google Driveのアカウント情報を確認できませんでした。');
         const accountLabel = user?.emailAddress || user?.displayName || 'Google Drive';
@@ -148,7 +147,7 @@ export const runGoogleDriveSync = async ({
         const session = await authorizeSession(clientId, {
             prompt: interactive ? '' : undefined,
         });
-        const user = await session.client.getCurrentUser();
+        const user = await getSessionUser(session);
         const accountId = user?.permissionId || user?.emailAddress;
         if (String(accountId) !== String(state.config.accountId)) {
             throw new Error('接続済みとは別のGoogleアカウントです。正しいアカウントで再認証してください。');
@@ -194,7 +193,7 @@ const runGoogleDriveDirection = ({ clientId, interactive = true, action }) => (
         const state = await getGoogleDriveSyncState();
         if (!state.connected) throw new Error('先にGoogle Driveへ接続してください。');
         const session = await authorizeSession(clientId, { prompt: interactive ? '' : undefined });
-        const user = await session.client.getCurrentUser();
+        const user = await getSessionUser(session);
         const accountId = user?.permissionId || user?.emailAddress;
         if (String(accountId) !== String(state.config.accountId)) {
             throw new Error('接続済みとは別のGoogleアカウントです。正しいアカウントで再認証してください。');
@@ -242,7 +241,7 @@ export const resolveGoogleDriveSyncConflict = async ({
         const state = await getGoogleDriveSyncState();
         if (!state.connected) throw new Error('先にGoogle Driveへ接続してください。');
         const session = await authorizeSession(clientId, { prompt: '' });
-        const user = await session.client.getCurrentUser();
+        const user = await getSessionUser(session);
         const accountId = user?.permissionId || user?.emailAddress;
         if (String(accountId) !== String(state.config.accountId)) {
             throw new Error('接続済みとは別のGoogleアカウントです。');
@@ -273,7 +272,7 @@ export const resetGoogleDriveSync = async ({
         const state = await getGoogleDriveSyncState();
         if (!state.connected) throw new Error('先にGoogle Driveへ接続してください。');
         const session = await authorizeSession(clientId, { prompt: '' });
-        const user = await session.client.getCurrentUser();
+        const user = await getSessionUser(session);
         const accountId = user?.permissionId || user?.emailAddress;
         if (String(accountId) !== String(state.config.accountId)) {
             throw new Error('接続済みとは別のGoogleアカウントです。');

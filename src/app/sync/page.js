@@ -94,7 +94,7 @@ const describeDataStatus = state => {
     return 'まだクラウドとの差を確認していません';
 };
 
-const describeProgress = progress => {
+const describeProgressDetails = progress => {
     if (!progress) return '';
     if (progress.phase === 'preparing-local-data') {
         return '接続は完了しています。端末内のデータを初回同期用に準備しています';
@@ -117,6 +117,27 @@ const describeProgress = progress => {
     }
     if (progress.phase === 'downloading-snapshot') return '初回同期データを受信しています';
     if (progress.phase === 'restoring-snapshot') return '受信したデータを端末へ保存しています';
+    if (progress.phase === 'preparing-received-changes') {
+        return `受信した変更${progress.totalChanges || 0}件の反映準備をしています`;
+    }
+    if (progress.phase === 'downloading-change-batch') {
+        return `変更データを受信しています: ${progress.batchIndex || 0} / ${progress.totalBatches || 0}グループ`;
+    }
+    if (progress.phase === 'checking-received-history') {
+        return `反映済みの変更を確認しています（${progress.batchChanges || 0}件）`;
+    }
+    if (progress.phase === 'downloading-received-files') {
+        return `変更された画像・PDFを受信しています: ${progress.downloadedFiles || 0} / ${progress.totalFiles || 0}件`;
+    }
+    if (progress.phase === 'checking-received-changes') {
+        return `変更内容と競合を確認しています: ${progress.processedChanges || 0} / ${progress.totalChanges || 0}件`;
+    }
+    if (progress.phase === 'saving-received-changes') {
+        return `確認済みの変更を端末へ保存しています（${progress.changeCount || 0}件）`;
+    }
+    if (progress.phase === 'recording-received-history') {
+        return `同期履歴をまとめて整理しています（${progress.changeCount || 0}件）`;
+    }
     if (progress.phase === 'applying-changes') {
         return `受信した変更を端末へ反映中: ${progress.processedChanges || 0} / ${progress.totalChanges || 0}件`;
     }
@@ -130,6 +151,16 @@ const describeProgress = progress => {
         return `クラウドデータを削除中: ${progress.deletedFiles || 0} / ${progress.totalFiles || 0}件`;
     }
     return '';
+};
+
+const describeProgress = (progress, now) => {
+    const details = describeProgressDetails(progress);
+    if (!details || !progress?.phaseStartedAt || !now) return details;
+    const elapsedSeconds = Math.max(
+        0,
+        Math.floor((now - progress.phaseStartedAt) / 1000)
+    );
+    return `${details}（この処理: ${elapsedSeconds}秒）`;
 };
 
 const describeSyncResult = result => {
@@ -188,6 +219,8 @@ export default function CloudSyncPage({ embedded = false }) {
     const [message, setMessage] = useState('');
     const [error, setError] = useState('');
     const [progress, setProgress] = useState(null);
+    const [progressClock, setProgressClock] = useState(0);
+    const progressPhase = progress?.phase || '';
     const provider = syncState?.connected
         ? syncState.config.provider
         : selectedProvider;
@@ -229,7 +262,17 @@ export default function CloudSyncPage({ embedded = false }) {
         });
         window.addEventListener('radexam-cloud-sync-completed', refreshState);
         window.addEventListener('radexam-cloud-update-status', refreshState);
-        const handleProgress = event => setProgress(event.detail || null);
+        const handleProgress = event => {
+            const detail = event.detail || null;
+            const receivedAt = Date.now();
+            setProgress(current => detail ? {
+                ...detail,
+                phaseStartedAt: current?.phase === detail.phase
+                    ? current.phaseStartedAt
+                    : receivedAt,
+            } : null);
+            setProgressClock(receivedAt);
+        };
         window.addEventListener('radexam-cloud-sync-progress', handleProgress);
         return () => {
             window.removeEventListener('radexam-cloud-sync-completed', refreshState);
@@ -237,6 +280,12 @@ export default function CloudSyncPage({ embedded = false }) {
             window.removeEventListener('radexam-cloud-sync-progress', handleProgress);
         };
     }, [refreshState]);
+
+    useEffect(() => {
+        if (!busyPhase || !progressPhase) return undefined;
+        const timer = window.setInterval(() => setProgressClock(Date.now()), 1000);
+        return () => window.clearInterval(timer);
+    }, [busyPhase, progressPhase]);
 
     const runAction = async (
         action,
@@ -668,9 +717,9 @@ export default function CloudSyncPage({ embedded = false }) {
                         クラウドに未取得の更新があります。送信前に更新を取得してください。
                     </p>
                 )}
-                {busy && describeProgress(progress) && (
+                {busy && describeProgress(progress, progressClock) && (
                     <div className={styles.progress} role="status">
-                        <span>{describeProgress(progress)}</span>
+                        <span>{describeProgress(progress, progressClock)}</span>
                         {['uploading-snapshot', 'uploading-checkpoint'].includes(progress?.phase)
                             && progress.totalBytes > 0 && (
                             <progress

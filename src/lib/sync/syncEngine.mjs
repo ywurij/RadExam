@@ -52,7 +52,8 @@ const readManifestForSync = provider => provider.readManifest({
 const MAX_STANDARD_DELTA_BYTES = 5 * 1024 * 1024;
 const STRUCTURAL_BULK_THRESHOLD = 25;
 const BINARY_BULK_THRESHOLD = 10;
-const SNAPSHOT_PULL_CHANGE_THRESHOLD = 300;
+const SNAPSHOT_PULL_CHANGE_THRESHOLD = 1000;
+const CHANGE_BATCH_DOWNLOAD_CONCURRENCY = 3;
 const STRUCTURAL_ENTITY_TYPES = new Set(['exam', 'question']);
 
 const shouldUseBulkPackage = changes => {
@@ -88,7 +89,74 @@ const buildBatchId = changes => {
     return `${first.deviceId}-${first.sequence}-${last.sequence}`;
 };
 
-const prefetchIncomingBlobs = async ({ provider, changes }) => {
+const syncEntityKey = change => `${change.entityType}:${String(change.entityId)}`;
+
+const groupChangesByEntity = changes => {
+    const grouped = new Map();
+    for (const change of changes || []) {
+        const key = syncEntityKey(change);
+        if (!grouped.has(key)) grouped.set(key, []);
+        grouped.get(key).push(change);
+    }
+    return grouped;
+};
+
+const summarizeBatchChanges = (changes, byteSize = 0) => {
+    const entityCounts = {};
+    for (const change of changes || []) {
+        entityCounts[change.entityType] = (entityCounts[change.entityType] || 0) + 1;
+    }
+    return {
+        entityCounts,
+        blobCount: uniqueBlobRefs(changes || []).length,
+        byteSize: Math.max(0, Number(byteSize) || 0),
+    };
+};
+
+const shouldRestoreCheckpointSnapshot = ({ manifest, config, remoteSummary }) => {
+    const snapshot = manifest.latestSnapshot;
+    if (
+        !snapshot
+        || remoteSummary.remoteChangeCount < SNAPSHOT_PULL_CHANGE_THRESHOLD
+        || Number(snapshot.generation) <= (Number(config.lastPulledGeneration) || 0)
+    ) {
+        return false;
+    }
+    const remoteBatches = manifest.batches.filter(batch => (
+        batch.generation > (Number(config.lastPulledGeneration) || 0)
+        && batch.generation <= Number(snapshot.generation)
+    ));
+    if (
+        remoteBatches.length === 0
+        || remoteBatches.some(batch => !batch.entityCounts || !Number(batch.byteSize))
+    ) {
+        return false;
+    }
+    const totals = remoteBatches.reduce((summary, batch) => {
+        for (const [entityType, count] of Object.entries(batch.entityCounts || {})) {
+            summary.entityCounts[entityType] = (
+                summary.entityCounts[entityType] || 0
+            ) + (Number(count) || 0);
+        }
+        summary.byteSize += Number(batch.byteSize) || 0;
+        return summary;
+    }, { entityCounts: {}, byteSize: 0 });
+    const structuralChanges = (
+        (totals.entityCounts.exam || 0)
+        + (totals.entityCounts.question || 0)
+    );
+    const binaryChanges = (
+        (totals.entityCounts.image || 0)
+        + (totals.entityCounts.pdf || 0)
+    );
+    return (
+        binaryChanges === 0
+        && structuralChanges / remoteSummary.remoteChangeCount >= 0.75
+        && totals.byteSize >= Number(snapshot.byteSize) * 0.5
+    );
+};
+
+const prefetchIncomingBlobs = async ({ provider, changes, batchIndex, totalBatches }) => {
     const refs = new Map();
     for (const change of changes) {
         if (!['image', 'pdf'].includes(change.entityType) || change.operation === 'delete') continue;
@@ -98,11 +166,29 @@ const prefetchIncomingBlobs = async ({ provider, changes }) => {
     }
     const queue = [...refs.keys()];
     const blobs = new Map();
+    let downloadedFiles = 0;
+    if (queue.length > 0) {
+        reportProgress(provider, {
+            phase: 'downloading-received-files',
+            downloadedFiles,
+            totalFiles: queue.length,
+            batchIndex,
+            totalBatches,
+        });
+    }
     await Promise.all(Array.from({ length: Math.min(3, queue.length) }, async () => {
         while (queue.length > 0) {
             const contentHash = queue.shift();
             if (!contentHash) continue;
             blobs.set(contentHash, await provider.downloadBlob(contentHash));
+            downloadedFiles += 1;
+            reportProgress(provider, {
+                phase: 'downloading-received-files',
+                downloadedFiles,
+                totalFiles: refs.size,
+                batchIndex,
+                totalBatches,
+            });
         }
     }));
     return blobs;
@@ -113,6 +199,7 @@ const pullRemoteBatches = async ({
     journal,
     dataStore,
     manifest,
+    localState = null,
 }) => {
     const summary = {
         pulledBatches: 0,
@@ -132,15 +219,37 @@ const pullRemoteBatches = async ({
         if (!alreadyApplied) batches.push(batch);
     }
 
-    const [pendingLocalChanges, unresolvedConflicts, sentLocalChanges] = await Promise.all([
-        journal.listPendingChanges(),
-        typeof journal.listConflicts === 'function'
-            ? journal.listConflicts()
-            : Promise.resolve([]),
-        typeof journal.listSentChangesAfterGeneration === 'function'
-            ? journal.listSentChangesAfterGeneration(0)
-            : Promise.resolve([]),
-    ]);
+    const totalChanges = batches.reduce(
+        (total, batch) => total + (Number(batch.changeCount) || 0),
+        0
+    );
+    let processedChanges = 0;
+    if (totalChanges > 0) {
+        reportProgress(provider, {
+            phase: 'preparing-received-changes',
+            processedChanges,
+            totalChanges,
+        });
+    }
+
+    const preparedState = localState || (typeof journal.readPullState === 'function'
+        ? await journal.readPullState()
+        : null);
+    const [pendingLocalChanges, unresolvedConflicts, sentLocalChanges] = preparedState
+        ? [
+            preparedState.pendingLocalChanges,
+            preparedState.unresolvedConflicts,
+            preparedState.sentLocalChanges,
+        ]
+        : await Promise.all([
+            journal.listPendingChanges(),
+            typeof journal.listConflicts === 'function'
+                ? journal.listConflicts()
+                : Promise.resolve([]),
+            typeof journal.listSentChangesAfterGeneration === 'function'
+                ? journal.listSentChangesAfterGeneration(0)
+                : Promise.resolve([]),
+        ]);
     const incomingContext = {
         config,
         pendingLocalChanges,
@@ -150,38 +259,64 @@ const pullRemoteBatches = async ({
             conflict,
         ])),
         appliedChangeIds: new Set(),
+        pendingChangesByEntity: groupChangesByEntity(pendingLocalChanges),
+        sentChangesByEntity: groupChangesByEntity(sentLocalChanges),
     };
-    const totalChanges = batches.reduce(
-        (total, batch) => total + (Number(batch.changeCount) || 0),
-        0
-    );
-    let processedChanges = 0;
-    if (totalChanges > 0) {
+    const batchDownloads = new Map();
+    const prefetchBatch = index => {
+        if (index >= batches.length || batchDownloads.has(index)) return;
+        const descriptor = batches[index];
+        batchDownloads.set(index, provider.downloadChangeBatch(descriptor).then(
+            value => ({
+                value: validateSyncChangeBatch(value, descriptor),
+                error: null,
+            }),
+            error => ({ value: null, error })
+        ));
+    };
+    for (let batchIndex = 0; batchIndex < batches.length; batchIndex += 1) {
+        const descriptor = batches[batchIndex];
+        for (
+            let preloadIndex = batchIndex;
+            preloadIndex < Math.min(
+                batches.length,
+                batchIndex + CHANGE_BATCH_DOWNLOAD_CONCURRENCY
+            );
+            preloadIndex += 1
+        ) {
+            prefetchBatch(preloadIndex);
+        }
         reportProgress(provider, {
-            phase: 'applying-changes',
+            phase: 'downloading-change-batch',
+            batchIndex: batchIndex + 1,
+            totalBatches: batches.length,
             processedChanges,
             totalChanges,
         });
-    }
-
-    for (const descriptor of batches) {
-        const batch = validateSyncChangeBatch(
-            await provider.downloadChangeBatch(descriptor),
-            descriptor
-        );
-        incomingContext.appliedChangeIds = typeof journal.findAppliedChangeIds === 'function'
-            ? await journal.findAppliedChangeIds(batch.changes.map(change => change.changeId))
-            : null;
+        const downloaded = await batchDownloads.get(batchIndex);
+        batchDownloads.delete(batchIndex);
+        if (downloaded.error) throw downloaded.error;
+        const batch = downloaded.value;
         const supportsBatch = (
             typeof dataStore.beginBatch === 'function'
             && typeof dataStore.endBatch === 'function'
         );
         const appliedChanges = [];
+        const pendingChangesToAcknowledge = [];
         try {
             if (supportsBatch) await dataStore.beginBatch();
             const prefetchedBlobs = await prefetchIncomingBlobs({
                 provider,
                 changes: batch.changes,
+                batchIndex: batchIndex + 1,
+                totalBatches: batches.length,
+            });
+            reportProgress(provider, {
+                phase: 'checking-received-changes',
+                processedChanges,
+                totalChanges,
+                batchIndex: batchIndex + 1,
+                totalBatches: batches.length,
             });
             for (const change of batch.changes) {
                 const result = await processIncomingSyncChange({
@@ -202,27 +337,48 @@ const pullRemoteBatches = async ({
                     if (supportsBatch) appliedChanges.push(result.change);
                 }
                 if (result.status === 'duplicate') summary.duplicateChanges += 1;
-                if (result.status === 'acknowledged') summary.acknowledgedChanges += 1;
+                if (result.pendingChange) {
+                    pendingChangesToAcknowledge.push(result.pendingChange);
+                }
+                if (result.status === 'acknowledged') {
+                    summary.acknowledgedChanges += 1;
+                }
                 if (result.status === 'conflict') summary.conflicts += 1;
                 processedChanges += 1;
                 if (processedChanges % 10 === 0 || processedChanges === totalChanges) {
                     reportProgress(provider, {
-                        phase: 'applying-changes',
+                        phase: 'checking-received-changes',
                         processedChanges,
                         totalChanges,
                     });
                 }
             }
             if (supportsBatch) {
+                reportProgress(provider, {
+                    phase: 'saving-received-changes',
+                    changeCount: appliedChanges.length,
+                    batchIndex: batchIndex + 1,
+                    totalBatches: batches.length,
+                });
                 await dataStore.endBatch();
-                if (typeof journal.markChangesApplied === 'function') {
-                    await journal.markChangesApplied(
-                        appliedChanges,
-                        undefined,
-                        { skipExistingCheck: Boolean(incomingContext.appliedChangeIds) }
-                    );
-                } else {
-                    for (const change of appliedChanges) await journal.markChangeApplied(change);
+                reportProgress(provider, {
+                    phase: 'recording-received-history',
+                    changeCount: pendingChangesToAcknowledge.length,
+                    batchIndex: batchIndex + 1,
+                    totalBatches: batches.length,
+                });
+                if (pendingChangesToAcknowledge.length > 0) {
+                    if (typeof journal.acknowledgeKnownChanges === 'function') {
+                        await journal.acknowledgeKnownChanges(
+                            pendingChangesToAcknowledge,
+                            { committedGeneration: descriptor.generation }
+                        );
+                    } else {
+                        await journal.acknowledgeChanges(
+                            pendingChangesToAcknowledge.map(change => change.changeId),
+                            { committedGeneration: descriptor.generation }
+                        );
+                    }
                 }
             }
         } catch (error) {
@@ -239,6 +395,7 @@ const pullRemoteBatches = async ({
         }
         summary.pulledBatches += 1;
     }
+    summary.pendingChanges = incomingContext.pendingLocalChanges.length;
     return summary;
 };
 
@@ -248,6 +405,7 @@ const restoreRemoteSnapshotIfNeeded = async ({
     manifest,
     restoreLocalSnapshot,
     allowCheckpointRestore = false,
+    pendingChanges = null,
 }) => {
     const snapshot = manifest.latestSnapshot;
     if (!snapshot) return { restoredSnapshot: false };
@@ -262,7 +420,7 @@ const restoreRemoteSnapshotIfNeeded = async ({
     ) {
         if (!allowCheckpointRestore) return { restoredSnapshot: false };
     }
-    const pending = await journal.listPendingChanges();
+    const pending = pendingChanges || await journal.listPendingChanges();
     if (pending.length > 0) {
         // ローカルに独自データがある端末は、無断で全体を上書きしない。
         return { restoredSnapshot: false };
@@ -300,6 +458,7 @@ const commitInitialSnapshot = async ({
     createLocalSnapshot,
     maxManifestRetries,
     snapshotThreshold,
+    pendingChanges = null,
 }) => {
     if (
         manifest.latestSnapshot
@@ -309,7 +468,7 @@ const commitInitialSnapshot = async ({
     ) {
         return { createdSnapshot: false, coveredChanges: 0 };
     }
-    const pending = await journal.listPendingChanges();
+    const pending = pendingChanges || await journal.listPendingChanges();
     if (pending.length < snapshotThreshold) {
         return { createdSnapshot: false, coveredChanges: 0 };
     }
@@ -401,10 +560,16 @@ const commitInitialSnapshot = async ({
             phase: 'finalizing-local-changes',
             totalChanges: covered.length,
         });
-        await journal.acknowledgeChanges(
-            covered.map(change => change.changeId),
-            { committedGeneration: committedSnapshot.generation }
-        );
+        if (typeof journal.acknowledgeKnownChanges === 'function') {
+            await journal.acknowledgeKnownChanges(covered, {
+                committedGeneration: committedSnapshot.generation,
+            });
+        } else {
+            await journal.acknowledgeChanges(
+                covered.map(change => change.changeId),
+                { committedGeneration: committedSnapshot.generation }
+            );
+        }
         await journal.configure({
             lastAppliedSnapshotId: committedSnapshot.snapshotId,
             lastPushedGeneration: committedSnapshot.generation,
@@ -541,8 +706,9 @@ const pushLocalBatch = async ({
     getLocalBlob,
     maxManifestRetries,
     remoteHint = null,
+    pendingChanges = null,
 }) => {
-    const allPending = (await journal.listPendingChanges())
+    const allPending = pendingChanges || (await journal.listPendingChanges())
         .sort((left, right) => left.sequence - right.sequence);
     const useBulkPackage = (
         typeof provider.uploadBulkChangePackage === 'function'
@@ -600,6 +766,10 @@ const pushLocalBatch = async ({
         deviceId: pending[0].deviceId,
         changes: pending,
     });
+    const batchSummary = summarizeBatchChanges(
+        pending,
+        new Blob([JSON.stringify(batch)]).size
+    );
     const { objectKey } = useBulkPackage
         ? await provider.uploadBulkChangePackage(batch)
         : await provider.uploadChangeBatch(batch);
@@ -618,6 +788,7 @@ const pushLocalBatch = async ({
             toSequence: batch.toSequence,
             changeCount: batch.changeCount,
             format: batch.format,
+            ...batchSummary,
             createdAt: batch.createdAt,
         });
         if (!appended.appended) {
@@ -640,10 +811,16 @@ const pushLocalBatch = async ({
         phase: 'finalizing-local-changes',
         totalChanges: pending.length,
     });
-    await journal.acknowledgeChanges(
-        pending.map(change => change.changeId),
-        { committedGeneration: committedBatch.generation }
-    );
+    if (typeof journal.acknowledgeKnownChanges === 'function') {
+        await journal.acknowledgeKnownChanges(pending, {
+            committedGeneration: committedBatch.generation,
+        });
+    } else {
+        await journal.acknowledgeChanges(
+            pending.map(change => change.changeId),
+            { committedGeneration: committedBatch.generation }
+        );
+    }
     const config = await journal.getConfig();
     await journal.configure({
         lastPushedGeneration: committedBatch.generation,
@@ -665,6 +842,7 @@ const pushLocalBatches = async ({
     maxManifestRetries,
     maxPushBatches,
     remoteHint = null,
+    pendingChanges = null,
 }) => {
     const total = {
         pushedBatches: 0,
@@ -672,6 +850,9 @@ const pushLocalBatches = async ({
         uploadedBlobs: 0,
         pushedBulkPackages: 0,
     };
+    const pendingQueue = [...(
+        pendingChanges || await journal.listPendingChanges()
+    )].sort((left, right) => left.sequence - right.sequence);
     for (let index = 0; index < maxPushBatches; index += 1) {
         const result = await pushLocalBatch({
             provider,
@@ -679,13 +860,16 @@ const pushLocalBatches = async ({
             getLocalBlob,
             maxManifestRetries,
             remoteHint: index === 0 ? remoteHint : null,
+            pendingChanges: pendingQueue,
         });
         total.pushedBatches += result.pushedBatches;
         total.pushedChanges += result.pushedChanges;
         total.uploadedBlobs += result.uploadedBlobs;
         total.pushedBulkPackages += result.pushedBulkPackages || 0;
         if (result.pushedBatches === 0) break;
+        pendingQueue.splice(0, result.pushedChanges);
     }
+    total.remainingPendingChanges = pendingQueue.length;
     return total;
 };
 
@@ -693,9 +877,11 @@ const inspectRemoteUpdates = async ({ journal, manifest }) => {
     const config = await journal.getConfig();
     const unappliedBatches = [];
     for (const batch of manifest.batches) {
-        const alreadyApplied = typeof journal.hasAppliedBatch === 'function'
-            ? await journal.hasAppliedBatch(batch.batchId)
-            : batch.generation <= (Number(config.lastPulledGeneration) || 0);
+        const alreadyApplied = (
+            batch.generation <= (Number(config.lastPulledGeneration) || 0)
+            || (typeof journal.hasAppliedBatch === 'function'
+                && await journal.hasAppliedBatch(batch.batchId))
+        );
         if (!alreadyApplied) unappliedBatches.push(batch);
     }
     const snapshotAvailable = Boolean(
@@ -783,16 +969,23 @@ export const runSyncPull = async ({
         const manifest = validateSyncManifest(remote.manifest);
         const config = await journal.getConfig();
         const remoteSummary = await inspectRemoteUpdates({ journal, manifest });
-        const [pending, conflicts] = await Promise.all([
-            journal.listPendingChanges(),
-            typeof journal.listConflicts === 'function' ? journal.listConflicts() : [],
-        ]);
+        const localState = typeof journal.readPullState === 'function'
+            ? await journal.readPullState()
+            : null;
+        const [pending, conflicts] = localState
+            ? [localState.pendingLocalChanges, localState.unresolvedConflicts]
+            : await Promise.all([
+                journal.listPendingChanges(),
+                typeof journal.listConflicts === 'function' ? journal.listConflicts() : [],
+            ]);
         const allowCheckpointRestore = Boolean(
-            manifest.latestSnapshot
-            && remoteSummary.remoteChangeCount >= SNAPSHOT_PULL_CHANGE_THRESHOLD
-            && Number(manifest.latestSnapshot.generation) > (Number(config.lastPulledGeneration) || 0)
-            && pending.length === 0
+            pending.length === 0
             && conflicts.length === 0
+            && shouldRestoreCheckpointSnapshot({
+                manifest,
+                config,
+                remoteSummary,
+            })
         );
         const snapshotPull = await restoreRemoteSnapshotIfNeeded({
             provider,
@@ -800,8 +993,15 @@ export const runSyncPull = async ({
             manifest,
             restoreLocalSnapshot,
             allowCheckpointRestore,
+            pendingChanges: pending,
         });
-        const pull = await pullRemoteBatches({ provider, journal, dataStore, manifest });
+        const pull = await pullRemoteBatches({
+            provider,
+            journal,
+            dataStore,
+            manifest,
+            localState,
+        });
         const finishedAt = new Date().toISOString();
         const remaining = await inspectRemoteUpdates({ journal, manifest });
         await journal.configure({
@@ -823,7 +1023,7 @@ export const runSyncPull = async ({
             ...pull,
             ...remaining,
             finishedAt,
-            pendingChanges: (await journal.listPendingChanges()).length,
+            pendingChanges: pull.pendingChanges,
             durationMs: Date.now() - startedAtMs,
         };
     } catch (error) {
@@ -852,6 +1052,7 @@ export const runSyncPush = async ({
             error.code = 'REMOTE_UPDATES_REQUIRED';
             throw error;
         }
+        const pendingChanges = await journal.listPendingChanges();
         const snapshotPush = await commitInitialSnapshot({
             provider,
             journal,
@@ -860,6 +1061,7 @@ export const runSyncPush = async ({
             createLocalSnapshot,
             maxManifestRetries,
             snapshotThreshold,
+            pendingChanges,
         });
         const push = await pushLocalBatches({
             provider,
@@ -868,6 +1070,7 @@ export const runSyncPush = async ({
             maxManifestRetries,
             maxPushBatches,
             remoteHint: snapshotPush.createdSnapshot ? null : remote,
+            pendingChanges: snapshotPush.createdSnapshot ? null : pendingChanges,
         });
         const periodicSnapshot = await commitPeriodicSnapshotIfDue({
             provider,
@@ -904,7 +1107,7 @@ export const runSyncPush = async ({
             ...periodicSnapshot,
             finishedAt,
             lastKnownCloudGeneration,
-            pendingChanges: (await journal.listPendingChanges()).length,
+            pendingChanges: push.remainingPendingChanges,
             sentChanges,
             durationMs: Date.now() - startedAtMs,
         };
@@ -938,17 +1141,22 @@ export const runSyncCycle = async ({
     try {
         const remote = await readManifestForSync(provider);
         let manifest = validateSyncManifest(remote.manifest);
+        const localState = typeof journal.readPullState === 'function'
+            ? await journal.readPullState()
+            : null;
         const snapshotPull = await restoreRemoteSnapshotIfNeeded({
             provider,
             journal,
             manifest,
             restoreLocalSnapshot,
+            pendingChanges: localState?.pendingLocalChanges || null,
         });
         const pull = await pullRemoteBatches({
             provider,
             journal,
             dataStore,
             manifest,
+            localState,
         });
         const snapshotPush = await commitInitialSnapshot({
             provider,
@@ -980,7 +1188,7 @@ export const runSyncCycle = async ({
             Number(finalConfig.lastPulledGeneration) || 0,
             Number(finalConfig.lastPushedGeneration) || 0
         );
-        const pendingChanges = (await journal.listPendingChanges()).length;
+        const pendingChanges = push.remainingPendingChanges;
         const sentChanges = (snapshotPush.coveredChanges || 0) + (push.pushedChanges || 0);
         await journal.configure({
             lastSyncAt: finishedAt,
