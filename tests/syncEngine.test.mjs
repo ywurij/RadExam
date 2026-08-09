@@ -540,6 +540,8 @@ test('uses one manifest read for a normal one-change sync', async () => {
     const result = await syncDevice(device);
 
     assert.equal(result.pushedChanges, 1);
+    assert.equal(result.uploadedBlobs, 0);
+    assert.equal(cloud.stats.blobUploads, 0);
     assert.equal(manifestReads, 1);
     assert.ok(result.durationMs >= 0);
     assert.equal((await device.journal.getConfig()).lastKnownCloudGeneration, 1);

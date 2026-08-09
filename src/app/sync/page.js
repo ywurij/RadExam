@@ -109,7 +109,7 @@ const describeProgressDetails = progress => {
         return `初回同期データを送信中: ${formatBytes(progress.uploadedBytes)} / ${formatBytes(progress.totalBytes)}`;
     }
     if (progress.phase === 'uploading-changes') {
-        return `変更された画像・PDFを送信中: ${formatBytes(progress.uploadedBytes)} / ${formatBytes(progress.totalBytes)}`;
+        return `変更内容を送信中: ${formatBytes(progress.uploadedBytes)} / ${formatBytes(progress.totalBytes)}`;
     }
     if (progress.phase === 'uploading-files') {
         return `変更された画像・PDFを送信中: ${progress.uploadedFiles || 0} / ${progress.totalFiles || 0}件`;
