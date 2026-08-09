@@ -265,6 +265,7 @@ export default function CloudSyncPage({ embedded = false }) {
         });
         window.addEventListener('radexam-cloud-sync-completed', refreshState);
         window.addEventListener('radexam-cloud-update-status', refreshState);
+        window.addEventListener('radexam-local-sync-change', refreshState);
         const handleProgress = event => {
             const detail = event.detail || null;
             const receivedAt = Date.now();
@@ -280,6 +281,7 @@ export default function CloudSyncPage({ embedded = false }) {
         return () => {
             window.removeEventListener('radexam-cloud-sync-completed', refreshState);
             window.removeEventListener('radexam-cloud-update-status', refreshState);
+            window.removeEventListener('radexam-local-sync-change', refreshState);
             window.removeEventListener('radexam-cloud-sync-progress', handleProgress);
         };
     }, [refreshState]);

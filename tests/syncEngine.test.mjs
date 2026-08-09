@@ -545,6 +545,31 @@ test('uses one manifest read for a normal one-change sync', async () => {
     assert.equal((await device.journal.getConfig()).lastKnownCloudGeneration, 1);
 });
 
+test('rebuilds the outgoing queue from local data when the cloud and journal are empty', async () => {
+    const cloud = createInMemorySyncCloud();
+    const device = await createDevice('device-a', new InMemorySyncProvider(cloud));
+    let seedCalls = 0;
+
+    const result = await runSyncPush({
+        provider: device.provider,
+        journal: device.journal,
+        seedLocalChangesForEmptyCloud: async () => {
+            seedCalls += 1;
+            await device.journal.recordChanges([{
+                entityType: SYNC_ENTITY_TYPES.EXAM,
+                entityId: 'radiology',
+                changedFields: ['name'],
+                payload: { name: '放射線科専門医' },
+            }]);
+        },
+    });
+
+    assert.equal(seedCalls, 1);
+    assert.equal(result.pushedChanges, 1);
+    assert.equal(cloud.manifest.batches.length, 1);
+    assert.deepEqual(await device.journal.listPendingChanges(), []);
+});
+
 test('packs more than 100 local changes into one bulk delta package', async () => {
     const cloud = createInMemorySyncCloud();
     const device = await createDevice('device-a', new InMemorySyncProvider(cloud));

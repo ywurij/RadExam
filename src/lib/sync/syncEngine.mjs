@@ -1085,6 +1085,7 @@ export const runSyncPush = async ({
     provider,
     journal,
     getLocalBlob,
+    seedLocalChangesForEmptyCloud,
     maxManifestRetries = 3,
     maxPushBatches = 20,
     createLocalSnapshot,
@@ -1102,7 +1103,17 @@ export const runSyncPush = async ({
             error.code = 'REMOTE_UPDATES_REQUIRED';
             throw error;
         }
-        const pendingChanges = await journal.listPendingChanges();
+        let pendingChanges = await journal.listPendingChanges();
+        if (
+            pendingChanges.length === 0
+            && Number(manifest.generation) === 0
+            && manifest.batches.length === 0
+            && !manifest.latestSnapshot
+            && typeof seedLocalChangesForEmptyCloud === 'function'
+        ) {
+            await seedLocalChangesForEmptyCloud();
+            pendingChanges = await journal.listPendingChanges();
+        }
         const snapshotPush = await commitInitialSnapshot({
             provider,
             journal,
@@ -1173,6 +1184,7 @@ export const runSyncCycle = async ({
     journal,
     dataStore,
     getLocalBlob,
+    seedLocalChangesForEmptyCloud,
     maxManifestRetries = 3,
     maxPushBatches = 20,
     createLocalSnapshot,
@@ -1210,6 +1222,17 @@ export const runSyncCycle = async ({
             manifest,
             localState,
         });
+        let outgoingPending = await journal.listPendingChanges();
+        if (
+            outgoingPending.length === 0
+            && Number(manifest.generation) === 0
+            && manifest.batches.length === 0
+            && !manifest.latestSnapshot
+            && typeof seedLocalChangesForEmptyCloud === 'function'
+        ) {
+            await seedLocalChangesForEmptyCloud();
+            outgoingPending = await journal.listPendingChanges();
+        }
         const snapshotPush = await commitInitialSnapshot({
             provider,
             journal,
@@ -1218,6 +1241,7 @@ export const runSyncCycle = async ({
             createLocalSnapshot,
             maxManifestRetries,
             snapshotThreshold,
+            pendingChanges: outgoingPending,
         });
         const push = await pushLocalBatches({
             provider,
@@ -1226,6 +1250,7 @@ export const runSyncCycle = async ({
             maxManifestRetries,
             maxPushBatches,
             remoteHint: snapshotPush.createdSnapshot ? null : remote,
+            pendingChanges: snapshotPush.createdSnapshot ? null : outgoingPending,
         });
         const periodicSnapshot = await commitPeriodicSnapshotIfDue({
             provider,

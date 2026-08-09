@@ -1227,6 +1227,10 @@ const createLocalSyncOptions = provider => ({
         journal: localSyncJournal,
         dataStore: localSyncDataStore,
         getLocalBlob: getLocalSyncBlob,
+        seedLocalChangesForEmptyCloud: async () => {
+            const seedData = await collectLocalSyncSeedData();
+            return recordLocalSyncChanges(buildInitialSyncChangeInputs(seedData));
+        },
         createLocalSnapshot: async () => {
             const backup = await exportAllLocalData();
             const blob = await createBackupArchiveBlob(backup);
