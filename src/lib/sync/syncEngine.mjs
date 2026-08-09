@@ -572,6 +572,7 @@ const commitInitialSnapshot = async ({
         }
         await journal.configure({
             lastAppliedSnapshotId: committedSnapshot.snapshotId,
+            lastPublishedSnapshotId: committedSnapshot.snapshotId,
             lastPushedGeneration: committedSnapshot.generation,
             lastSnapshotAt: committedSnapshot.createdAt,
             changesSinceSnapshot: 0,
@@ -887,6 +888,7 @@ const inspectRemoteUpdates = async ({ journal, manifest }) => {
     const snapshotAvailable = Boolean(
         manifest.latestSnapshot
         && !config.lastAppliedSnapshotId
+        && manifest.latestSnapshot.deviceId !== config.deviceId
         && Number(config.lastPulledGeneration || 0) === 0
         && Number(config.lastPushedGeneration || 0) === 0
     );
@@ -900,6 +902,49 @@ const inspectRemoteUpdates = async ({ journal, manifest }) => {
         snapshotAvailable,
         updatesAvailable: snapshotAvailable || unappliedBatches.length > 0,
     };
+};
+
+const reconcileOwnPublishedSnapshot = async ({ journal, manifest }) => {
+    const snapshot = manifest.latestSnapshot;
+    if (!snapshot) return { reconciled: false, coveredChanges: 0 };
+    const config = await journal.getConfig();
+    if (
+        config.lastAppliedSnapshotId === snapshot.snapshotId
+        || String(snapshot.deviceId) !== String(config.deviceId)
+    ) {
+        return { reconciled: false, coveredChanges: 0 };
+    }
+
+    const cutoffSequence = Math.max(0, Number(snapshot.cutoffSequence) || 0);
+    const pending = await journal.listPendingChanges();
+    const covered = pending.filter(change => (
+        String(change.deviceId) === String(config.deviceId)
+        && Number(change.sequence) <= cutoffSequence
+    ));
+    if (covered.length > 0) {
+        if (typeof journal.acknowledgeKnownChanges === 'function') {
+            await journal.acknowledgeKnownChanges(covered, {
+                committedGeneration: Number(snapshot.generation) || 0,
+            });
+        } else {
+            await journal.acknowledgeChanges(
+                covered.map(change => change.changeId),
+                { committedGeneration: Number(snapshot.generation) || 0 }
+            );
+        }
+    }
+    await journal.configure({
+        lastAppliedSnapshotId: snapshot.snapshotId,
+        lastAppliedSnapshotAt: snapshot.createdAt || new Date().toISOString(),
+        lastPublishedSnapshotId: snapshot.snapshotId,
+        lastPushedGeneration: Math.max(
+            Number(config.lastPushedGeneration) || 0,
+            Number(snapshot.generation) || 0
+        ),
+        lastSnapshotAt: snapshot.createdAt || config.lastSnapshotAt || null,
+        changesSinceSnapshot: 0,
+    });
+    return { reconciled: true, coveredChanges: covered.length };
 };
 
 const assertSyncReady = async ({ provider, journal, dataStoreRequired = false, dataStore }) => {
@@ -930,6 +975,7 @@ export const checkSyncUpdates = async ({ provider, journal }) => {
     try {
         const remote = await readManifestForSync(provider);
         const manifest = validateSyncManifest(remote.manifest);
+        await reconcileOwnPublishedSnapshot({ journal, manifest });
         const summary = await inspectRemoteUpdates({ journal, manifest });
         const checkedAt = new Date().toISOString();
         const pendingChanges = (await journal.listPendingChanges()).length;
@@ -938,6 +984,7 @@ export const checkSyncUpdates = async ({ provider, journal }) => {
             lastKnownCloudGeneration: summary.cloudGeneration,
             remoteChangesAvailable: summary.updatesAvailable,
             remoteChangeCount: summary.remoteChangeCount,
+            remoteSnapshotAvailable: summary.snapshotAvailable,
             lastSyncError: null,
             lastSyncErrorAt: null,
         });
@@ -967,6 +1014,7 @@ export const runSyncPull = async ({
     try {
         const remote = await readManifestForSync(provider);
         const manifest = validateSyncManifest(remote.manifest);
+        await reconcileOwnPublishedSnapshot({ journal, manifest });
         const config = await journal.getConfig();
         const remoteSummary = await inspectRemoteUpdates({ journal, manifest });
         const localState = typeof journal.readPullState === 'function'
@@ -1011,6 +1059,7 @@ export const runSyncPull = async ({
             lastKnownCloudGeneration: remaining.cloudGeneration,
             remoteChangesAvailable: remaining.updatesAvailable,
             remoteChangeCount: remaining.remoteChangeCount,
+            remoteSnapshotAvailable: remaining.snapshotAvailable,
             lastSyncDurationMs: Date.now() - startedAtMs,
             lastSyncReceivedChanges: pull.appliedChanges,
             lastSyncSentChanges: 0,
@@ -1046,6 +1095,7 @@ export const runSyncPush = async ({
     try {
         const remote = await readManifestForSync(provider);
         const manifest = validateSyncManifest(remote.manifest);
+        await reconcileOwnPublishedSnapshot({ journal, manifest });
         const remoteUpdates = await inspectRemoteUpdates({ journal, manifest });
         if (remoteUpdates.updatesAvailable) {
             const error = new Error('クラウドに未取得の更新があります。先に「クラウドから更新を取得」を実行してください。');
@@ -1092,6 +1142,7 @@ export const runSyncPush = async ({
             lastKnownCloudGeneration,
             remoteChangesAvailable: false,
             remoteChangeCount: 0,
+            remoteSnapshotAvailable: false,
             lastSyncDurationMs: Date.now() - startedAtMs,
             lastSyncSentChanges: sentChanges,
             lastSyncReceivedChanges: 0,
@@ -1141,6 +1192,7 @@ export const runSyncCycle = async ({
     try {
         const remote = await readManifestForSync(provider);
         let manifest = validateSyncManifest(remote.manifest);
+        await reconcileOwnPublishedSnapshot({ journal, manifest });
         const localState = typeof journal.readPullState === 'function'
             ? await journal.readPullState()
             : null;

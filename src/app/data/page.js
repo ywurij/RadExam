@@ -2,7 +2,12 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { getAllLocalExams, exportAllLocalData, importLocalData } from '@/lib/localDb';
+import {
+    clearAllLocalAppData,
+    getAllLocalExams,
+    exportAllLocalData,
+    importLocalData,
+} from '@/lib/localDb';
 import { createBackupArchiveBlob, readBackupFile } from '@/lib/backupArchive.mjs';
 import { initializeLocalExams } from '@/lib/data';
 import CloudSyncPage from '@/app/sync/page';
@@ -102,6 +107,30 @@ export default function DataTransferPage() {
         }
     };
 
+    const handleDeleteLocalData = async () => {
+        const questionCount = exams.reduce((total, exam) => total + exam.count, 0);
+        if (!window.confirm(
+            `この端末内の試験${exams.length}件・問題${questionCount}問、学習履歴、画像、PDF、中断履歴をすべて削除します。\n\n`
+            + 'クラウド上のデータは削除されませんが、クラウド同期の接続は解除されます。元に戻せません。続けますか？'
+        )) {
+            return;
+        }
+        setBusy(true);
+        setMessage('');
+        setError('');
+        try {
+            await clearAllLocalAppData();
+            await initializeLocalExams(true);
+            await refresh();
+            setMessage('この端末内のデータをすべて削除しました。クラウド上のデータは残っています。');
+        } catch (deleteError) {
+            console.error('Failed to delete local mobile data:', deleteError);
+            setError(deleteError.message || '端末内データの削除に失敗しました。');
+        } finally {
+            setBusy(false);
+        }
+    };
+
     const questionCount = exams.reduce((total, exam) => total + exam.count, 0);
 
     return (
@@ -142,6 +171,25 @@ export default function DataTransferPage() {
                     <p>この端末で編集した解説・ジャンルと、正誤・お気に入りをRadExamバックアップ（.radexam）に保存します。</p>
                     <button type="button" className={styles.secondaryButton} onClick={handleExport} disabled={busy || exams.length === 0}>
                         モバイルデータを書き出す
+                    </button>
+                </div>
+            </section>
+
+            <section className={`${styles.card} ${styles.dangerCard}`}>
+                <div className={`${styles.step} ${styles.dangerStep}`}>3</div>
+                <div className={styles.cardBody}>
+                    <h2>この端末内のデータを削除</h2>
+                    <p>
+                        この端末に保存された試験、学習履歴、画像、PDF、中断履歴を削除します。
+                        クラウド上のバックアップは削除されません。
+                    </p>
+                    <button
+                        type="button"
+                        className={styles.dangerButton}
+                        onClick={handleDeleteLocalData}
+                        disabled={busy}
+                    >
+                        端末内データをすべて削除
                     </button>
                 </div>
             </section>

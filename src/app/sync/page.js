@@ -85,6 +85,9 @@ const formatDuration = value => {
 const describeDataStatus = state => {
     if (!state) return '確認中';
     if (state.config?.remoteChangesAvailable) {
+        if (state.config.remoteSnapshotAvailable) {
+            return 'クラウドに未取得の初回全体データあり';
+        }
         return `クラウドに未取得が${state.config.remoteChangeCount || 0}件`;
     }
     if (state.dataStatus === 'verified') return '前回確認時点でクラウドと一致';
@@ -714,7 +717,9 @@ export default function CloudSyncPage({ embedded = false }) {
                 </div>
                 {connected && syncState.config.remoteChangesAvailable && (
                     <p className={styles.syncError}>
-                        クラウドに未取得の更新があります。送信前に更新を取得してください。
+                        {syncState.config.remoteSnapshotAvailable
+                            ? 'クラウドに別端末の初回全体データがあります。送信前に取得してください。'
+                            : 'クラウドに未取得の更新があります。送信前に更新を取得してください。'}
                     </p>
                 )}
                 {busy && describeProgress(progress, progressClock) && (

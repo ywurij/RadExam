@@ -20,6 +20,7 @@ import {
     resolveNuclearDisplayLegend
 } from '@/lib/nuclearFigureGeometry.mjs';
 import { buildNuclearSourcePageAssignments } from '@/lib/nuclearSourcePages.mjs';
+import { getExamImportDefaults } from '@/lib/examImportDefaults.mjs';
 import {
     assignNearestUniqueLabels,
     buildSourceGridLayouts,
@@ -2898,8 +2899,9 @@ export default function AdminPage() {
     const [importedPdfFiles, setImportedPdfFiles] = useState([]);
     const [errorMsg, setErrorMsg] = useState('');
     const [successMsg, setSuccessMsg] = useState('');
-    const [examId, setExamId] = useState('');
-    const [examName, setExamName] = useState('');
+    const initialExamDefaults = getExamImportDefaults('1');
+    const [examId, setExamId] = useState(initialExamDefaults.id);
+    const [examName, setExamName] = useState(initialExamDefaults.name);
     const [previewImageModal, setPreviewImageModal] = useState(null);
     const [importMode, setImportMode] = useState('new'); // 'new' or 'existing'
     const [examCategory, setExamCategory] = useState('1'); // '1': 放射線科, '2': 放射線診断, '3': 核医学, '4': IVR
@@ -4851,6 +4853,11 @@ export default function AdminPage() {
             }
 
             const detectedYears = [...new Set(combinedQuestions.map(question => question.year))].sort((a, b) => b - a);
+            if (importMode === 'new') {
+                const defaults = getExamImportDefaults(examCategory);
+                setExamId(defaults.id);
+                setExamName(defaults.name);
+            }
             setParsedQuestions(combinedQuestions);
             setParsedYearInput(detectedYears.length === 1 ? String(detectedYears[0]) : '');
             setImageMap(combinedImageMap);
@@ -4910,8 +4917,9 @@ export default function AdminPage() {
             await initializeLocalExams(true);
 
             setSuccessMsg(`試験「${examName}」をローカルに正常に保存しました！`);
-            setExamId('');
-            setExamName('');
+            const defaults = getExamImportDefaults(examCategory);
+            setExamId(defaults.id);
+            setExamName(defaults.name);
             setParsedQuestions([]);
             setParsedYearInput('');
             setImageMap({});
@@ -5144,7 +5152,14 @@ export default function AdminPage() {
                                                         name="examCategory"
                                                         value={cat.id}
                                                         checked={examCategory === cat.id}
-                                                        onChange={() => setExamCategory(cat.id)}
+                                                        onChange={() => {
+                                                            setExamCategory(cat.id);
+                                                            if (importMode === 'new') {
+                                                                const defaults = getExamImportDefaults(cat.id);
+                                                                setExamId(defaults.id);
+                                                                setExamName(defaults.name);
+                                                            }
+                                                        }}
                                                         style={{ marginRight: '0.4rem' }}
                                                     />
                                                     {cat.label}
@@ -5470,8 +5485,9 @@ export default function AdminPage() {
                                                 checked={importMode === 'new'}
                                                 onChange={() => {
                                                     setImportMode('new');
-                                                    setExamId('');
-                                                    setExamName('');
+                                                    const defaults = getExamImportDefaults(examCategory);
+                                                    setExamId(defaults.id);
+                                                    setExamName(defaults.name);
                                                 }}
                                                 style={{ marginRight: '0.4rem', cursor: 'pointer' }}
                                             />

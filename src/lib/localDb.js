@@ -690,7 +690,7 @@ export const disconnectLocalSyncTracking = options => disconnectLocalSyncJournal
  * 開発中の端末復元テスト用に、クラウドへ削除変更を送らずローカルだけを空にする。
  * 同期履歴も消すため、次回接続時はクラウドの全体データを新しい端末として受信する。
  */
-export const clearLocalAppDataForDevelopment = async () => {
+export const clearAllLocalAppData = async () => {
     await Promise.all([
         examsStore.clear(),
         progressStore.clear(),
@@ -698,9 +698,18 @@ export const clearLocalAppDataForDevelopment = async () => {
         pdfStore.clear(),
     ]);
     writeLocalResumableSessions([]);
-    globalThis.localStorage?.removeItem('radexam_last_settings');
+    for (const key of [
+        LEGACY_RESUMABLE_SESSION_KEY,
+        'radexam_last_settings',
+        'radexam_exam_order',
+        'radexam_search_history',
+    ]) {
+        globalThis.localStorage?.removeItem(key);
+    }
     await disconnectLocalSyncJournal({ discardPending: true });
 };
+
+export const clearLocalAppDataForDevelopment = clearAllLocalAppData;
 
 const rebuildExamMetadata = exam => ({
     ...exam,

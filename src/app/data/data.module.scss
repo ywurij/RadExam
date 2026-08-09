@@ -89,6 +89,23 @@
 .primaryButton { border: 0; background: #2563eb; color: #fff; }
 .secondaryButton { border: 1px solid #93b4ef; background: #f3f7ff; color: #1d4ed8; }
 
+.dangerCard { border-color: #fecaca; }
+.dangerStep { background: #fee2e2; color: #b91c1c; }
+.dangerButton {
+  width: 100%;
+  min-height: 48px;
+  padding: 0.7rem 1rem;
+  border: 1px solid #ef4444;
+  border-radius: 0.8rem;
+  background: #fff1f2;
+  color: #b91c1c;
+  font-size: 1rem;
+  font-weight: 800;
+  cursor: pointer;
+
+  &:disabled { cursor: not-allowed; opacity: 0.5; }
+}
+
 .success, .error { margin: 1rem 0 0; padding: 0.9rem 1rem; border-radius: 0.8rem; line-height: 1.5; }
 .success { background: #ecfdf5; color: #047857; }
 .error { background: #fff1f2; color: #be123c; }

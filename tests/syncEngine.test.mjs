@@ -751,6 +751,51 @@ test('uses one snapshot for a large initial sync and leaves later edits as delta
     assert.deepEqual(await device.journal.listPendingChanges(), []);
 });
 
+test('does not block sending when the only cloud snapshot was published by this device', async () => {
+    const cloud = createInMemorySyncCloud();
+    const device = await createDevice('device-a', new InMemorySyncProvider(cloud));
+    await device.journal.recordChanges(Array.from({ length: 2 }, (_, index) => ({
+        entityType: SYNC_ENTITY_TYPES.PROGRESS,
+        entityId: `initial-${index}`,
+        changedFields: ['status'],
+        payload: { status: 'correct' },
+    })));
+    await runSyncPush({
+        provider: device.provider,
+        journal: device.journal,
+        createLocalSnapshot: async () => ({ blob: new Blob(['snapshot-data']) }),
+        snapshotThreshold: 2,
+    });
+
+    await device.journal.configure({
+        lastAppliedSnapshotId: null,
+        lastPushedGeneration: 0,
+        lastPulledGeneration: 0,
+    });
+    await device.journal.recordChanges([{
+        entityType: SYNC_ENTITY_TYPES.PROGRESS,
+        entityId: 'after-reset',
+        changedFields: ['status'],
+        payload: { status: 'review' },
+    }]);
+
+    const checked = await checkSyncUpdates({
+        provider: device.provider,
+        journal: device.journal,
+    });
+    assert.equal(checked.remoteChangeCount, 0);
+    assert.equal(checked.snapshotAvailable, false);
+    assert.equal(checked.updatesAvailable, false);
+
+    const result = await runSyncPush({
+        provider: device.provider,
+        journal: device.journal,
+    });
+    assert.equal(result.pushedChanges, 1);
+    assert.equal((await device.journal.getConfig()).lastAppliedSnapshotId,
+        cloud.manifest.latestSnapshot.snapshotId);
+});
+
 test('restores the latest snapshot before applying newer change batches', async () => {
     const cloud = createInMemorySyncCloud();
     const source = await createDevice('device-a', new InMemorySyncProvider(cloud));
