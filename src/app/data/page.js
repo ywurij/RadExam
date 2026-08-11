@@ -11,6 +11,7 @@ import {
 import { createBackupArchiveBlob, readBackupFile } from '@/lib/backupArchive.mjs';
 import { initializeLocalExams } from '@/lib/data';
 import CloudSyncPage from '@/app/sync/page';
+import ThemeController from '@/components/ThemeController';
 import styles from './data.module.scss';
 
 const getBackupSummary = (backup) => {
@@ -149,6 +150,8 @@ export default function DataTransferPage() {
                 <div><strong>{questionCount}</strong><span>問題</span></div>
                 <div><strong>端末内</strong><span>保存先</span></div>
             </section>
+
+            <ThemeController />
 
             <CloudSyncPage embedded />
 

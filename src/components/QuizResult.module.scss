@@ -77,6 +77,14 @@
     td {
         font-size: 0.875rem;
     }
+
+    tbody tr {
+        transition: background-color 0.15s ease;
+    }
+
+    tbody tr:hover {
+        background: var(--accent-soft);
+    }
 }
 
 .questionText {
@@ -84,7 +92,7 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    color: #4b5563;
+    color: var(--text-primary);
 }
 
 .correct {
@@ -182,7 +190,7 @@
 }
 
 .tooltipContent {
-    background: white;
+    background: var(--surface-raised);
     padding: 1rem;
     border-radius: 0.5rem;
     border: 1px solid var(--border-color);
@@ -196,6 +204,7 @@
     font-weight: 600;
     margin-bottom: 0.75rem;
     line-height: 1.5;
+    color: var(--text-primary);
 }
 
 .optionsList {
@@ -228,7 +237,7 @@
 }
 
 .modalContent {
-    background: white;
+    background: var(--surface-raised);
     padding: 2rem;
     border-radius: 1rem;
     width: 100%;
@@ -244,7 +253,7 @@
     margin-top: 0;
     font-size: 1.25rem;
     color: var(--text-primary);
-    border-bottom: 2px solid #f3f4f6;
+    border-bottom: 2px solid var(--border-color);
     padding-bottom: 1rem;
     margin-bottom: 1rem;
 }

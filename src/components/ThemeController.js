@@ -43,18 +43,24 @@ export default function ThemeController() {
     };
 
     return (
-        <label className="themeSelector">
-            <span>表示</span>
-            <select
-                value={preference}
-                onChange={handleChange}
-                aria-label="表示テーマ"
-                suppressHydrationWarning
-            >
-                <option value="system">端末に合わせる</option>
-                <option value="light">ライト</option>
-                <option value="dark">ダーク</option>
-            </select>
-        </label>
+        <section className="themeSettings" aria-labelledby="theme-settings-title">
+            <div className="themeSettingsText">
+                <strong id="theme-settings-title">表示設定</strong>
+                <span>アプリ全体の明るさを選択します。</span>
+            </div>
+            <label className="themeSettingsField">
+                <span>表示モード</span>
+                <select
+                    value={preference}
+                    onChange={handleChange}
+                    aria-label="表示テーマ"
+                    suppressHydrationWarning
+                >
+                    <option value="system">端末に合わせる</option>
+                    <option value="light">ライト</option>
+                    <option value="dark">ダーク</option>
+                </select>
+            </label>
+        </section>
     );
 }

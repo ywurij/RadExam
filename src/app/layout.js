@@ -1,6 +1,5 @@
 import "./globals.css";
 import CloudSyncLifecycle from "@/components/CloudSyncLifecycle";
-import ThemeController from "@/components/ThemeController";
 
 const isMobile = process.env.NEXT_PUBLIC_APP_TARGET === "mobile";
 
@@ -32,7 +31,6 @@ export default function RootLayout({ children }) {
       <body>
         <script dangerouslySetInnerHTML={{ __html: themeInitialization }} />
         <CloudSyncLifecycle />
-        <ThemeController />
         {children}
       </body>
     </html>

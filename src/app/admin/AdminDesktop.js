@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import PdfClipper from '@/components/PdfClipper';
 import StructuredLegendEditor, { createStructuredLegendFromText } from '@/components/StructuredLegendEditor';
 import CloudSyncPage from '@/app/sync/page';
+import ThemeController from '@/components/ThemeController';
 import adminStyles from './AdminEdit.module.scss';
 
 import { initializeLocalExams, getExamTypes } from '@/lib/data';
@@ -5033,6 +5034,8 @@ export default function AdminPage() {
                 </button>
             </div>
 
+            <ThemeController />
+
             {/* Tab Navigation */}
             <div style={{ display: 'flex', gap: '1rem', marginBottom: '1.5rem' }}>
                 <button
@@ -5135,7 +5138,7 @@ export default function AdminPage() {
                                     </p>
 
                                     {/* Exam Category Selection */}
-                                    <div style={{ marginBottom: '1.5rem', padding: '1rem', background: '#ebf8fa', borderRadius: '0.375rem', border: '1px solid #bee3f8' }}>
+                                    <div style={{ marginBottom: '1.5rem', padding: '1rem', background: 'var(--accent-soft)', borderRadius: '0.375rem', border: '1px solid var(--border-color)' }}>
                                         <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.95rem', color: 'var(--accent)', marginBottom: '0.5rem' }}>
                                             対象の試験を選択してください
                                         </label>
@@ -5146,7 +5149,7 @@ export default function AdminPage() {
                                                 { id: '3', label: '3. 核医学専門医試験' },
                                                 { id: '4', label: '4. IVR専門医試験' }
                                             ].map(cat => (
-                                                <label key={cat.id} style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
+                                                <label key={cat.id} style={{ display: 'flex', alignItems: 'center', gap: '0.15rem', padding: '0.45rem 0.65rem', border: `1px solid ${examCategory === cat.id ? 'var(--accent)' : 'var(--border-color)'}`, borderRadius: '0.45rem', background: examCategory === cat.id ? 'var(--surface-muted)' : 'var(--surface-raised)', cursor: 'pointer', fontSize: '0.9rem', color: 'var(--text-primary)' }}>
                                                     <input
                                                         type="radio"
                                                         name="examCategory"

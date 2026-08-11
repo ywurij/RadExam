@@ -492,7 +492,7 @@
 }
 
 .modalContent {
-  background: white;
+  background: var(--surface-raised);
   padding: 2rem;
   border-radius: 1rem;
   max-width: 450px;
@@ -539,10 +539,8 @@
 }
 
 /* --- Dark Mode Overrides --- */
-:global(html[data-theme='dark']) {
-  .container {
-    color: #e2e8f0;
-  }
+:global(html[data-theme='dark']) .container {
+  color: #e2e8f0;
 
   .title {
     background: linear-gradient(135deg, #60a5fa 0%, #a78bfa 100%);
@@ -587,10 +585,15 @@
     }
 
     select {
-      background-color: var(--text-primary);
-      color: #e2e8f0;
-      border-color: var(--text-secondary);
+      background-color: var(--surface-raised);
+      color: var(--text-primary);
+      border-color: var(--border-color);
       background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%23a0aec0' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e");
+
+      option {
+        background: var(--surface-raised);
+        color: var(--text-primary);
+      }
     }
   }
 

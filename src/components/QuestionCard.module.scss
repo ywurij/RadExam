@@ -979,7 +979,7 @@
 }
 
 .cancelBtn {
-    background: white;
+    background: var(--surface-raised);
     border: 1px solid var(--border-color);
     padding: 0.25rem 0.75rem;
     border-radius: 0.25rem;
@@ -1017,7 +1017,7 @@
 }
 
 /* --- Dark Mode Overrides --- */
-:global(html[data-theme='dark']) {
+:global(html[data-theme='dark']) .cardLayout {
     .questionBlock {
         background: #1a202c;
         color: #e2e8f0;
@@ -1036,6 +1036,24 @@
         background: #2d3748;
         border-color: var(--text-secondary);
         color: #e2e8f0;
+
+        &.activeCorrect {
+            background: #356b55;
+            border-color: #7fae98;
+            color: #f3f7f5;
+        }
+
+        &.activeIncorrect {
+            background: #8a4a50;
+            border-color: #c8888f;
+            color: #fff7f7;
+        }
+
+        &.activeLiked {
+            background: #776536;
+            border-color: #b8a36d;
+            color: #fff9df;
+        }
     }
 
     .questionText,

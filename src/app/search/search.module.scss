@@ -107,7 +107,7 @@
 
 .resultItem {
     padding: 1rem;
-    background: white;
+    background: var(--surface-raised);
     border: 1px solid var(--border-color);
     border-radius: 0.5rem;
     cursor: pointer;
@@ -142,7 +142,7 @@
 }
 
 .tooltipContent {
-    background: white;
+    background: var(--surface-raised);
     padding: 1rem;
     border-radius: 0.75rem;
     border: 1px solid var(--border-color);
@@ -211,7 +211,7 @@
     padding: 0.5rem;
     border: 1px solid var(--border-color);
     border-radius: 0.375rem;
-    background-color: white;
+    background-color: var(--surface-raised);
     font-size: 0.9rem;
     color: var(--text-primary);
     cursor: pointer;
@@ -219,6 +219,11 @@
     &:focus {
         outline: none;
         border-color: var(--accent);
+    }
+
+    option {
+        background: var(--surface-raised);
+        color: var(--text-primary);
     }
 }
 

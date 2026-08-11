@@ -679,11 +679,9 @@
 }
 
 /* --- Dark Mode Overrides --- */
-:global(html[data-theme='dark']) {
-    .editorWrapper {
-        background: #1a202c;
-        border-color: var(--text-primary);
-    }
+:global(html[data-theme='dark']) .editorWrapper {
+    background: #1a202c;
+    border-color: var(--text-primary);
 
     .menubar {
         background: #2d3748;
