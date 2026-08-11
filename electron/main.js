@@ -17,6 +17,11 @@ const {
 const { GoogleDesktopOAuthManager } = require('./googleDesktopOAuth');
 const { MicrosoftDesktopOAuthManager } = require('./microsoftDesktopOAuth');
 const { loadCloudSyncConfig } = require('./cloudSyncConfig');
+const {
+  DEFAULT_ZOOM_FACTOR,
+  loadZoomFactor,
+  saveZoomFactor,
+} = require('./displayZoom');
 
 // 表示名を変更しても既存の試験・画像・進捗を失わないよう、保存先は旧版と共通にする。
 app.setPath('userData', path.join(app.getPath('appData'), 'exam-app'));
@@ -28,6 +33,13 @@ let serverPort = 3000;
 let googleOAuthManager = null;
 let microsoftOAuthManager = null;
 let cloudSyncConfig = null;
+let displayZoomFactor = DEFAULT_ZOOM_FACTOR;
+
+const ensureMainWindowSender = event => {
+  if (!mainWindow || event.sender !== mainWindow.webContents) {
+    throw new Error('許可されていないアプリ操作です。');
+  }
+};
 
 // 未使用の空きポートを探索してポート衝突を回避
 function findFreePort(startPort, callback) {
@@ -105,6 +117,7 @@ function createWindow(port) {
       preload: path.join(__dirname, 'preload.js')
     }
   });
+  mainWindow.webContents.setZoomFactor(displayZoomFactor);
 
   const url = `http://${LOOPBACK_HOST}:${port}`;
   
@@ -128,11 +141,6 @@ function createWindow(port) {
 }
 
 const registerCloudSyncIpc = () => {
-  const ensureSender = event => {
-    if (!mainWindow || event.sender !== mainWindow.webContents) {
-      throw new Error('許可されていないクラウド同期要求です。');
-    }
-  };
   const getManager = clientId => {
     const normalizedClientId = String(clientId || '');
     if (!googleOAuthManager || googleOAuthManager.clientId !== normalizedClientId) {
@@ -160,46 +168,61 @@ const registerCloudSyncIpc = () => {
   };
 
   ipcMain.handle('cloud-sync:google-status', (event, clientId) => {
-    ensureSender(event);
+    ensureMainWindowSender(event);
     return getManager(clientId).getStatus();
   });
   ipcMain.handle('cloud-sync:google-authorize', async (event, clientId) => {
-    ensureSender(event);
+    ensureMainWindowSender(event);
     return getManager(clientId).authorize();
   });
   ipcMain.handle('cloud-sync:google-access-token', async (event, clientId) => {
-    ensureSender(event);
+    ensureMainWindowSender(event);
     return getManager(clientId).getAccessToken();
   });
   ipcMain.handle('cloud-sync:google-clear', (event, clientId) => {
-    ensureSender(event);
+    ensureMainWindowSender(event);
     return getManager(clientId).clear();
   });
   ipcMain.handle('cloud-sync:microsoft-status', (event, clientId) => {
-    ensureSender(event);
+    ensureMainWindowSender(event);
     return getMicrosoftManager(clientId).getStatus();
   });
   ipcMain.handle('cloud-sync:microsoft-authorize', async (event, clientId) => {
-    ensureSender(event);
+    ensureMainWindowSender(event);
     return getMicrosoftManager(clientId).authorize();
   });
   ipcMain.handle('cloud-sync:microsoft-access-token', async (event, clientId) => {
-    ensureSender(event);
+    ensureMainWindowSender(event);
     return getMicrosoftManager(clientId).getAccessToken();
   });
   ipcMain.handle('cloud-sync:microsoft-clear', (event, clientId) => {
-    ensureSender(event);
+    ensureMainWindowSender(event);
     return getMicrosoftManager(clientId).clear();
+  });
+};
+
+const registerDisplayIpc = () => {
+  ipcMain.handle('display:get-zoom-factor', event => {
+    ensureMainWindowSender(event);
+    return displayZoomFactor;
+  });
+  ipcMain.handle('display:set-zoom-factor', (event, value) => {
+    ensureMainWindowSender(event);
+    displayZoomFactor = saveZoomFactor(app.getPath('userData'), value);
+    event.sender.setZoomFactor(displayZoomFactor);
+    return displayZoomFactor;
   });
 };
 
 // Electron の初期化完了時に実行
 app.whenReady().then(async () => {
+  displayZoomFactor = loadZoomFactor(app.getPath('userData'));
   cloudSyncConfig = loadCloudSyncConfig({
     appPath: app.getAppPath(),
     isPackaged: app.isPackaged,
   });
   registerCloudSyncIpc();
+  registerDisplayIpc();
   // 開発版も必ず専用サーバーを起動する。インストール済みRadExam等が3000番を
   // 使用していても、空きポートと専用distDirを使うため古い画面を再利用しない。
   findFreePort(3000, (port) => {

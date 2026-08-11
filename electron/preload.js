@@ -14,3 +14,8 @@ contextBridge.exposeInMainWorld('radexamCloudSync', {
     clear: clientId => ipcRenderer.invoke('cloud-sync:microsoft-clear', clientId),
   },
 });
+
+contextBridge.exposeInMainWorld('radexamDisplay', {
+  getZoomFactor: () => ipcRenderer.invoke('display:get-zoom-factor'),
+  setZoomFactor: value => ipcRenderer.invoke('display:set-zoom-factor', value),
+});

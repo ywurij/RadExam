@@ -109,6 +109,12 @@ a {
 .themeSettingsText strong { font-size: 0.95rem; }
 .themeSettingsText span { color: var(--text-secondary); font-size: 0.78rem; }
 
+.displaySettingsFields {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+}
+
 .themeSettingsField {
   display: flex;
   align-items: center;
@@ -132,6 +138,7 @@ a {
 
 @media (max-width: 520px) {
   .themeSettings { align-items: stretch; flex-direction: column; }
+  .displaySettingsFields { align-items: stretch; flex-direction: column; }
   .themeSettingsField { justify-content: space-between; }
   .themeSettingsField select { min-width: 0; width: min(62%, 13rem); }
 }
