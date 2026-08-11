@@ -1,4 +1,5 @@
 import "./globals.css";
+import CloudSyncLifecycle from "@/components/CloudSyncLifecycle";
 
 const isMobile = process.env.NEXT_PUBLIC_APP_TARGET === "mobile";
 
@@ -24,9 +25,12 @@ export const viewport = {
 };
 
 export default function RootLayout({ children }) {
+  const themeInitialization = `(function(){try{var p=localStorage.getItem('radexam_theme_preference');if(!['system','light','dark'].includes(p))p='system';var d=window.matchMedia('(prefers-color-scheme: dark)').matches;var t=p==='system'?(d?'dark':'light'):p;document.documentElement.dataset.themePreference=p;document.documentElement.dataset.theme=t;document.documentElement.style.colorScheme=t;}catch(e){document.documentElement.dataset.theme='light';}})();`;
   return (
     <html lang="ja" suppressHydrationWarning>
       <body>
+        <script dangerouslySetInnerHTML={{ __html: themeInitialization }} />
+        <CloudSyncLifecycle />
         {children}
       </body>
     </html>

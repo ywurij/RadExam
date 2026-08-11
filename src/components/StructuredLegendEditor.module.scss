@@ -4,9 +4,9 @@
     gap: 0.65rem;
     min-width: 0;
     padding: 0.75rem;
-    border: 1px solid #bee3f8;
+    border: 1px solid var(--border-color);
     border-radius: 0.5rem;
-    background: #f7fbff;
+    background: var(--accent-soft);
 }
 
 .header {
@@ -14,15 +14,15 @@
     align-items: center;
     justify-content: space-between;
     gap: 0.75rem;
-    color: #2c5282;
+    color: var(--accent);
     font-size: 0.8rem;
 
     button {
         padding: 0.3rem 0.5rem;
-        border: 1px solid #a0aec0;
+        border: 1px solid var(--border-color);
         border-radius: 0.3rem;
-        background: #fff;
-        color: #4a5568;
+        background: var(--surface-raised);
+        color: var(--text-secondary);
         cursor: pointer;
         font-size: 0.72rem;
     }
@@ -38,7 +38,7 @@
     input {
         min-width: 0;
         padding: 0.45rem;
-        border: 1px solid #cbd5e0;
+        border: 1px solid var(--border-color);
         border-radius: 0.3rem;
     }
 }
@@ -59,9 +59,9 @@
     select {
         min-width: 0;
         padding: 0.4rem;
-        border: 1px solid #cbd5e0;
+        border: 1px solid var(--border-color);
         border-radius: 0.3rem;
-        background: #fff;
+        background: var(--surface-raised);
     }
 }
 
@@ -72,7 +72,7 @@
     grid-template-columns: auto minmax(50px, 1fr);
     align-items: center;
     gap: 0.35rem;
-    color: #4a5568;
+    color: var(--text-secondary);
     font-size: 0.68rem;
     white-space: nowrap;
 
@@ -90,20 +90,20 @@
 .deleteButton {
     width: 32px;
     height: 32px;
-    border: 1px solid #fc8181;
+    border: 1px solid var(--danger-text);
     border-radius: 0.3rem;
-    background: #fff;
-    color: #c53030;
+    background: var(--surface-raised);
+    color: var(--danger-text);
     font-size: 1rem;
 }
 
 .addButton {
     align-self: flex-start;
     padding: 0.35rem 0.6rem;
-    border: 1px solid #63b3ed;
+    border: 1px solid var(--accent);
     border-radius: 0.3rem;
-    background: #fff;
-    color: #2b6cb0;
+    background: var(--surface-raised);
+    color: var(--accent);
     font-size: 0.75rem;
     font-weight: 600;
 }

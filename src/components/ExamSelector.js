@@ -1,11 +1,23 @@
 "use client";
 
 import { useState, useMemo, useEffect, useRef } from 'react';
-import { getExamTypes, getYears, getGenres, initializeLocalExams } from '@/lib/data';
+import {
+    getExamTypes,
+    getYears,
+    getGenres,
+    initializeLocalExams,
+    LOCAL_EXAMS_CHANGED_EVENT,
+} from '@/lib/data';
 import styles from './ExamSelector.module.scss';
 import { useRouter } from 'next/navigation';
 import { limitResumableSessions } from '@/lib/sessionHistory';
 import { APP_FEATURES, isMobileTarget } from '@/lib/appTarget';
+import {
+    deleteLocalResumableSession,
+    getLocalResumableSessions,
+    migrateLegacyResumableSession,
+    replaceLocalResumableSessions,
+} from '@/lib/localDb';
 
 export default function ExamSelector() {
     const router = useRouter();
@@ -23,8 +35,14 @@ export default function ExamSelector() {
      const [isShuffle, setIsShuffle] = useState(false);
  
      // Derived options based on selected exam
-     const years = useMemo(() => getYears(selectedExam), [selectedExam]);
-     const genres = useMemo(() => getGenres(selectedExam), [selectedExam]);
+    const years = useMemo(
+        () => getYears(selectedExam),
+        [selectedExam, exams]
+    );
+    const genres = useMemo(
+        () => getGenres(selectedExam),
+        [selectedExam, exams]
+    );
  
     const [sessions, setSessions] = useState([]);
     const [draggingExamId, setDraggingExamId] = useState(null);
@@ -113,49 +131,10 @@ export default function ExamSelector() {
             }
             setExams(types);
 
-            const sessionsKey = 'radexam_sessions';
-            const oldSessionKey = 'radexam_session';
-            
-            let localSessions = [];
-
-            // 1. 旧セッションキーからの移行処理
-            if (typeof window !== 'undefined') {
-                const oldSession = localStorage.getItem(oldSessionKey);
-                if (oldSession) {
-                    try {
-                        const parsed = JSON.parse(oldSession);
-                        if (parsed) {
-                            if (!parsed.id) {
-                                parsed.id = parsed.timestamp ? `migrated-${parsed.timestamp}` : `migrated-${Date.now()}`;
-                            }
-                            if (!parsed.name) {
-                                parsed.name = `移行されたセッション`;
-                            }
-                            localSessions.push(parsed);
-                        }
-                    } catch (e) {
-                        console.error("Invalid old session data", e);
-                    }
-                    localStorage.removeItem(oldSessionKey);
-                    localStorage.setItem(sessionsKey, JSON.stringify(localSessions));
-                } else {
-                    const raw = localStorage.getItem(sessionsKey);
-                    if (raw) {
-                        try {
-                            localSessions = JSON.parse(raw);
-                            if (!Array.isArray(localSessions)) {
-                                localSessions = [];
-                            }
-                        } catch (e) {
-                            console.error("Invalid sessions data", e);
-                            localSessions = [];
-                        }
-                    }
-                }
-            }
-
-            const limitedSessions = limitResumableSessions(localSessions);
-            localStorage.setItem(sessionsKey, JSON.stringify(limitedSessions));
+            await migrateLegacyResumableSession();
+            const limitedSessions = await replaceLocalResumableSessions(
+                getLocalResumableSessions()
+            );
             setSessions(limitedSessions);
 
             // 前回設定のロード
@@ -194,6 +173,73 @@ export default function ExamSelector() {
 
         init().finally(() => setIsLoadingExams(false));
     }, []);
+
+    useEffect(() => {
+        const handleSessionsChanged = event => {
+            setSessions(limitResumableSessions(
+                event.detail?.sessions || getLocalResumableSessions()
+            ));
+        };
+        window.addEventListener(
+            'radexam-resumable-sessions-changed',
+            handleSessionsChanged
+        );
+        return () => window.removeEventListener(
+            'radexam-resumable-sessions-changed',
+            handleSessionsChanged
+        );
+    }, []);
+
+    useEffect(() => {
+        const handleLocalExamsChanged = () => {
+            const rawTypes = getExamTypes();
+            let types = rawTypes;
+            try {
+                const savedOrder = JSON.parse(
+                    localStorage.getItem('radexam_exam_order') || '[]'
+                );
+                if (Array.isArray(savedOrder)) {
+                    const orderIndex = new Map(
+                        savedOrder.map((id, index) => [id, index])
+                    );
+                    types = [...rawTypes].sort(
+                        (a, b) => (
+                            orderIndex.get(a.id) ?? Number.MAX_SAFE_INTEGER
+                        ) - (
+                            orderIndex.get(b.id) ?? Number.MAX_SAFE_INTEGER
+                        )
+                    );
+                }
+            } catch (error) {
+                console.error('Failed to reload exam card order:', error);
+            }
+            setExams(types);
+            const nextExamId = types.some(exam => exam.id === selectedExam)
+                ? selectedExam
+                : (types[0]?.id || '');
+            setSelectedExam(nextExamId);
+            setSelectedYear(currentYear => (
+                isYearValidForExam(nextExamId, currentYear)
+                    ? currentYear
+                    : 'all'
+            ));
+            setSelectedGenres(currentGenres => (
+                currentGenres.filter(genre => (
+                    getGenres(nextExamId).includes(genre)
+                ))
+            ));
+        };
+
+        window.addEventListener(
+            LOCAL_EXAMS_CHANGED_EVENT,
+            handleLocalExamsChanged
+        );
+        return () => window.removeEventListener(
+            LOCAL_EXAMS_CHANGED_EVENT,
+            handleLocalExamsChanged
+        );
+    }, [selectedExam]);
+
     const handleStart = () => {
         const params = new URLSearchParams();
         params.set('exam', selectedExam);
@@ -242,10 +288,9 @@ export default function ExamSelector() {
             return;
         }
         
-        const sessionsKey = 'radexam_sessions';
         const updated = sessions.filter(s => s.id !== session.id);
         setSessions(updated);
-        localStorage.setItem(sessionsKey, JSON.stringify(updated));
+        await deleteLocalResumableSession(session.id);
     };
 
     const toggleGenre = (genre) => {
@@ -281,9 +326,9 @@ export default function ExamSelector() {
                         ❓ 使い方
                     </button>
                     {isMobileTarget ? <button type="button" onClick={() => router.push('/data')} className={styles.dataButton}>
-                        ⇄ データ転送
+                        ⇄ データ管理
                     </button> : APP_FEATURES.examManagement && <button type="button" onClick={() => router.push('/admin')} className={styles.adminButton}>
-                        ⚙️ 試験管理
+                        ⚙️ データ管理
                     </button>}
             </div>
 
@@ -294,7 +339,7 @@ export default function ExamSelector() {
                 {!isLoadingExams && exams.length === 0 && <div className={styles.emptyState}>
                     <strong>試験データがまだありません</strong>
                     <p>{isMobileTarget ? 'Mac/PC版で書き出したRadExamバックアップ（.radexam）を登録してください。' : '試験管理からPDFまたはバックアップデータを登録してください。'}</p>
-                    <button type="button" onClick={() => router.push(isMobileTarget ? '/data' : '/admin')}>{isMobileTarget ? 'データ転送を開く' : '試験管理を開く'}</button>
+                    <button type="button" onClick={() => router.push(isMobileTarget ? '/data' : '/admin')}>データ管理を開く</button>
                 </div>}
                 <div className={styles.examGrid} onPointerMove={(event) => {
                     if (!draggingExamId) return;
@@ -365,8 +410,8 @@ export default function ExamSelector() {
                             <button className={statusFilter.includes('liked') ? styles.activeToggle : ''} onClick={() => toggleStatus('liked')}>お気に入り</button>
                         </div>
                         {statusFilter.length > 1 && (
-                            <div className={styles.toggleGroup} style={{ borderLeft: '1px solid #e2e8f0', paddingLeft: '1rem' }}>
-                                <small style={{ marginRight: '0.5rem', fontWeight: 600, color: '#4a5568' }}>条件:</small>
+                            <div className={styles.toggleGroup} style={{ borderLeft: '1px solid var(--border-color)', paddingLeft: '1rem' }}>
+                                <small style={{ marginRight: '0.5rem', fontWeight: 600, color: 'var(--text-secondary)' }}>条件:</small>
                                 <button className={logicFilter === 'or' ? styles.activeToggle : ''} onClick={() => setLogicFilter('or')} style={{ fontSize: '0.75rem', padding: '0.25rem 0.75rem' }}>OR (いずれか)</button>
                                 <button className={logicFilter === 'and' ? styles.activeToggle : ''} onClick={() => setLogicFilter('and')} style={{ fontSize: '0.75rem', padding: '0.25rem 0.75rem' }}>AND (すべて)</button>
                             </div>

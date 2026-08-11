@@ -119,9 +119,9 @@ function SourcePageCanvas({ sourcePage, pdfRecord }) {
     const previewSrc = focused ? renderedPages.focused : renderedPages.full;
 
     return (
-        <section style={{ width: sectionWidth, maxWidth: '100%', margin: '0 auto', border: '1px solid #cbd5e0', borderRadius: '0.6rem', overflow: 'hidden', background: '#edf2f7' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', padding: '0.5rem 0.7rem', background: '#f7fafc', borderBottom: '1px solid #cbd5e0' }}>
-                <strong style={{ fontSize: '0.85rem', color: '#2d3748' }}>{sourcePage.pageNumber}ページ</strong>
+        <section style={{ width: sectionWidth, maxWidth: '100%', margin: '0 auto', border: '1px solid var(--border-color)', borderRadius: '0.6rem', overflow: 'hidden', background: 'var(--surface-soft)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', padding: '0.5rem 0.7rem', background: 'var(--surface-soft)', borderBottom: '1px solid var(--border-color)' }}>
+                <strong style={{ fontSize: '0.85rem', color: 'var(--text-primary)' }}>{sourcePage.pageNumber}ページ</strong>
                 {focus && (
                     <div style={{ display: 'flex', gap: '0.35rem' }}>
                         <button type="button" onClick={() => setShowFullPage(false)} disabled={!showFullPage} style={{ padding: '0.3rem 0.55rem' }}>設問範囲</button>
@@ -129,10 +129,10 @@ function SourcePageCanvas({ sourcePage, pdfRecord }) {
                     </div>
                 )}
             </div>
-            {error ? <div style={{ padding: '1rem', color: '#c53030' }}>{error}</div> : (
-                <div style={{ padding: '0.6rem', overflow: 'auto', background: '#a0aec0' }}>
+            {error ? <div style={{ padding: '1rem', color: 'var(--danger-text)' }}>{error}</div> : (
+                <div style={{ padding: '0.6rem', overflow: 'auto', background: 'var(--surface-muted)' }}>
                     <div
-                        style={{ ...frameStyle, margin: '0 auto', background: '#fff', boxShadow: '0 1px 5px rgba(0,0,0,0.2)', cursor: previewSrc ? 'zoom-in' : 'default' }}
+                        style={{ ...frameStyle, margin: '0 auto', background: 'var(--surface-raised)', boxShadow: '0 1px 5px rgba(0,0,0,0.2)', cursor: previewSrc ? 'zoom-in' : 'default' }}
                         onClick={() => previewSrc && setPreviewOpen(true)}
                         title={previewSrc ? 'クリックして拡大表示' : undefined}
                     >
@@ -156,7 +156,7 @@ function SourcePageCanvas({ sourcePage, pdfRecord }) {
                         <button type="button" onClick={() => setPreviewOpen(false)}>閉じる</button>
                     </div>
                     <div onClick={event => event.stopPropagation()} style={{ flex: 1, overflow: 'auto', textAlign: 'center' }}>
-                        <img src={previewSrc} alt={`${sourcePage.pageNumber}ページ`} style={{ width: `${previewZoom * 90}%`, maxWidth: 'none', height: 'auto', background: '#fff' }} />
+                        <img src={previewSrc} alt={`${sourcePage.pageNumber}ページ`} style={{ width: `${previewZoom * 90}%`, maxWidth: 'none', height: 'auto', background: 'var(--surface-raised)' }} />
                     </div>
                 </div>
             )}
@@ -173,7 +173,7 @@ export default function QuestionSourcePages({ sourcePages = [], pdfFiles = [] })
     if (sourcePages.length === 0) return null;
     return (
         <section style={{ margin: '0 0 2rem' }}>
-            <div style={{ marginBottom: '0.55rem', fontWeight: 800, color: '#2d3748' }}>
+            <div style={{ marginBottom: '0.55rem', fontWeight: 800, color: 'var(--text-primary)' }}>
                 {sourcePages.some(sourcePage => sourcePage.sourceType === 'nuclear-appendix') ? '巻末図（別紙）' : '登録元PDFページ'}
             </div>
             <div style={{ display: 'grid', gap: '0.8rem' }}>
@@ -181,7 +181,7 @@ export default function QuestionSourcePages({ sourcePages = [], pdfFiles = [] })
                     pdfRecord ? (
                         <SourcePageCanvas key={`${sourcePage.pdfName}-${sourcePage.pageNumber}-${index}`} sourcePage={sourcePage} pdfRecord={pdfRecord} />
                     ) : (
-                        <div key={`${sourcePage.pdfName}-${sourcePage.pageNumber}-${index}`} style={{ padding: '0.8rem', border: '1px solid #feb2b2', borderRadius: '0.4rem', color: '#c53030', background: '#fff5f5' }}>
+                        <div key={`${sourcePage.pdfName}-${sourcePage.pageNumber}-${index}`} style={{ padding: '0.8rem', border: '1px solid #feb2b2', borderRadius: '0.4rem', color: 'var(--danger-text)', background: 'var(--danger-soft)' }}>
                             元PDF「{sourcePage.pdfName}」が見つかりません（{sourcePage.pageNumber}ページ）。
                         </div>
                     )

@@ -4,6 +4,8 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import PdfClipper from '@/components/PdfClipper';
 import StructuredLegendEditor, { createStructuredLegendFromText } from '@/components/StructuredLegendEditor';
+import CloudSyncPage from '@/app/sync/page';
+import ThemeController from '@/components/ThemeController';
 import adminStyles from './AdminEdit.module.scss';
 
 import { initializeLocalExams, getExamTypes } from '@/lib/data';
@@ -19,6 +21,7 @@ import {
     resolveNuclearDisplayLegend
 } from '@/lib/nuclearFigureGeometry.mjs';
 import { buildNuclearSourcePageAssignments } from '@/lib/nuclearSourcePages.mjs';
+import { getExamImportDefaults } from '@/lib/examImportDefaults.mjs';
 import {
     assignNearestUniqueLabels,
     buildSourceGridLayouts,
@@ -2897,12 +2900,13 @@ export default function AdminPage() {
     const [importedPdfFiles, setImportedPdfFiles] = useState([]);
     const [errorMsg, setErrorMsg] = useState('');
     const [successMsg, setSuccessMsg] = useState('');
-    const [examId, setExamId] = useState('');
-    const [examName, setExamName] = useState('');
+    const initialExamDefaults = getExamImportDefaults('1');
+    const [examId, setExamId] = useState(initialExamDefaults.id);
+    const [examName, setExamName] = useState(initialExamDefaults.name);
     const [previewImageModal, setPreviewImageModal] = useState(null);
     const [importMode, setImportMode] = useState('new'); // 'new' or 'existing'
     const [examCategory, setExamCategory] = useState('1'); // '1': 放射線科, '2': 放射線診断, '3': 核医学, '4': IVR
-    const [activeTab, setActiveTab] = useState('import'); // 'import', 'manage'
+    const [activeTab, setActiveTab] = useState('import'); // 'import', 'cloud', 'manage'
     const [editingExamId, setEditingExamId] = useState('');
     const [editingExamName, setEditingExamName] = useState('');
     const [editingQuestions, setEditingQuestions] = useState([]);
@@ -4850,6 +4854,11 @@ export default function AdminPage() {
             }
 
             const detectedYears = [...new Set(combinedQuestions.map(question => question.year))].sort((a, b) => b - a);
+            if (importMode === 'new') {
+                const defaults = getExamImportDefaults(examCategory);
+                setExamId(defaults.id);
+                setExamName(defaults.name);
+            }
             setParsedQuestions(combinedQuestions);
             setParsedYearInput(detectedYears.length === 1 ? String(detectedYears[0]) : '');
             setImageMap(combinedImageMap);
@@ -4909,8 +4918,9 @@ export default function AdminPage() {
             await initializeLocalExams(true);
 
             setSuccessMsg(`試験「${examName}」をローカルに正常に保存しました！`);
-            setExamId('');
-            setExamName('');
+            const defaults = getExamImportDefaults(examCategory);
+            setExamId(defaults.id);
+            setExamName(defaults.name);
             setParsedQuestions([]);
             setParsedYearInput('');
             setImageMap({});
@@ -4989,8 +4999,8 @@ export default function AdminPage() {
             margin: '0 auto',
             padding: '2rem 1rem',
             fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
-            color: '#2d3748',
-            backgroundColor: '#f7fafc',
+            color: 'var(--text-primary)',
+            backgroundColor: 'var(--surface-soft)',
             minHeight: '100vh'
         }}>
             {/* Header */}
@@ -4999,14 +5009,14 @@ export default function AdminPage() {
                 justifyContent: 'space-between',
                 alignItems: 'center',
                 marginBottom: '2rem',
-                borderBottom: '1px solid #e2e8f0',
+                borderBottom: '1px solid var(--border-color)',
                 paddingBottom: '1rem'
             }}>
                 <div>
-                    <h1 style={{ fontSize: '1.8rem', fontWeight: 800, margin: 0, color: '#1a202c' }}>
-                        ⚙️ 試験管理ダッシュボード
+                    <h1 style={{ fontSize: '1.8rem', fontWeight: 800, margin: 0, color: 'var(--text-primary)' }}>
+                        ⚙️ データ管理ダッシュボード
                     </h1>
-                    <p style={{ margin: '0.2rem 0 0 0', color: '#718096', fontSize: '0.9rem' }}>
+                    <p style={{ margin: '0.2rem 0 0 0', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
                         PDFから抽出した試験問題の追加、管理、バックアップをアプリ上で行います。
                     </p>
                 </div>
@@ -5014,8 +5024,8 @@ export default function AdminPage() {
                     onClick={() => router.push('/')}
                     style={{
                         padding: '0.5rem 1rem',
-                        background: '#fff',
-                        border: '1px solid #cbd5e0',
+                        background: 'var(--surface-raised)',
+                        border: '1px solid var(--border-color)',
                         borderRadius: '0.375rem',
                         cursor: 'pointer'
                     }}
@@ -5024,15 +5034,17 @@ export default function AdminPage() {
                 </button>
             </div>
 
+            <ThemeController />
+
             {/* Tab Navigation */}
             <div style={{ display: 'flex', gap: '1rem', marginBottom: '1.5rem' }}>
                 <button
                     onClick={() => setActiveTab('import')}
                     style={{
                         padding: '0.5rem 1rem',
-                        background: activeTab === 'import' ? '#3182ce' : '#fff',
-                        color: activeTab === 'import' ? '#fff' : '#4a5568',
-                        border: '1px solid #cbd5e0',
+                        background: activeTab === 'import' ? 'var(--accent)' : 'var(--surface-raised)',
+                        color: activeTab === 'import' ? '#fff' : 'var(--text-secondary)',
+                        border: '1px solid var(--border-color)',
                         borderRadius: '0.375rem',
                         fontWeight: 'bold',
                         cursor: 'pointer'
@@ -5041,12 +5053,26 @@ export default function AdminPage() {
                     📥 試験データインポート
                 </button>
                 <button
+                    onClick={() => setActiveTab('cloud')}
+                    style={{
+                        padding: '0.5rem 1rem',
+                        background: activeTab === 'cloud' ? 'var(--accent)' : 'var(--surface-raised)',
+                        color: activeTab === 'cloud' ? '#fff' : 'var(--text-secondary)',
+                        border: '1px solid var(--border-color)',
+                        borderRadius: '0.375rem',
+                        fontWeight: 'bold',
+                        cursor: 'pointer'
+                    }}
+                >
+                    ☁️ 端末間共有
+                </button>
+                <button
                     onClick={() => setActiveTab('manage')}
                     style={{
                         padding: '0.5rem 1rem',
-                        background: activeTab === 'manage' ? '#3182ce' : '#fff',
-                        color: activeTab === 'manage' ? '#fff' : '#4a5568',
-                        border: '1px solid #cbd5e0',
+                        background: activeTab === 'manage' ? 'var(--accent)' : 'var(--surface-raised)',
+                        color: activeTab === 'manage' ? '#fff' : 'var(--text-secondary)',
+                        border: '1px solid var(--border-color)',
                         borderRadius: '0.375rem',
                         fontWeight: 'bold',
                         cursor: 'pointer'
@@ -5056,10 +5082,22 @@ export default function AdminPage() {
                 </button>
             </div>
 
+            {activeTab === 'cloud' && (
+                <div style={{
+                    background: 'var(--surface-raised)',
+                    padding: '1.5rem',
+                    borderRadius: '0.5rem',
+                    boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+                    marginBottom: '1.5rem'
+                }}>
+                    <CloudSyncPage embedded />
+                </div>
+            )}
+
             {activeTab === 'import' && (
                 parsedQuestions.length === 0 ? (
                     <div style={{
-                        background: '#fff',
+                        background: 'var(--surface-raised)',
                         padding: '1.5rem',
                         borderRadius: '0.5rem',
                         boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
@@ -5070,21 +5108,21 @@ export default function AdminPage() {
                                 <div style={{ padding: '2rem 1rem', textAlign: 'center' }}>
                                     <div style={{ fontSize: '2.5rem', marginBottom: '1rem', animation: 'spin 2s linear infinite' }}>⏳</div>
                                     <h3 style={{ marginBottom: '0.5rem' }}>PDFファイルを自動解析中...</h3>
-                                    <p style={{ color: '#4a5568', fontWeight: 'bold', fontSize: '0.95rem', marginBottom: '1.5rem' }}>
+                                    <p style={{ color: 'var(--text-secondary)', fontWeight: 'bold', fontSize: '0.95rem', marginBottom: '1.5rem' }}>
                                         {pdfProgress.status}
                                     </p>
 
                                     {pdfProgress.total > 0 && (
                                         <div style={{ width: '100%', maxWidth: '500px', margin: '0 auto' }}>
-                                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', color: '#718096', marginBottom: '0.3rem' }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '0.3rem' }}>
                                                 <span>進捗: {pdfProgress.current} / {pdfProgress.total}</span>
                                                 <span>{Math.round((pdfProgress.current / pdfProgress.total) * 100)}%</span>
                                             </div>
-                                            <div style={{ width: '100%', height: '12px', background: '#e2e8f0', borderRadius: '6px', overflow: 'hidden' }}>
+                                            <div style={{ width: '100%', height: '12px', background: 'var(--border-color)', borderRadius: '6px', overflow: 'hidden' }}>
                                                 <div style={{
                                                     width: `${(pdfProgress.current / pdfProgress.total) * 100}%`,
                                                     height: '100%',
-                                                    background: '#3182ce',
+                                                    background: 'var(--accent)',
                                                     transition: 'width 0.3s ease'
                                                 }} />
                                             </div>
@@ -5095,13 +5133,13 @@ export default function AdminPage() {
                                 /* 新規：PDF 自動インポート表示 */
                                 <>
                                     <h3 style={{ margin: 0, marginBottom: '1rem' }}>過去問PDFから自動登録</h3>
-                                    <p style={{ color: '#718096', fontSize: '0.85rem', marginBottom: '1.5rem' }}>
+                                    <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '1.5rem' }}>
                                         同じ試験の複数年度PDFをまとめて選択すると、問題文、選択肢、埋め込み画像を年度別に抽出し、一括登録用データを作成します。
                                     </p>
 
                                     {/* Exam Category Selection */}
-                                    <div style={{ marginBottom: '1.5rem', padding: '1rem', background: '#ebf8fa', borderRadius: '0.375rem', border: '1px solid #bee3f8' }}>
-                                        <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.95rem', color: '#2c5282', marginBottom: '0.5rem' }}>
+                                    <div style={{ marginBottom: '1.5rem', padding: '1rem', background: 'var(--accent-soft)', borderRadius: '0.375rem', border: '1px solid var(--border-color)' }}>
+                                        <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.95rem', color: 'var(--accent)', marginBottom: '0.5rem' }}>
                                             対象の試験を選択してください
                                         </label>
                                         <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
@@ -5111,13 +5149,20 @@ export default function AdminPage() {
                                                 { id: '3', label: '3. 核医学専門医試験' },
                                                 { id: '4', label: '4. IVR専門医試験' }
                                             ].map(cat => (
-                                                <label key={cat.id} style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', fontSize: '0.9rem', color: '#4a5568' }}>
+                                                <label key={cat.id} style={{ display: 'flex', alignItems: 'center', gap: '0.15rem', padding: '0.45rem 0.65rem', border: `1px solid ${examCategory === cat.id ? 'var(--accent)' : 'var(--border-color)'}`, borderRadius: '0.45rem', background: examCategory === cat.id ? 'var(--surface-muted)' : 'var(--surface-raised)', cursor: 'pointer', fontSize: '0.9rem', color: 'var(--text-primary)' }}>
                                                     <input
                                                         type="radio"
                                                         name="examCategory"
                                                         value={cat.id}
                                                         checked={examCategory === cat.id}
-                                                        onChange={() => setExamCategory(cat.id)}
+                                                        onChange={() => {
+                                                            setExamCategory(cat.id);
+                                                            if (importMode === 'new') {
+                                                                const defaults = getExamImportDefaults(cat.id);
+                                                                setExamId(defaults.id);
+                                                                setExamName(defaults.name);
+                                                            }
+                                                        }}
                                                         style={{ marginRight: '0.4rem' }}
                                                     />
                                                     {cat.label}
@@ -5127,9 +5172,9 @@ export default function AdminPage() {
                                     </div>
 
                                     {examCategory === '3' && (
-                                        <div style={{ marginBottom: '1.5rem', padding: '1rem', background: '#fffaf0', borderRadius: '0.375rem', border: '1px solid #fbd38d' }}>
-                                            <div style={{ fontWeight: 800, color: '#7b341e', marginBottom: '0.45rem' }}>核医学画像の登録方式</div>
-                                            <div style={{ color: '#744210', lineHeight: 1.6 }}>
+                                        <div style={{ marginBottom: '1.5rem', padding: '1rem', background: 'var(--warning-soft)', borderRadius: '0.375rem', border: '1px solid #fbd38d' }}>
+                                            <div style={{ fontWeight: 800, color: 'var(--warning-text)', marginBottom: '0.45rem' }}>核医学画像の登録方式</div>
+                                            <div style={{ color: 'var(--warning-text)', lineHeight: 1.6 }}>
                                                 巻末図ページ参照方式で登録します。問題文中の別紙No.と一致する巻末ページを紐付け、問題文・選択肢のページは表示しません。
                                             </div>
                                         </div>
@@ -5139,12 +5184,12 @@ export default function AdminPage() {
                                         <div style={{
                                             marginBottom: '1.5rem',
                                             padding: '1rem',
-                                            background: '#fffaf0',
+                                            background: 'var(--warning-soft)',
                                             borderRadius: '0.375rem',
                                             border: '1px solid #fbd38d'
                                         }}>
                                             <div style={{ marginBottom: '0.8rem' }}>
-                                                <div style={{ fontWeight: 800, color: '#7b341e', marginBottom: '0.45rem' }}>核医学画像の登録方式</div>
+                                                <div style={{ fontWeight: 800, color: 'var(--warning-text)', marginBottom: '0.45rem' }}>核医学画像の登録方式</div>
                                                 <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
                                                     <label style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', cursor: 'pointer' }}>
                                                         <input type="radio" name="nuclearImportMode" checked={nuclearImportMode === 'pages'} onChange={() => setNuclearImportMode('pages')} />
@@ -5162,7 +5207,7 @@ export default function AdminPage() {
                                                 </p>
                                             </div>
                                             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
-                                                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: '700', color: '#7b341e', cursor: 'pointer' }}>
+                                                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: '700', color: 'var(--warning-text)', cursor: 'pointer' }}>
                                                     <input
                                                         type="checkbox"
                                                         checked={nuclearVlmEnabled}
@@ -5180,7 +5225,7 @@ export default function AdminPage() {
                                                         border: '1px solid #dd6b20',
                                                         borderRadius: '0.375rem',
                                                         color: '#9c4221',
-                                                        background: '#fff',
+                                                        background: 'var(--surface-raised)',
                                                         fontWeight: '700',
                                                         cursor: nuclearVlmStatus.state === 'checking' ? 'wait' : 'pointer'
                                                     }}
@@ -5208,7 +5253,7 @@ export default function AdminPage() {
                                                     marginTop: '0.65rem',
                                                     paddingTop: '0.65rem',
                                                     borderTop: '1px solid #fbd38d',
-                                                    color: '#744210',
+                                                    color: 'var(--warning-text)',
                                                     fontSize: '0.78rem'
                                                 }}>
                                                     <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
@@ -5224,15 +5269,15 @@ export default function AdminPage() {
                                                         {(embeddedVlmManager.models || []).map(model => {
                                                             const isInstalling = embeddedVlmManager.installingModelId === model.id && embeddedVlmManager.installing;
                                                             return (
-                                                                <div key={model.id} style={{ padding: '0.65rem', border: `1px solid ${model.selected ? '#68d391' : '#fbd38d'}`, borderRadius: '0.4rem', background: model.selected ? '#f0fff4' : '#fffaf0' }}>
+                                                                <div key={model.id} style={{ padding: '0.65rem', border: `1px solid ${model.selected ? 'var(--success-text)' : 'var(--warning-text)'}`, borderRadius: '0.4rem', background: model.selected ? 'var(--success-soft)' : 'var(--warning-soft)' }}>
                                                                     <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', alignItems: 'flex-start', flexWrap: 'wrap' }}>
                                                                         <div>
                                                                             <div style={{ fontWeight: 700 }}>
                                                                                 {model.label}
-                                                                                {model.recommended && <span style={{ marginLeft: '0.4rem', color: '#2b6cb0' }}>標準</span>}
-                                                                                {model.selected && <span style={{ marginLeft: '0.4rem', color: '#276749' }}>選択中</span>}
+                                                                                {model.recommended && <span style={{ marginLeft: '0.4rem', color: 'var(--accent)' }}>標準</span>}
+                                                                                {model.selected && <span style={{ marginLeft: '0.4rem', color: 'var(--success-text)' }}>選択中</span>}
                                                                             </div>
-                                                                            <div style={{ marginTop: '0.2rem', color: '#975a16' }}>
+                                                                            <div style={{ marginTop: '0.2rem', color: 'var(--warning-text)' }}>
                                                                                 {model.description} / {(model.totalBytes / 1_000_000_000).toFixed(2)} GB
                                                                             </div>
                                                                         </div>
@@ -5243,30 +5288,30 @@ export default function AdminPage() {
                                                                                     onClick={() => installEmbeddedVlmModel(model.id)}
                                                                                     disabled={embeddedVlmManager.installing || !model.canInstall}
                                                                                     title={!model.enoughSpace ? '空き容量が不足しています' : ''}
-                                                                                    style={{ padding: '0.35rem 0.65rem', border: '1px solid #dd6b20', borderRadius: '0.3rem', background: '#fff', color: model.canInstall ? '#9c4221' : '#a0aec0', cursor: model.canInstall && !embeddedVlmManager.installing ? 'pointer' : 'not-allowed' }}
+                                                                                    style={{ padding: '0.35rem 0.65rem', border: '1px solid #dd6b20', borderRadius: '0.3rem', background: 'var(--surface-raised)', color: model.canInstall ? '#9c4221' : '#a0aec0', cursor: model.canInstall && !embeddedVlmManager.installing ? 'pointer' : 'not-allowed' }}
                                                                                 >
                                                                                     {model.remainingBytes < model.totalBytes ? '取得を再開' : '取得'}
                                                                                 </button>
                                                                             )}
                                                                             {isInstalling && (
-                                                                                <button type="button" onClick={pauseEmbeddedVlmDownload} style={{ padding: '0.35rem 0.65rem', border: '1px solid #c05621', borderRadius: '0.3rem', background: '#fffaf0', color: '#9c4221', cursor: 'pointer' }}>
+                                                                                <button type="button" onClick={pauseEmbeddedVlmDownload} style={{ padding: '0.35rem 0.65rem', border: '1px solid #c05621', borderRadius: '0.3rem', background: 'var(--warning-soft)', color: '#9c4221', cursor: 'pointer' }}>
                                                                                     一時停止
                                                                                 </button>
                                                                             )}
                                                                             {model.installed && !model.selected && (
-                                                                                <button type="button" onClick={() => selectEmbeddedVlmModel(model.id)} disabled={embeddedVlmManager.installing} style={{ padding: '0.35rem 0.65rem', border: '1px solid #2f855a', borderRadius: '0.3rem', background: '#f0fff4', color: '#276749', cursor: 'pointer' }}>
+                                                                                <button type="button" onClick={() => selectEmbeddedVlmModel(model.id)} disabled={embeddedVlmManager.installing} style={{ padding: '0.35rem 0.65rem', border: '1px solid var(--success-text)', borderRadius: '0.3rem', background: 'var(--success-soft)', color: 'var(--success-text)', cursor: 'pointer' }}>
                                                                                     このモデルを使用
                                                                                 </button>
                                                                             )}
                                                                             {model.installed && (
-                                                                                <button type="button" onClick={() => removeEmbeddedVlmModel(model.id, model.label)} disabled={embeddedVlmManager.installing} style={{ padding: '0.35rem 0.65rem', border: '1px solid #cbd5e0', borderRadius: '0.3rem', background: '#fff', color: '#4a5568', cursor: 'pointer' }}>
+                                                                                <button type="button" onClick={() => removeEmbeddedVlmModel(model.id, model.label)} disabled={embeddedVlmManager.installing} style={{ padding: '0.35rem 0.65rem', border: '1px solid var(--border-color)', borderRadius: '0.3rem', background: 'var(--surface-raised)', color: 'var(--text-secondary)', cursor: 'pointer' }}>
                                                                                     削除
                                                                                 </button>
                                                                             )}
                                                                         </div>
                                                                     </div>
                                                                     {!model.installed && !model.enoughSpace && (
-                                                                        <div style={{ marginTop: '0.35rem', color: '#c53030' }}>
+                                                                        <div style={{ marginTop: '0.35rem', color: 'var(--danger-text)' }}>
                                                                             容量不足: 取得には予約領域を含め約{(model.requiredFreeBytes / 1_000_000_000).toFixed(1)} GBの空きが必要です。
                                                                         </div>
                                                                     )}
@@ -5296,10 +5341,10 @@ export default function AdminPage() {
                                                         </div>
                                                     )}
                                                     {embeddedVlmManager.error && (
-                                                        <div style={{ marginTop: '0.4rem', color: '#c53030' }}>{embeddedVlmManager.error}</div>
+                                                        <div style={{ marginTop: '0.4rem', color: 'var(--danger-text)' }}>{embeddedVlmManager.error}</div>
                                                     )}
                                                     {embeddedVlmManager.restartRequired && (
-                                                        <button type="button" onClick={() => window.radExamVlm?.restart()} style={{ marginTop: '0.55rem', padding: '0.4rem 0.7rem', border: '1px solid #2f855a', borderRadius: '0.3rem', background: '#f0fff4', color: '#276749', cursor: 'pointer' }}>
+                                                        <button type="button" onClick={() => window.radExamVlm?.restart()} style={{ marginTop: '0.55rem', padding: '0.4rem 0.7rem', border: '1px solid var(--success-text)', borderRadius: '0.3rem', background: 'var(--success-soft)', color: 'var(--success-text)', cursor: 'pointer' }}>
                                                             変更を反映してアプリを再起動
                                                         </button>
                                                     )}
@@ -5309,11 +5354,11 @@ export default function AdminPage() {
                                     )}
 
                                     <div style={{
-                                        border: '2px dashed #cbd5e0',
+                                        border: '2px dashed var(--border-color)',
                                         borderRadius: '0.5rem',
                                         padding: '3rem 1.5rem',
                                         textAlign: 'center',
-                                        background: '#f8fafc',
+                                        background: 'var(--surface-soft)',
                                         position: 'relative'
                                     }}
                                     onDragOver={(event) => event.preventDefault()}
@@ -5323,10 +5368,10 @@ export default function AdminPage() {
                                     }}
                                     >
                                         <div style={{ fontSize: '3rem', marginBottom: '0.75rem' }}>📁</div>
-                                        <div style={{ fontWeight: 'bold', color: '#2d3748', fontSize: '1.05rem', marginBottom: '0.3rem' }}>
+                                        <div style={{ fontWeight: 'bold', color: 'var(--text-primary)', fontSize: '1.05rem', marginBottom: '0.3rem' }}>
                                             ここに過去問PDFをドロップ
                                         </div>
-                                        <div style={{ color: '#718096', fontSize: '0.88rem' }}>
+                                        <div style={{ color: 'var(--text-secondary)', fontSize: '0.88rem' }}>
                                             1件だけでも、複数のPDFでも選択できます。
                                         </div>
                                         <div style={{ display: 'flex', justifyContent: 'center', flexWrap: 'wrap', gap: '0.75rem', marginTop: '1rem' }}>
@@ -5337,7 +5382,7 @@ export default function AdminPage() {
                                                     padding: '0.65rem 1.1rem',
                                                     border: '1px solid #2b6cb0',
                                                     borderRadius: '0.375rem',
-                                                    background: '#3182ce',
+                                                    background: 'var(--accent)',
                                                     color: '#fff',
                                                     fontWeight: '700',
                                                     cursor: 'pointer'
@@ -5352,8 +5397,8 @@ export default function AdminPage() {
                                                     padding: '0.65rem 1.1rem',
                                                     border: '1px solid #3182ce',
                                                     borderRadius: '0.375rem',
-                                                    background: '#fff',
-                                                    color: '#2b6cb0',
+                                                    background: 'var(--surface-raised)',
+                                                    color: 'var(--accent)',
                                                     fontWeight: '700',
                                                     cursor: 'pointer'
                                                 }}
@@ -5388,7 +5433,7 @@ export default function AdminPage() {
                         <div>
                             {/* Exam Configuration Card */}
                             <div style={{
-                                background: '#fff',
+                                background: 'var(--surface-raised)',
                                 padding: '1.5rem',
                                 borderRadius: '0.5rem',
                                 boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
@@ -5402,8 +5447,8 @@ export default function AdminPage() {
                                     marginBottom: '1rem',
                                     padding: '0.35rem 0.7rem',
                                     borderRadius: '9999px',
-                                    background: '#ebf8ff',
-                                    color: '#2b6cb0',
+                                    background: 'var(--accent-soft)',
+                                    color: 'var(--accent)',
                                     fontSize: '0.85rem',
                                     fontWeight: '700'
                                 }}>
@@ -5415,7 +5460,7 @@ export default function AdminPage() {
                                         display: 'flex',
                                         gap: '1.5rem',
                                         marginBottom: '1rem',
-                                        borderBottom: '1px solid #edf2f7',
+                                        borderBottom: '1px solid var(--border-color)',
                                         paddingBottom: '0.75rem'
                                     }}>
                                         <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', fontWeight: 'bold', fontSize: '0.9rem', color: importMode === 'existing' ? '#3182ce' : '#4a5568' }}>
@@ -5443,8 +5488,9 @@ export default function AdminPage() {
                                                 checked={importMode === 'new'}
                                                 onChange={() => {
                                                     setImportMode('new');
-                                                    setExamId('');
-                                                    setExamName('');
+                                                    const defaults = getExamImportDefaults(examCategory);
+                                                    setExamId(defaults.id);
+                                                    setExamName(defaults.name);
                                                 }}
                                                 style={{ marginRight: '0.4rem', cursor: 'pointer' }}
                                             />
@@ -5477,11 +5523,11 @@ export default function AdminPage() {
                                                     width: '100%',
                                                     padding: '0.6rem',
                                                     borderRadius: '0.375rem',
-                                                    border: '1px solid #cbd5e0',
-                                                    background: '#fff',
+                                                    border: '1px solid var(--border-color)',
+                                                    background: 'var(--surface-raised)',
                                                     fontSize: '0.95rem',
                                                     fontWeight: '600',
-                                                    color: '#2d3748'
+                                                    color: 'var(--text-primary)'
                                                 }}
                                             >
                                                 {localExams.map(ex => (
@@ -5490,7 +5536,7 @@ export default function AdminPage() {
                                                     </option>
                                                 ))}
                                             </select>
-                                            <p style={{ margin: '0.5rem 0 0 0', fontSize: '0.8rem', color: '#718096' }}>
+                                            <p style={{ margin: '0.5rem 0 0 0', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
                                                 ※マージの際、登録済みの表示名（試験名）が優先して維持されます。
                                             </p>
                                         </div>
@@ -5509,7 +5555,7 @@ export default function AdminPage() {
                                                         width: '100%',
                                                         padding: '0.5rem',
                                                         borderRadius: '0.25rem',
-                                                        border: '1px solid #cbd5e0'
+                                                        border: '1px solid var(--border-color)'
                                                     }}
                                                 />
                                             </div>
@@ -5526,19 +5572,19 @@ export default function AdminPage() {
                                                         width: '100%',
                                                         padding: '0.5rem',
                                                         borderRadius: '0.25rem',
-                                                        border: '1px solid #cbd5e0'
+                                                        border: '1px solid var(--border-color)'
                                                     }}
                                                 />
                                             </div>
                                             {localExams.some(e => e.id === examId) && (
                                                 <div style={{
                                                     gridColumn: '1 / -1',
-                                                    background: '#fffaf0',
+                                                    background: 'var(--warning-soft)',
                                                     border: '1px solid #f6ad55',
                                                     padding: '0.75rem',
                                                     borderRadius: '0.25rem',
                                                     fontSize: '0.9rem',
-                                                    color: '#c05621',
+                                                    color: 'var(--warning-text)',
                                                     marginTop: '0.5rem'
                                                 }}>
                                                     この試験IDは既に使われています。追加登録する場合は「既存の試験に追加 (マージ)」を選択してください。
@@ -5556,12 +5602,12 @@ export default function AdminPage() {
                                             {[...new Set(parsedQuestions.map(question => question.year))]
                                                 .sort((a, b) => b - a)
                                                 .map(year => (
-                                                    <span key={year} style={{ padding: '0.35rem 0.7rem', borderRadius: '9999px', background: '#ebf8ff', color: '#2b6cb0', fontWeight: '700', fontSize: '0.85rem' }}>
+                                                    <span key={year} style={{ padding: '0.35rem 0.7rem', borderRadius: '9999px', background: 'var(--accent-soft)', color: 'var(--accent)', fontWeight: '700', fontSize: '0.85rem' }}>
                                                         {year}年
                                                     </span>
                                                 ))}
                                         </div>
-                                        <p style={{ margin: '0.5rem 0 0 0', fontSize: '0.8rem', color: '#718096' }}>
+                                        <p style={{ margin: '0.5rem 0 0 0', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
                                             複数年度を検出したため、PDFごとの年度を維持して保存します。
                                         </p>
                                     </div>
@@ -5587,14 +5633,14 @@ export default function AdminPage() {
                                             width: '100%',
                                             padding: '0.6rem',
                                             borderRadius: '0.375rem',
-                                            border: '1px solid #cbd5e0',
-                                            background: '#fff',
+                                            border: '1px solid var(--border-color)',
+                                            background: 'var(--surface-raised)',
                                             fontSize: '0.95rem',
                                             fontWeight: '600',
-                                            color: '#2d3748'
+                                            color: 'var(--text-primary)'
                                         }}
                                     />
-                                    <p style={{ margin: '0.5rem 0 0 0', fontSize: '0.8rem', color: '#718096' }}>
+                                    <p style={{ margin: '0.5rem 0 0 0', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
                                         年度を変更すると、プレビュー中の全問題の年度と問題IDに一括反映されます。
                                     </p>
                                 </div>
@@ -5625,8 +5671,8 @@ export default function AdminPage() {
                                         }}
                                         style={{
                                             padding: '0.75rem 1.5rem',
-                                            background: '#cbd5e0',
-                                            color: '#4a5568',
+                                            background: 'var(--border-color)',
+                                            color: 'var(--text-secondary)',
                                             border: 'none',
                                             borderRadius: '0.375rem',
                                             fontWeight: 'bold',
@@ -5645,11 +5691,11 @@ export default function AdminPage() {
                                     const localImages = imageMap[qIdx] || [];
                                     return (
                                         <div key={qIdx} style={{
-                                            background: '#fff',
+                                            background: 'var(--surface-raised)',
                                             padding: '1.2rem',
                                             borderRadius: '0.5rem',
                                             boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
-                                            border: '1px solid #e2e8f0',
+                                            border: '1px solid var(--border-color)',
                                             display: 'flex',
                                             gap: '1.5rem',
                                             alignItems: 'flex-start'
@@ -5658,7 +5704,7 @@ export default function AdminPage() {
                                             <div style={{ flex: 1 }}>
                                                 <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '0.5rem' }}>
                                                     <span style={{
-                                                        background: '#e2e8f0',
+                                                        background: 'var(--border-color)',
                                                         padding: '0.2rem 0.5rem',
                                                         borderRadius: '0.25rem',
                                                         fontSize: '0.8rem',
@@ -5669,17 +5715,17 @@ export default function AdminPage() {
                                                 </div>
 
                                                 {/* Question Text */}
-                                                <div style={{ fontSize: '0.9rem', marginBottom: '1rem', whiteSpace: 'pre-wrap', lineHeight: '1.5', color: '#2d3748' }}>
+                                                <div style={{ fontSize: '0.9rem', marginBottom: '1rem', whiteSpace: 'pre-wrap', lineHeight: '1.5', color: 'var(--text-primary)' }}>
                                                     {q.question}
                                                 </div>
 
                                                 {/* Question Options */}
                                                 {q.options && Object.keys(q.options).length > 0 && (
-                                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', marginBottom: '1rem', background: '#f7fafc', padding: '0.75rem', borderRadius: '0.375rem' }}>
+                                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', marginBottom: '1rem', background: 'var(--surface-soft)', padding: '0.75rem', borderRadius: '0.375rem' }}>
                                                         {Object.entries(q.options).map(([key, val]) => (
                                                             <div key={key} style={{ display: 'flex', gap: '0.5rem', fontSize: '0.85rem' }}>
-                                                                <span style={{ fontWeight: 'bold', minWidth: '20px', color: '#4a5568' }}>{key}.</span>
-                                                                <span style={{ color: '#2d3748' }}>{val}</span>
+                                                                <span style={{ fontWeight: 'bold', minWidth: '20px', color: 'var(--text-secondary)' }}>{key}.</span>
+                                                                <span style={{ color: 'var(--text-primary)' }}>{val}</span>
                                                             </div>
                                                         ))}
                                                     </div>
@@ -5690,34 +5736,34 @@ export default function AdminPage() {
                                             {/* Right Column: Image Drop Area */}
                                             <div style={{
                                                 width: '280px',
-                                                borderLeft: '1px solid #edf2f7',
+                                                borderLeft: '1px solid var(--border-color)',
                                                 paddingLeft: '1.5rem',
                                                 display: 'flex',
                                                 flexDirection: 'column',
                                                 gap: '0.5rem'
                                             }}>
                                                 {Array.isArray(q.sourcePages) && q.sourcePages.length > 0 && (
-                                                    <div style={{ padding: '0.65rem', border: '1px solid #90cdf4', borderRadius: '0.375rem', background: '#ebf8ff', color: '#2c5282', fontSize: '0.8rem', lineHeight: 1.5 }}>
+                                                    <div style={{ padding: '0.65rem', border: '1px solid #90cdf4', borderRadius: '0.375rem', background: 'var(--accent-soft)', color: 'var(--accent)', fontSize: '0.8rem', lineHeight: 1.5 }}>
                                                         <strong>📄 巻末図（別紙）ページ</strong>
                                                         <div>{q.sourcePages.map(page => `${page.pageNumber}ページ`).join('、')}</div>
                                                         <div>保存後の演習画面にページ全体を表示します。</div>
                                                     </div>
                                                 )}
-                                                <div style={{ fontWeight: 'bold', fontSize: '0.8rem', color: '#4a5568' }}>
+                                                <div style={{ fontWeight: 'bold', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
                                                     🖼 追加の個別画像
                                                 </div>
 
                                                 {/* File Upload Drop Area */}
                                                 <div
                                                     style={{
-                                                        border: '2px dashed #cbd5e0',
+                                                        border: '2px dashed var(--border-color)',
                                                         borderRadius: '0.375rem',
                                                         padding: '1rem',
                                                         textAlign: 'center',
-                                                        background: '#f8fafc',
+                                                        background: 'var(--surface-soft)',
                                                         cursor: 'pointer',
                                                         fontSize: '0.75rem',
-                                                        color: '#718096',
+                                                        color: 'var(--text-secondary)',
                                                         position: 'relative'
                                                     }}
                                                     onClick={() => document.getElementById(`file-input-${qIdx}`).click()}
@@ -5745,7 +5791,7 @@ export default function AdminPage() {
                                                                 display: 'flex',
                                                                 alignItems: 'center',
                                                                 justifyContent: 'space-between',
-                                                                background: '#edf2f7',
+                                                                background: 'var(--surface-soft)',
                                                                 padding: '0.3rem',
                                                                 borderRadius: '0.25rem',
                                                                 fontSize: '0.75rem'
@@ -5778,7 +5824,7 @@ export default function AdminPage() {
                                                                     style={{
                                                                         background: 'none',
                                                                         border: 'none',
-                                                                        color: '#e53e3e',
+                                                                        color: 'var(--danger-text)',
                                                                         cursor: 'pointer',
                                                                         fontWeight: 'bold',
                                                                         fontSize: '0.9rem'
@@ -5804,16 +5850,16 @@ export default function AdminPage() {
                 <div>
                     {/* Backup Section */}
                     <div style={{
-                        background: '#fff',
+                        background: 'var(--surface-raised)',
                         padding: '1.5rem',
                         borderRadius: '0.5rem',
                         boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
                         marginBottom: '1.5rem'
                     }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem', borderBottom: '1px solid #edf2f7', paddingBottom: '1rem', marginBottom: '1rem' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '1rem', marginBottom: '1rem' }}>
                             <div>
                                 <h3 style={{ marginTop: 0, marginBottom: '0.2rem' }}>💾 ローカルデータの管理（エクスポート & インポート）</h3>
-                                <p style={{ color: '#718096', fontSize: '0.85rem', margin: 0 }}>
+                                <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', margin: 0 }}>
                                     全てのカスタム試験データ、画像、参照PDF、学習進捗（正誤、お気に入り、メモ）をRadExamバックアップとして保存・復元できます。
                                 </p>
                             </div>
@@ -5822,7 +5868,7 @@ export default function AdminPage() {
                                     onClick={handleExportBackup}
                                     style={{
                                         padding: '0.6rem 1.2rem',
-                                        background: '#3182ce',
+                                        background: 'var(--accent)',
                                         color: 'white',
                                         border: 'none',
                                         borderRadius: '0.375rem',
@@ -5856,19 +5902,19 @@ export default function AdminPage() {
                         </div>
 
                         <div style={{
-                            background: '#f7fafc',
+                            background: 'var(--surface-soft)',
                             padding: '1rem',
                             borderRadius: '0.375rem',
-                            border: '1px solid #e2e8f0',
+                            border: '1px solid var(--border-color)',
                             fontSize: '0.9rem'
                         }}>
-                            <div style={{ fontWeight: 'bold', color: '#4a5568', marginBottom: '0.5rem' }}>
+                            <div style={{ fontWeight: 'bold', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
                                 バックアップ復元の動作
                             </div>
-                            <div style={{ color: '#2d3748' }}>
+                            <div style={{ color: 'var(--text-primary)' }}>
                                 バックアップファイルに含まれる試験データ、問題文、選択肢、画像、画像レジェンド、学習進捗を復元します。
                             </div>
-                            <div style={{ marginTop: '0.4rem', fontSize: '0.8rem', color: '#c05621' }}>
+                            <div style={{ marginTop: '0.4rem', fontSize: '0.8rem', color: 'var(--warning-text)' }}>
                                 ※復元時は現在のローカルデータをすべて消去し、バックアップ内容で完全に置き換えます。
                             </div>
                         </div>
@@ -5876,14 +5922,14 @@ export default function AdminPage() {
 
                     {/* Custom Exam List */}
                     <div style={{
-                        background: '#fff',
+                        background: 'var(--surface-raised)',
                         padding: '1.5rem',
                         borderRadius: '0.5rem',
                         boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
                     }}>
                         <h3 style={{ marginTop: 0, marginBottom: '1.2rem' }}>📋 追加されたカスタム試験一覧</h3>
                         {localExams.length === 0 ? (
-                            <div style={{ textAlign: 'center', color: '#a0aec0', padding: '3rem 0' }}>
+                            <div style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '3rem 0' }}>
                                 追加された独自の試験はありません。
                             </div>
                         ) : (
@@ -5895,12 +5941,12 @@ export default function AdminPage() {
                                         alignItems: 'center',
                                         padding: '1rem',
                                         borderRadius: '0.375rem',
-                                        border: '1px solid #e2e8f0',
-                                        background: '#f8fafc'
+                                        border: '1px solid var(--border-color)',
+                                        background: 'var(--surface-soft)'
                                     }}>
                                         <div>
-                                            <h4 style={{ margin: 0, fontSize: '1rem', color: '#2d3748' }}>{exam.name}</h4>
-                                            <span style={{ fontSize: '0.8rem', color: '#718096' }}>
+                                            <h4 style={{ margin: 0, fontSize: '1rem', color: 'var(--text-primary)' }}>{exam.name}</h4>
+                                            <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
                                                 ID: {exam.id} | 問題数: {exam.count}問
                                             </span>
                                         </div>
@@ -5909,10 +5955,10 @@ export default function AdminPage() {
                                                 onClick={() => loadExamForEditing(exam)}
                                                 style={{
                                                     padding: '0.4rem 0.8rem',
-                                                    background: '#fff',
+                                                    background: 'var(--surface-raised)',
                                                     border: '1px solid #3182ce',
                                                     borderRadius: '0.25rem',
-                                                    color: '#3182ce',
+                                                    color: 'var(--accent)',
                                                     fontWeight: 'bold',
                                                     fontSize: '0.8rem',
                                                     cursor: 'pointer'
@@ -5924,10 +5970,10 @@ export default function AdminPage() {
                                                 onClick={() => handleDeleteExam(exam.id, exam.name)}
                                                 style={{
                                                     padding: '0.4rem 0.8rem',
-                                                    background: '#fff',
+                                                    background: 'var(--surface-raised)',
                                                     border: '1px solid #e53e3e',
                                                     borderRadius: '0.25rem',
-                                                    color: '#e53e3e',
+                                                    color: 'var(--danger-text)',
                                                     fontWeight: 'bold',
                                                     fontSize: '0.8rem',
                                                     cursor: 'pointer',
@@ -5953,7 +5999,7 @@ export default function AdminPage() {
 
                     {editingExamId && (
                         <div className={adminStyles.editSection} style={{
-                            background: '#fff',
+                            background: 'var(--surface-raised)',
                             padding: '1.5rem',
                             borderRadius: '0.5rem',
                             boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
@@ -5962,7 +6008,7 @@ export default function AdminPage() {
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
                                 <div>
                                     <h3 style={{ margin: 0 }}>📝 保存済み試験の編集</h3>
-                                    <p style={{ margin: '0.35rem 0 0 0', fontSize: '0.85rem', color: '#718096' }}>
+                                    <p style={{ margin: '0.35rem 0 0 0', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
                                         問題文、選択肢、画像レジェンド、問題追加・削除、画像追加・削除をここで直接修正できます。
                                     </p>
                                 </div>
@@ -5985,7 +6031,7 @@ export default function AdminPage() {
                                         onClick={handleSaveEditedExam}
                                         style={{
                                             padding: '0.5rem 0.9rem',
-                                            background: '#3182ce',
+                                            background: 'var(--accent)',
                                             color: '#fff',
                                             border: 'none',
                                             borderRadius: '0.375rem',
@@ -6001,24 +6047,24 @@ export default function AdminPage() {
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '1rem', marginBottom: '1.5rem' }}>
                                 <div>
                                     <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '0.35rem' }}>試験ID</label>
-                                    <input value={editingExamId} disabled style={{ width: '100%', padding: '0.55rem', borderRadius: '0.375rem', border: '1px solid #cbd5e0', background: '#edf2f7' }} />
+                                    <input value={editingExamId} disabled style={{ width: '100%', padding: '0.55rem', borderRadius: '0.375rem', border: '1px solid var(--border-color)', background: 'var(--surface-soft)' }} />
                                 </div>
                                 <div>
                                     <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '0.35rem' }}>試験名</label>
-                                    <input value={editingExamName} onChange={(e) => setEditingExamName(e.target.value)} style={{ width: '100%', padding: '0.55rem', borderRadius: '0.375rem', border: '1px solid #cbd5e0' }} />
+                                    <input value={editingExamName} onChange={(e) => setEditingExamName(e.target.value)} style={{ width: '100%', padding: '0.55rem', borderRadius: '0.375rem', border: '1px solid var(--border-color)' }} />
                                 </div>
                             </div>
 
-                            <div style={{ marginBottom: '1.5rem', padding: '1rem', background: '#f7fafc', border: '1px solid #e2e8f0', borderRadius: '0.5rem' }}>
+                            <div style={{ marginBottom: '1.5rem', padding: '1rem', background: 'var(--surface-soft)', border: '1px solid var(--border-color)', borderRadius: '0.5rem' }}>
                                 <div style={{ fontWeight: 'bold', marginBottom: '0.5rem' }}>登録元PDF</div>
                                 {editingPdfFiles.length === 0 ? (
-                                    <div style={{ color: '#718096', fontSize: '0.85rem' }}>この試験には登録元PDFが保存されていません。</div>
+                                    <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>この試験には登録元PDFが保存されていません。</div>
                                 ) : (
                                     <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
                                         <select value={selectedEditingPdfKey} onChange={e => setSelectedEditingPdfKey(e.target.value)} style={{ minWidth: '260px', padding: '0.5rem' }}>
                                             {editingPdfFiles.map(pdf => <option key={pdf.key} value={pdf.key}>{pdf.year ? `${pdf.year}年 — ` : ''}{pdf.name}</option>)}
                                         </select>
-                                        <span style={{ alignSelf: 'center', color: '#4a5568', fontSize: '0.82rem' }}>PDFは編集欄の右側に表示されます。</span>
+                                        <span style={{ alignSelf: 'center', color: 'var(--text-secondary)', fontSize: '0.82rem' }}>PDFは編集欄の右側に表示されます。</span>
                                     </div>
                                 )}
                             </div>
@@ -6029,7 +6075,7 @@ export default function AdminPage() {
                                     <select
                                         value={editingYearFilter}
                                         onChange={(e) => setEditingYearFilter(e.target.value)}
-                                        style={{ width: '100%', padding: '0.55rem', borderRadius: '0.375rem', border: '1px solid #cbd5e0', background: '#fff' }}
+                                        style={{ width: '100%', padding: '0.55rem', borderRadius: '0.375rem', border: '1px solid var(--border-color)', background: 'var(--surface-raised)' }}
                                     >
                                         <option value="all">全年度を表示</option>
                                         {[...new Set(editingQuestions.map(q => Number(q.year)).filter(Boolean))].sort((a, b) => b - a).map((year) => (
@@ -6048,34 +6094,34 @@ export default function AdminPage() {
                                     .filter(({ question }) => editingYearFilter === 'all' || String(question.year) === editingYearFilter)
                                     .map(({ question, questionIndex }) => (
                                     <div key={`${question.id}-${questionIndex}`} onFocusCapture={() => selectEditingQuestion(questionIndex)} onClick={() => selectEditingQuestion(questionIndex)} style={{
-                                        border: '1px solid #e2e8f0',
+                                        border: '1px solid var(--border-color)',
                                         borderRadius: '0.5rem',
                                         padding: '1rem',
-                                        background: '#f8fafc'
+                                        background: 'var(--surface-soft)'
                                     }}>
                                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
                                             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(120px, 1fr))', gap: '0.75rem', flex: 1 }}>
                                                 <div>
                                                     <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 'bold', marginBottom: '0.25rem' }}>年度</label>
-                                                    <input type="number" value={question.year} onChange={(e) => handleEditingQuestionMetaChange(questionIndex, 'year', e.target.value)} style={{ width: '100%', padding: '0.45rem', borderRadius: '0.25rem', border: '1px solid #cbd5e0' }} />
+                                                    <input type="number" value={question.year} onChange={(e) => handleEditingQuestionMetaChange(questionIndex, 'year', e.target.value)} style={{ width: '100%', padding: '0.45rem', borderRadius: '0.25rem', border: '1px solid var(--border-color)' }} />
                                                 </div>
                                                 <div>
                                                     <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 'bold', marginBottom: '0.25rem' }}>問題番号</label>
-                                                    <input type="number" value={question.questionNumber} onChange={(e) => handleEditingQuestionMetaChange(questionIndex, 'questionNumber', e.target.value)} style={{ width: '100%', padding: '0.45rem', borderRadius: '0.25rem', border: '1px solid #cbd5e0' }} />
+                                                    <input type="number" value={question.questionNumber} onChange={(e) => handleEditingQuestionMetaChange(questionIndex, 'questionNumber', e.target.value)} style={{ width: '100%', padding: '0.45rem', borderRadius: '0.25rem', border: '1px solid var(--border-color)' }} />
                                                 </div>
                                                 <div>
                                                     <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 'bold', marginBottom: '0.25rem' }}>問題ID</label>
-                                                    <input value={question.id} disabled style={{ width: '100%', padding: '0.45rem', borderRadius: '0.25rem', border: '1px solid #cbd5e0', background: '#edf2f7' }} />
+                                                    <input value={question.id} disabled style={{ width: '100%', padding: '0.45rem', borderRadius: '0.25rem', border: '1px solid var(--border-color)', background: 'var(--surface-soft)' }} />
                                                 </div>
                                             </div>
                                             <button
                                                 onClick={() => handleDeleteEditingQuestion(questionIndex)}
                                                 style={{
                                                     padding: '0.45rem 0.8rem',
-                                                    background: '#fff',
+                                                    background: 'var(--surface-raised)',
                                                     border: '1px solid #e53e3e',
                                                     borderRadius: '0.25rem',
-                                                    color: '#e53e3e',
+                                                    color: 'var(--danger-text)',
                                                     fontWeight: 'bold',
                                                     cursor: 'pointer'
                                                 }}
@@ -6086,12 +6132,12 @@ export default function AdminPage() {
 
                                         <div style={{ marginBottom: '1rem' }}>
                                             <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '0.35rem' }}>ジャンル</label>
-                                            <input value={question.genre} onChange={(e) => handleEditingQuestionFieldChange(questionIndex, 'genre', e.target.value)} style={{ width: '100%', padding: '0.55rem', borderRadius: '0.375rem', border: '1px solid #cbd5e0' }} />
+                                            <input value={question.genre} onChange={(e) => handleEditingQuestionFieldChange(questionIndex, 'genre', e.target.value)} style={{ width: '100%', padding: '0.55rem', borderRadius: '0.375rem', border: '1px solid var(--border-color)' }} />
                                         </div>
 
                                         <div style={{ marginBottom: '1rem' }}>
                                             <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '0.35rem' }}>問題文</label>
-                                            <textarea value={question.question} onChange={(e) => handleEditingQuestionFieldChange(questionIndex, 'question', e.target.value)} style={{ width: '100%', minHeight: '100px', padding: '0.65rem', borderRadius: '0.375rem', border: '1px solid #cbd5e0', resize: 'vertical' }} />
+                                            <textarea value={question.question} onChange={(e) => handleEditingQuestionFieldChange(questionIndex, 'question', e.target.value)} style={{ width: '100%', minHeight: '100px', padding: '0.65rem', borderRadius: '0.375rem', border: '1px solid var(--border-color)', resize: 'vertical' }} />
                                         </div>
 
                                         <div style={{ marginBottom: '1rem' }}>
@@ -6100,7 +6146,7 @@ export default function AdminPage() {
                                                 {['a', 'b', 'c', 'd', 'e'].map((optionKey) => (
                                                     <div key={optionKey} style={{ display: 'grid', gridTemplateColumns: '36px 1fr', gap: '0.5rem', alignItems: 'center' }}>
                                                         <span style={{ fontWeight: 'bold' }}>{optionKey}.</span>
-                                                        <input value={question.options?.[optionKey] || ''} onChange={(e) => handleEditingOptionChange(questionIndex, optionKey, e.target.value)} style={{ width: '100%', padding: '0.5rem', borderRadius: '0.375rem', border: '1px solid #cbd5e0' }} />
+                                                        <input value={question.options?.[optionKey] || ''} onChange={(e) => handleEditingOptionChange(questionIndex, optionKey, e.target.value)} style={{ width: '100%', padding: '0.5rem', borderRadius: '0.375rem', border: '1px solid var(--border-color)' }} />
                                                     </div>
                                                 ))}
                                             </div>
@@ -6122,25 +6168,25 @@ export default function AdminPage() {
                                                     <input type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => handleEditingImageAdd(questionIndex, e.target.files?.[0])} />
                                                 </label>
                                                 {editingPdfFiles.length > 0 && (
-                                                    <button type="button" onClick={() => openPdfForQuestion(questionIndex)} style={{ padding: '0.45rem 0.8rem', border: '1px solid #3182ce', color: '#3182ce', background: '#fff', borderRadius: '0.25rem', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 'bold' }}>
+                                                    <button type="button" onClick={() => openPdfForQuestion(questionIndex)} style={{ padding: '0.45rem 0.8rem', border: '1px solid #3182ce', color: 'var(--accent)', background: 'var(--surface-raised)', borderRadius: '0.25rem', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 'bold' }}>
                                                         PDFから切り抜く
                                                     </button>
                                                 )}
                                             </div>
                                             {question.images.length === 0 ? (
-                                                <div style={{ color: '#718096', fontSize: '0.8rem' }}>この問題に画像はありません。</div>
+                                                <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>この問題に画像はありません。</div>
                                             ) : (
                                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
                                                     {question.images.map((image, imageIndex) => (
-                                                        <div key={`${question.id}-image-${imageIndex}`} style={{ display: 'grid', gridTemplateColumns: '72px 1fr auto auto', gap: '0.75rem', alignItems: 'center', background: '#fff', padding: '0.6rem', borderRadius: '0.375rem', border: '1px solid #e2e8f0' }}>
-                                                            <img src={image.path} alt={image.legend || `image-${imageIndex + 1}`} style={{ width: '72px', height: '72px', objectFit: 'cover', borderRadius: '0.25rem', background: '#edf2f7' }} />
+                                                        <div key={`${question.id}-image-${imageIndex}`} style={{ display: 'grid', gridTemplateColumns: '72px 1fr auto auto', gap: '0.75rem', alignItems: 'center', background: 'var(--surface-raised)', padding: '0.6rem', borderRadius: '0.375rem', border: '1px solid var(--border-color)' }}>
+                                                            <img src={image.path} alt={image.legend || `image-${imageIndex + 1}`} style={{ width: '72px', height: '72px', objectFit: 'cover', borderRadius: '0.25rem', background: 'var(--surface-soft)' }} />
                                                             {image.legendLayout ? <StructuredLegendEditor
                                                                 legendLayout={image.legendLayout}
                                                                 onChange={(legendLayout, legend) => handleEditingStructuredLegendChange(questionIndex, imageIndex, legendLayout, legend)}
                                                                 onDisable={legend => handleEditingStructuredLegendChange(questionIndex, imageIndex, null, legend)}
                                                             /> : <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: '0.5rem', alignItems: 'center' }}>
-                                                                <input value={image.legend || ''} onChange={(e) => handleEditingImageLegendChange(questionIndex, imageIndex, e.target.value)} placeholder="画像レジェンド" style={{ width: '100%', minWidth: 0, padding: '0.55rem', borderRadius: '0.375rem', border: '1px solid #cbd5e0' }} />
-                                                                <button type="button" onClick={() => handleEditingStructuredLegendChange(questionIndex, imageIndex, createStructuredLegendFromText(image.legend), image.legend || '')} style={{ padding: '0.5rem 0.65rem', border: '1px solid #63b3ed', borderRadius: '0.35rem', background: '#fff', color: '#2b6cb0', cursor: 'pointer', fontSize: '0.75rem', fontWeight: 600, whiteSpace: 'nowrap' }}>構造化へ変換</button>
+                                                                <input value={image.legend || ''} onChange={(e) => handleEditingImageLegendChange(questionIndex, imageIndex, e.target.value)} placeholder="画像レジェンド" style={{ width: '100%', minWidth: 0, padding: '0.55rem', borderRadius: '0.375rem', border: '1px solid var(--border-color)' }} />
+                                                                <button type="button" onClick={() => handleEditingStructuredLegendChange(questionIndex, imageIndex, createStructuredLegendFromText(image.legend), image.legend || '')} style={{ padding: '0.5rem 0.65rem', border: '1px solid #63b3ed', borderRadius: '0.35rem', background: 'var(--surface-raised)', color: 'var(--accent)', cursor: 'pointer', fontSize: '0.75rem', fontWeight: 600, whiteSpace: 'nowrap' }}>構造化へ変換</button>
                                                             </div>}
                                                             <div style={{ display: 'flex', gap: '0.25rem' }}>
                                                                 <button type="button" disabled={imageIndex === 0} onClick={() => handleEditingImageMove(questionIndex, imageIndex, -1)} title="前へ移動" style={{ minWidth: '48px', minHeight: '40px', padding: '0.45rem 0.6rem', fontSize: '1.05rem', fontWeight: 'bold' }}>↑</button>
@@ -6150,10 +6196,10 @@ export default function AdminPage() {
                                                                 onClick={() => handleEditingImageRemove(questionIndex, imageIndex)}
                                                                 style={{
                                                                     padding: '0.45rem 0.75rem',
-                                                                    background: '#fff',
+                                                                    background: 'var(--surface-raised)',
                                                                     border: '1px solid #e53e3e',
                                                                     borderRadius: '0.25rem',
-                                                                    color: '#e53e3e',
+                                                                    color: 'var(--danger-text)',
                                                                     fontWeight: 'bold',
                                                                     cursor: 'pointer'
                                                                 }}
@@ -6176,11 +6222,11 @@ export default function AdminPage() {
                                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', marginBottom: '0.6rem' }}>
                                             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
                                                 <strong>登録元PDF</strong>
-                                                <span style={{ color: '#718096', fontSize: '0.78rem' }}>
+                                                <span style={{ color: 'var(--text-secondary)', fontSize: '0.78rem' }}>
                                                     {pdfClipQuestionIndex != null ? `問題 ${editingQuestions[pdfClipQuestionIndex]?.id} の追加範囲を選択中` : `問題 ${activeQuestion?.id || ''} を参照中`}
                                                 </span>
                                             </div>
-                                            {pdfClipQuestionIndex != null && <button type="button" onClick={() => setPdfClipQuestionIndex(null)} style={{ padding: '0.4rem 0.6rem', border: '1px solid #e53e3e', borderRadius: '0.3rem', background: '#fff', color: '#c53030', cursor: 'pointer' }}>切り抜きを解除</button>}
+                                            {pdfClipQuestionIndex != null && <button type="button" onClick={() => setPdfClipQuestionIndex(null)} style={{ padding: '0.4rem 0.6rem', border: '1px solid #e53e3e', borderRadius: '0.3rem', background: 'var(--surface-raised)', color: 'var(--danger-text)', cursor: 'pointer' }}>切り抜きを解除</button>}
                                         </div>
                                         <PdfClipper pdfBlob={selectedPdf.blob} initialSearchText={activeQuestion?.question || ''} scrollHeight="calc(min(900px, max(600px, 100vh - 260px)) - 135px)" onClip={pdfClipQuestionIndex != null ? handlePdfClip : undefined} />
                                     </aside>
@@ -6245,7 +6291,7 @@ export default function AdminPage() {
                             maxHeight: 'calc(90vh - 3rem)',
                             objectFit: 'contain',
                             borderRadius: '0.5rem',
-                            background: '#fff',
+                            background: 'var(--surface-raised)',
                             boxShadow: '0 12px 40px rgba(0,0,0,0.35)'
                         }}
                     />

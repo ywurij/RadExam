@@ -5,9 +5,17 @@ import { useSearchParams, useRouter } from 'next/navigation';
 import { getExamData, getAllQuestions, getQuestionsByYear, getGlobalQuestionId, getGenres, getExamName, initializeLocalExams } from '@/lib/data';
 import QuestionCard from '@/components/QuestionCard';
 import styles from './quiz.module.scss';
-import { saveLocalProgress, getLocalProgress, updateLocalQuestion, getExamPdfs } from '@/lib/localDb';
+import {
+    deleteLocalResumableSession,
+    getExamPdfs,
+    getLocalProgress,
+    getLocalResumableSessions,
+    saveLocalProgress,
+    saveLocalResumableSession,
+    updateLocalQuestion,
+} from '@/lib/localDb';
 import QuizResult from '@/components/QuizResult';
-import { limitResumableSessions, normalizeSessionConditions } from '@/lib/sessionHistory';
+import { normalizeSessionConditions } from '@/lib/sessionHistory';
 
 const generateUUID = () => {
     if (typeof window !== 'undefined' && window.crypto && window.crypto.randomUUID) {
@@ -73,23 +81,16 @@ function QuizContent() {
             // 2. Prepare Questions
             let data = [];
 
-            // CHECK FOR RESUME (Local only)
+            // CHECK FOR RESUME
             const isResume = searchParams.get('resume') === 'true';
             const resumeSessionId = searchParams.get('sessionId');
-            const sessionsKey = 'radexam_sessions';
 
-            // Load local session
+            // Load the locally cached copy of the cloud-synchronized session.
             let session = null;
             if (isResume && resumeSessionId && typeof window !== 'undefined') {
-                const raw = localStorage.getItem(sessionsKey);
-                if (raw) {
-                    try {
-                        const localSessions = JSON.parse(raw);
-                        if (Array.isArray(localSessions)) {
-                            session = localSessions.find(s => s.id === resumeSessionId) || null;
-                        }
-                    } catch (e) { console.error("Invalid local sessions data", e); }
-                }
+                session = getLocalResumableSessions().find(
+                    item => String(item.id) === String(resumeSessionId)
+                ) || null;
             }
 
             if (isResume && session) {
@@ -237,10 +238,9 @@ function QuizContent() {
         loadData();
     }, [examId, yearFilter, countFilter, isShuffle, genreFilter, searchParams, statusFilter, idFilter, user, router, isSearchMode, viewMode]);
 
-    const persistInterruptedSession = () => {
+    const persistInterruptedSession = async () => {
         if (typeof window === 'undefined' || isSearchMode || questions.length === 0 || !sessionId) return;
 
-        const sessionsKey = 'radexam_sessions';
         const conditions = sessionConditions || normalizeSessionConditions({
             yearFilter,
             countFilter,
@@ -256,26 +256,15 @@ function QuizContent() {
             timestamp: Date.now(),
             examId,
             ...conditions,
-            userId: user?.uid,
+            ...(user?.uid ? { userId: user.uid } : {}),
             interrupted: true,
         };
 
-        let localSessions = [];
-        try {
-            localSessions = JSON.parse(localStorage.getItem(sessionsKey) || '[]');
-            if (!Array.isArray(localSessions)) localSessions = [];
-        } catch {
-            localSessions = [];
-        }
-
-        const existingIndex = localSessions.findIndex(session => session.id === sessionId);
-        if (existingIndex >= 0) localSessions[existingIndex] = sessionData;
-        else localSessions.unshift(sessionData);
-        localStorage.setItem(sessionsKey, JSON.stringify(limitResumableSessions(localSessions)));
+        await saveLocalResumableSession(sessionData);
     };
 
-    const handleInterrupt = () => {
-        persistInterruptedSession();
+    const handleInterrupt = async () => {
+        await persistInterruptedSession();
         router.push('/');
     };
 
@@ -323,37 +312,13 @@ function QuizContent() {
         setIsReviewing(false);
         
         if (typeof window !== 'undefined' && sessionId) {
-            const sessionsKey = 'radexam_sessions';
-            const raw = localStorage.getItem(sessionsKey);
-            if (raw) {
-                try {
-                    const localSessions = JSON.parse(raw);
-                    if (Array.isArray(localSessions)) {
-                        const updated = localSessions.filter(s => s.id !== sessionId);
-                        localStorage.setItem(sessionsKey, JSON.stringify(updated));
-                    }
-                } catch (e) {
-                    console.error("Failed to remove local session on finish", e);
-                }
-            }
+            await deleteLocalResumableSession(sessionId);
         }
     };
 
     const handleHome = async () => {
         if (typeof window !== 'undefined' && sessionId) {
-            const sessionsKey = 'radexam_sessions';
-            const raw = localStorage.getItem(sessionsKey);
-            if (raw) {
-                try {
-                    const localSessions = JSON.parse(raw);
-                    if (Array.isArray(localSessions)) {
-                        const updated = localSessions.filter(s => s.id !== sessionId);
-                        localStorage.setItem(sessionsKey, JSON.stringify(updated));
-                    }
-                } catch (e) {
-                    console.error("Failed to remove local session on home", e);
-                }
-            }
+            await deleteLocalResumableSession(sessionId);
         }
         router.push(isSearchMode ? '/search' : '/');
     };
@@ -389,7 +354,7 @@ function QuizContent() {
                 <button
                     onClick={handleBackToResults}
                     className={styles.navBtn}
-                    style={{ border: '2px solid #3b82f6', color: '#3b82f6' }}
+                    style={{ border: '2px solid #3b82f6', color: 'var(--accent)' }}
                 >
                     結果に戻る
                 </button>

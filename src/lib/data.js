@@ -12,11 +12,19 @@ const CACHE = {};
 let LOCAL_METADATA = {};
 let IS_INITIALIZED = false;
 
+export const LOCAL_EXAMS_CHANGED_EVENT = 'radexam-local-exams-changed';
+
+const clearExamDataCache = () => {
+    Object.keys(CACHE).forEach(examId => {
+        delete CACHE[examId];
+    });
+};
+
 /**
  * IndexedDBからローカルのカスタム試験メタデータをロードし、キャッシュを初期化する
  */
 export const initializeLocalExams = async (force = false) => {
-    if (IS_INITIALIZED && !force) return;
+    if (IS_INITIALIZED && !force) return true;
     try {
         const localExams = await getAllLocalExams();
         const newMetadata = {};
@@ -27,16 +35,30 @@ export const initializeLocalExams = async (force = false) => {
                 years: exam.years || [],
                 genres: exam.genres || []
             };
-            if (force) {
-                // キャッシュされている問題データをクリアして再読込を強制する
-                delete CACHE[exam.id];
-            }
         });
+        if (force) clearExamDataCache();
         LOCAL_METADATA = newMetadata;
         IS_INITIALIZED = true;
+        return true;
     } catch (e) {
         console.error("Failed to initialize local exams:", e);
+        return false;
     }
+};
+
+/**
+ * クラウド同期などでIndexedDBが外部更新された後、画面用キャッシュを読み直す。
+ */
+export const refreshLocalExamData = async () => {
+    const refreshed = await initializeLocalExams(true);
+    if (
+        refreshed
+        && typeof window !== 'undefined'
+        && typeof window.dispatchEvent === 'function'
+    ) {
+        window.dispatchEvent(new CustomEvent(LOCAL_EXAMS_CHANGED_EVENT));
+    }
+    return refreshed;
 };
 
 export const getExamTypes = () => {

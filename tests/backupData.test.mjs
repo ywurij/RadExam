@@ -70,7 +70,7 @@ test('detects missing and non-serialized PDF payloads before import', () => {
 
 test('round-trips a chunked RadExam archive without one giant JSON string', async () => {
     const backup = {
-        version: 3,
+        version: 4,
         timestamp: 12345,
         exams,
         progress: {
@@ -85,6 +85,14 @@ test('round-trips a chunked RadExam archive without one giant JSON string', asyn
                 blob: 'data:application/pdf;base64,xyz',
             },
         },
+        sessions: [{
+            id: 'session-1',
+            examId: 'diagnostic',
+            questionIds: ['2022048', '2022049'],
+            currentIndex: 1,
+            timestamp: 12345,
+            interrupted: true,
+        }],
     };
 
     const archive = await createBackupArchiveBlob(backup);

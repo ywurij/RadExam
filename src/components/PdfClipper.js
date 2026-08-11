@@ -83,8 +83,8 @@ function PdfPage({ pdf, pageNumber, active, onClip, onClipReady }) {
 
     return (
         <section data-pdf-page={pageNumber} style={{ width: 'min(100%, 1050px)', margin: '0 auto 1.25rem' }}>
-            <div style={{ textAlign: 'center', marginBottom: '0.35rem', color: '#4a5568', fontSize: '0.8rem', fontWeight: 'bold' }}>— {pageNumber} —</div>
-            <div style={{ position: 'relative', width: '100%', aspectRatio: `${size.width} / ${size.height}`, background: '#fff', boxShadow: '0 1px 5px rgba(0,0,0,0.18)', cursor: onClip ? 'crosshair' : 'default', lineHeight: 0 }}>
+            <div style={{ textAlign: 'center', marginBottom: '0.35rem', color: 'var(--text-secondary)', fontSize: '0.8rem', fontWeight: 'bold' }}>— {pageNumber} —</div>
+            <div style={{ position: 'relative', width: '100%', aspectRatio: `${size.width} / ${size.height}`, background: 'var(--surface-raised)', boxShadow: '0 1px 5px rgba(0,0,0,0.18)', cursor: onClip ? 'crosshair' : 'default', lineHeight: 0 }}>
                 {active && <canvas ref={canvasRef} onPointerDown={onClip ? pointerDown : undefined} onPointerMove={onClip ? pointerMove : undefined} onPointerUp={onClip ? pointerUp : undefined} style={{ display: 'block', width: '100%', height: '100%' }} />}
                 {selection && active && <div style={{ position: 'absolute', left: `${selection.x / size.width * 100}%`, top: `${selection.y / size.height * 100}%`, width: `${selection.width / size.width * 100}%`, height: `${selection.height / size.height * 100}%`, border: '2px solid #e53e3e', background: 'rgba(229,62,62,0.12)', pointerEvents: 'none' }} />}
             </div>
@@ -177,7 +177,7 @@ export default function PdfClipper({ pdfBlob, onClip, initialSearchText = '', sc
         setClipReadyPage(action ? pageNumber : null);
     };
 
-    if (error) return <div style={{ color: '#c53030' }}>{error}</div>;
+    if (error) return <div style={{ color: 'var(--danger-text)' }}>{error}</div>;
     return (
         <div>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.6rem', marginBottom: '0.5rem' }}>
@@ -186,10 +186,10 @@ export default function PdfClipper({ pdfBlob, onClip, initialSearchText = '', sc
                 <button type="button" disabled={!pageCount || currentPage >= pageCount} onClick={() => moveToPage(currentPage + 1)}>次のページ</button>
                 {onClip && <button type="button" disabled={!clipActionRef.current} onClick={() => clipActionRef.current?.()} style={{ marginLeft: '0.8rem', background: clipActionRef.current ? '#3182ce' : '#a0aec0', color: '#fff', border: 0, borderRadius: '0.35rem', padding: '0.45rem 0.8rem', fontWeight: 'bold', cursor: clipActionRef.current ? 'pointer' : 'default' }}>{clipReadyPage ? `${clipReadyPage}ページの選択範囲を画像登録` : 'PDF上で範囲を選択'}</button>}
             </div>
-            <p style={{ margin: '0 0 0.5rem', textAlign: 'center', color: '#4a5568', fontSize: '0.85rem' }}>
+            <p style={{ margin: '0 0 0.5rem', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
                 {onClip ? '上下にスクロールできます。PDF上をドラッグして登録範囲を選択してください。' : '上下にスクロールしてPDFを連続閲覧できます。'}
             </p>
-            <div ref={scrollRef} onScroll={handleScroll} style={{ height: scrollHeight, minHeight: '360px', overflowY: 'scroll', overflowX: 'hidden', padding: '0.75rem', background: '#cbd5e0', border: '1px solid #a0aec0', borderRadius: '0.4rem', scrollbarGutter: 'stable' }}>
+            <div ref={scrollRef} onScroll={handleScroll} style={{ height: scrollHeight, minHeight: '360px', overflowY: 'scroll', overflowX: 'hidden', padding: '0.75rem', background: 'var(--border-color)', border: '1px solid #a0aec0', borderRadius: '0.4rem', scrollbarGutter: 'stable' }}>
                 {pdf && Array.from({ length: pageCount }, (_, index) => {
                     const pageNumber = index + 1;
                     return <PdfPage key={pageNumber} pdf={pdf} pageNumber={pageNumber} active={activePages.has(pageNumber)} onClip={onClip} onClipReady={handleClipReady} />;
