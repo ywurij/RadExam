@@ -75,13 +75,6 @@ const formatBytes = value => {
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 };
 
-const formatDuration = value => {
-    const milliseconds = Number(value);
-    if (!Number.isFinite(milliseconds) || milliseconds < 0) return '未計測';
-    if (milliseconds < 1000) return `${milliseconds}ミリ秒`;
-    return `${(milliseconds / 1000).toFixed(1)}秒`;
-};
-
 const describeDataStatus = state => {
     if (!state) return '確認中';
     if (state.config?.remoteChangesAvailable) {
@@ -376,45 +369,59 @@ export default function CloudSyncPage({ embedded = false }) {
         if (response) setMessage(`この端末の変更を送信しました。送信 ${response.result.sentChanges || 0}件。`);
     };
 
-    const handleResolveConflict = async (conflict, resolution) => {
+    const handleResolveConflicts = async (conflicts, resolution) => {
+        const targets = (conflicts || []).filter(conflict => conflict?.conflictId);
+        if (targets.length === 0) return;
         const choiceLabel = resolution === 'keep-local'
             ? 'この端末の内容'
             : 'クラウドの内容';
+        const targetLabel = targets.length === 1
+            ? 'この競合'
+            : `競合${targets.length}件すべて`;
         if (!window.confirm(
-            `${choiceLabel}を採用します。\n`
+            `${targetLabel}に${choiceLabel}を採用します。\n`
             + '採用しなかった側の競合部分は元に戻せません。続けますか？'
         )) {
             return;
         }
+        const conflictArguments = targets.length === 1
+            ? { conflictId: targets[0].conflictId }
+            : { conflictIds: targets.map(conflict => conflict.conflictId) };
         const response = await runAction(() => (
             isOneDrive
                 ? isMobileTarget
                     ? resolveOneDriveSyncConflict({
                         clientId,
-                        conflictId: conflict.conflictId,
+                        ...conflictArguments,
                         resolution,
                     })
                     : resolveOneDriveDesktopSyncConflict({
                         clientId,
-                        conflictId: conflict.conflictId,
+                        ...conflictArguments,
                         resolution,
                     })
                 : isMobileTarget
                     ? resolveGoogleDriveSyncConflict({
                         clientId,
-                        conflictId: conflict.conflictId,
+                        ...conflictArguments,
                         resolution,
                     })
                     : resolveGoogleDriveDesktopSyncConflict({
                         clientId,
-                        conflictId: conflict.conflictId,
+                        ...conflictArguments,
                         resolution,
                     })
-        ), 'resolving-conflict', { refreshExams: true });
+        ), targets.length === 1 ? 'resolving-conflict' : 'resolving-conflicts', { refreshExams: true });
         if (response) {
-            setMessage(`${choiceLabel}を採用し、解決結果を同期しました。`);
+            setMessage(
+                `${targets.length}件の競合に${choiceLabel}を採用し、解決結果を同期しました。`
+            );
         }
     };
+
+    const handleResolveConflict = (conflict, resolution) => (
+        handleResolveConflicts([conflict], resolution)
+    );
 
     const saveEmergencyBackup = async (
         filenamePrefix = 'radexam-before-cloud-reset'
@@ -627,30 +634,9 @@ export default function CloudSyncPage({ embedded = false }) {
                         <dl className={styles.details}>
                             <div><dt>アカウント</dt><dd>{syncState.config.accountLabel || providerName}</dd></div>
                             <div><dt>最終確認</dt><dd>{formatDateTime(syncState.config.lastCheckedAt)}</dd></div>
-                            <div><dt>最終取得</dt><dd>{formatDateTime(syncState.config.lastPullAt)}</dd></div>
-                            <div><dt>最終送信</dt><dd>{formatDateTime(syncState.config.lastPushAt)}</dd></div>
                             <div><dt>データ状態</dt><dd>{describeDataStatus(syncState)}</dd></div>
                             <div><dt>未送信（残り）</dt><dd>{syncState.pendingCount}件</dd></div>
                             <div><dt>競合</dt><dd>{syncState.conflictCount}件</dd></div>
-                            <div>
-                                <dt>初回全体データ</dt>
-                                <dd>{syncState.config.lastAppliedSnapshotId ? '登録済み' : '未登録'}</dd>
-                            </div>
-                            <div>
-                                <dt>クラウド更新番号</dt>
-                                <dd>{syncState.config.lastKnownCloudGeneration ?? '未確認'}</dd>
-                            </div>
-                            <div>
-                                <dt>前回の送受信</dt>
-                                <dd>
-                                    送信 {syncState.config.lastSyncSentChanges || 0}件・
-                                    受信 {syncState.config.lastSyncReceivedChanges || 0}件
-                                </dd>
-                            </div>
-                            <div>
-                                <dt>前回の所要時間</dt>
-                                <dd>{formatDuration(syncState.config.lastSyncDurationMs)}</dd>
-                            </div>
                         </dl>
                         <p className={styles.statusHelp}>
                             起動時・復帰時には更新の有無だけを確認します。
@@ -794,6 +780,23 @@ export default function CloudSyncPage({ embedded = false }) {
                     <p className={styles.conflictIntro}>
                         同じ項目が複数端末で変更されました。比較して残す内容を選んでください。
                     </p>
+                    <div className={styles.conflictBulkActions}>
+                        <strong>すべて同じ側を採用</strong>
+                        <button
+                            type="button"
+                            onClick={() => handleResolveConflicts(syncState.conflicts, 'keep-local')}
+                            disabled={busy}
+                        >
+                            全件、この端末を採用
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => handleResolveConflicts(syncState.conflicts, 'keep-cloud')}
+                            disabled={busy}
+                        >
+                            全件、クラウドを採用
+                        </button>
+                    </div>
                     <div className={styles.conflictList}>
                         {syncState.conflicts.map(conflict => (
                             <article className={styles.conflictCard} key={conflict.conflictId}>

@@ -1182,6 +1182,28 @@ export const resolveLocalDataSyncConflict = async ({
     })
 );
 
+export const resolveLocalDataSyncConflicts = async ({
+    conflictIds,
+    resolution,
+    resolveBlob,
+}) => {
+    const uniqueIds = [...new Set(
+        (conflictIds || []).filter(Boolean).map(String)
+    )];
+    if (uniqueIds.length === 0) {
+        throw new Error('解決対象の競合がありません。');
+    }
+    const resolved = [];
+    for (const conflictId of uniqueIds) {
+        resolved.push(await resolveLocalDataSyncConflict({
+            conflictId,
+            resolution,
+            resolveBlob,
+        }));
+    }
+    return resolved;
+};
+
 /**
  * クラウドから受信した1変更を、重複・競合・ファイル検証を行ってから反映する。
  */

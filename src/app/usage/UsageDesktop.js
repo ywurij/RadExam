@@ -256,6 +256,25 @@ export default function UsagePage() {
                 <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: '0.92rem' }}>「データ管理 / バックアップ」で試験の「編集」を選ぶと、問題追加・削除を含めて年度単位で修正できます。編集欄と登録元PDFは左右2ペインで表示され、選択中の問題をPDFと見比べながら修正・画像切り抜きができます。</p>
             </div>
 
+            <h2 style={{ fontSize: '1.4rem', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '1.2rem' }}>☁️ クラウド同期</h2>
+            <div style={{ background: 'var(--surface-raised)', border: '1px solid var(--border-color)', borderRadius: '0.75rem', padding: '1.4rem', marginBottom: '2.5rem' }}>
+                <p style={{ margin: '0 0 1rem', color: 'var(--text-secondary)', fontSize: '0.92rem' }}>
+                    Google DriveまたはOneDriveのアプリ専用領域を使い、Mac/PC版とモバイル版のデータを共有できます。データ本体は常に各端末内に残るため、オフラインでも演習と編集を続けられます。
+                </p>
+                <ol style={{ margin: '0 0 1rem', paddingLeft: '1.35rem', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+                    <li>「試験管理」から「端末間共有」を開き、利用するクラウドへ接続します。</li>
+                    <li>別端末の変更を受け取るときは「クラウドから更新を取得」を押します。</li>
+                    <li>この端末の登録・編集・学習記録を共有するときは「この端末の変更を送信」を押します。</li>
+                    <li>同じ項目を複数端末で変更した場合は、競合画面で残す側を選択します。件数が多い場合は全件を一括選択できます。</li>
+                </ol>
+                <ul style={{ margin: 0, paddingLeft: '1.35rem', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+                    <li>同時に接続できるクラウドは1サービスだけです。</li>
+                    <li>起動時・復帰時は更新の有無だけを確認し、実際の送受信はボタン操作で行います。</li>
+                    <li>送信前に未取得の更新がある場合は、先に「取得」を行ってください。</li>
+                    <li>緊急復旧に備え、従来の.radexamバックアップも定期的に保存してください。</li>
+                </ul>
+            </div>
+
             {/* Crucial Backup Guide */}
             <div style={{
                 background: 'var(--warning-soft)',

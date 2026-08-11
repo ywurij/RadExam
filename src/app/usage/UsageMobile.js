@@ -23,22 +23,30 @@ export default function UsagePage() {
 
             <div style={{ display: 'grid', gap: '1rem' }}>
                 <section style={sectionStyle}>
-                    <h2 style={{ margin: '0 0 0.55rem', fontSize: '1.15rem' }}>1. Mac/PC版でデータを書き出す</h2>
-                    <p style={{ margin: 0, color: 'var(--text-secondary)', lineHeight: 1.7 }}>試験データと画像をRadExamバックアップ（.radexam）として書き出し、AirDrop、iCloud Drive、Google Driveなどでモバイル端末へ移します。</p>
+                    <h2 style={{ margin: '0 0 0.55rem', fontSize: '1.15rem' }}>1. クラウドへ接続する</h2>
+                    <p style={{ margin: 0, color: 'var(--text-secondary)', lineHeight: 1.7 }}>ホームの「データ管理」を開き、Google DriveまたはOneDriveへ接続します。同時に接続できるクラウドは1サービスだけです。</p>
                 </section>
                 <section style={sectionStyle}>
-                    <h2 style={{ margin: '0 0 0.55rem', fontSize: '1.15rem' }}>2. モバイル版へ登録する</h2>
-                    <p style={{ margin: 0, color: 'var(--text-secondary)', lineHeight: 1.7 }}>ホームの「データ転送」からRadExamバックアップ（.radexam）を選びます。現在の試験と学習履歴は、読み込んだ内容に置き換わります。問題に紐づく参照PDFも引き継がれます。</p>
+                    <h2 style={{ margin: '0 0 0.55rem', fontSize: '1.15rem' }}>2. Mac/PC版のデータを取得する</h2>
+                    <p style={{ margin: 0, color: 'var(--text-secondary)', lineHeight: 1.7 }}>Mac/PC版で変更を送信してから、モバイル版で「クラウドから更新を取得」を押します。試験、画像・PDF、解説、学習履歴、中断履歴が端末内へ保存されます。</p>
                 </section>
                 <section style={sectionStyle}>
                     <h2 style={{ margin: '0 0 0.55rem', fontSize: '1.15rem' }}>3. 演習・記録・編集</h2>
                     <p style={{ margin: 0, color: 'var(--text-secondary)', lineHeight: 1.7 }}>年度・ジャンル・出題数を選び、演習を開始します。正誤、お気に入り、中断位置は自動保存されます。回答表示後は解説とジャンルを編集できます。</p>
                 </section>
                 <section style={sectionStyle}>
-                    <h2 style={{ margin: '0 0 0.55rem', fontSize: '1.15rem' }}>4. 定期的にバックアップ</h2>
-                    <p style={{ margin: 0, color: 'var(--text-secondary)', lineHeight: 1.7 }}>「データ転送」の書き出しを使い、編集内容と学習履歴を保管します。ブラウザのデータ削除やアプリ削除をすると端末内データも失われます。</p>
+                    <h2 style={{ margin: '0 0 0.55rem', fontSize: '1.15rem' }}>4. モバイル版の変更を送信する</h2>
+                    <p style={{ margin: 0, color: 'var(--text-secondary)', lineHeight: 1.7 }}>演習や編集のあとに「この端末の変更を送信」を押します。未取得の更新が表示された場合は、先にクラウドから取得してください。</p>
+                </section>
+                <section style={sectionStyle}>
+                    <h2 style={{ margin: '0 0 0.55rem', fontSize: '1.15rem' }}>5. 手動バックアップも保存する</h2>
+                    <p style={{ margin: 0, color: 'var(--text-secondary)', lineHeight: 1.7 }}>緊急復旧用として、データ管理から.radexamファイルを書き出して保管できます。クラウドを使わない端末間移動にも利用できます。</p>
                 </section>
             </div>
+
+            <aside style={{ marginTop: '1rem', padding: '1rem', borderRadius: '0.9rem', background: 'var(--warning-soft)', color: 'var(--warning-text)', lineHeight: 1.65 }}>
+                同じ項目を複数端末で変更すると競合になります。内容を比較して端末側・クラウド側のどちらを残すか選択し、件数が多い場合は一括処理を利用してください。
+            </aside>
 
             <aside style={{ marginTop: '1rem', padding: '1rem', borderRadius: '0.9rem', background: 'var(--accent-soft)', color: 'var(--accent)', lineHeight: 1.65 }}>
                 ホーム画面へ追加すると、通常のアプリに近い全画面表示で利用できます。iPhone／iPadはSafariの共有メニュー、Androidはブラウザのメニューから追加してください。

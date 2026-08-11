@@ -5,7 +5,7 @@ import {
     initializeLocalSyncTracking,
     pullLocalDataFromCloud,
     pushLocalDataToCloud,
-    resolveLocalDataSyncConflict,
+    resolveLocalDataSyncConflicts,
     synchronizeLocalData,
 } from '@/lib/localDb';
 import { getLocalSyncJournalState } from './localSyncJournal';
@@ -249,6 +249,7 @@ export const pushOneDriveDesktopChanges = options => runOneDriveDesktopDirection
 export const resolveOneDriveDesktopSyncConflict = async ({
     clientId,
     conflictId,
+    conflictIds,
     resolution,
 } = {}) => (
     runExclusive(async () => {
@@ -263,14 +264,16 @@ export const resolveOneDriveDesktopSyncConflict = async ({
         if (state.config.cloudSyncId && state.config.cloudSyncId !== root.activeSyncId) {
             throw new Error('クラウド同期が別の端末でリセットされました。この端末を再接続してください。');
         }
-        const resolved = await resolveLocalDataSyncConflict({
-            conflictId,
+        const targetIds = conflictIds || [conflictId];
+        const resolvedItems = await resolveLocalDataSyncConflicts({
+            conflictIds: targetIds,
             resolution,
             resolveBlob: ref => session.provider.downloadBlob(ref.contentHash),
         });
         const result = await pushLocalDataToCloud(session.provider);
         return {
-            resolved,
+            resolved: conflictIds ? resolvedItems : resolvedItems[0],
+            resolvedCount: resolvedItems.length,
             result,
             state: await getOneDriveDesktopSyncState({ clientId }),
         };
