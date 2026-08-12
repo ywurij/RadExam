@@ -42,6 +42,10 @@ export default function UsagePage() {
                     <h2 style={{ margin: '0 0 0.55rem', fontSize: '1.15rem' }}>5. 手動バックアップも保存する</h2>
                     <p style={{ margin: 0, color: 'var(--text-secondary)', lineHeight: 1.7 }}>緊急復旧用として、データ管理からパスワード付き.radexamファイルを書き出して保管できます。クラウドを使わない端末間移動にも利用できます。従来の暗号化されていない.radexamも読み込めます。</p>
                 </section>
+                <section style={sectionStyle}>
+                    <h2 style={{ margin: '0 0 0.55rem', fontSize: '1.15rem' }}>6. 必要に応じてアプリをロックする</h2>
+                    <p style={{ margin: 0, color: 'var(--text-secondary)', lineHeight: 1.7 }}>データ管理でアプリロックを有効にすると、起動時と15分間操作がない場合に解除コードを求めます。画面の覗き見を防ぐ機能であり、端末内ファイル自体を暗号化する機能ではありません。</p>
+                </section>
             </div>
 
             <aside style={{ marginTop: '1rem', padding: '1rem', borderRadius: '0.9rem', background: 'var(--warning-soft)', color: 'var(--warning-text)', lineHeight: 1.65 }}>

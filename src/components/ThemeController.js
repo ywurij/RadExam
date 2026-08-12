@@ -6,6 +6,13 @@ import {
     resolveTheme,
     THEME_STORAGE_KEY,
 } from '@/lib/themePreference.mjs';
+import {
+    APP_PRIVACY_LOCK_CHANGED_EVENT,
+    createAppPrivacyLock,
+    readAppPrivacyLockConfig,
+    removeAppPrivacyLock,
+    requestAppPrivacyLock,
+} from '@/lib/appPrivacyLock.mjs';
 
 const applyTheme = (preference, systemDark) => {
     const normalized = normalizeThemePreference(preference);
@@ -23,6 +30,12 @@ export default function ThemeController() {
     ));
     const [zoomFactor, setZoomFactor] = useState(1);
     const [zoomAvailable, setZoomAvailable] = useState(false);
+    const [privacyLockEnabled, setPrivacyLockEnabled] = useState(false);
+    const [privacyCode, setPrivacyCode] = useState('');
+    const [privacyCodeConfirm, setPrivacyCodeConfirm] = useState('');
+    const [privacyMessage, setPrivacyMessage] = useState('');
+    const [privacyError, setPrivacyError] = useState('');
+    const [privacyBusy, setPrivacyBusy] = useState(false);
 
     useEffect(() => {
         const media = window.matchMedia('(prefers-color-scheme: dark)');
@@ -34,6 +47,13 @@ export default function ThemeController() {
         };
         media.addEventListener?.('change', handleSystemTheme);
         return () => media.removeEventListener?.('change', handleSystemTheme);
+    }, []);
+
+    useEffect(() => {
+        const refresh = () => setPrivacyLockEnabled(Boolean(readAppPrivacyLockConfig()));
+        refresh();
+        window.addEventListener(APP_PRIVACY_LOCK_CHANGED_EVENT, refresh);
+        return () => window.removeEventListener(APP_PRIVACY_LOCK_CHANGED_EVENT, refresh);
     }, []);
 
     useEffect(() => {
@@ -65,7 +85,40 @@ export default function ThemeController() {
         }
     };
 
+    const enablePrivacyLock = async () => {
+        setPrivacyBusy(true);
+        setPrivacyError('');
+        setPrivacyMessage('');
+        try {
+            if (privacyCode !== privacyCodeConfirm) throw new Error('解除コードが一致しません。');
+            await createAppPrivacyLock(privacyCode);
+            setPrivacyCode('');
+            setPrivacyCodeConfirm('');
+            setPrivacyMessage('アプリロックを有効にしました。次回起動時と15分間操作がない場合にロックします。');
+        } catch (error) {
+            setPrivacyError(error.message || 'アプリロックを設定できませんでした。');
+        } finally {
+            setPrivacyBusy(false);
+        }
+    };
+
+    const disablePrivacyLock = async () => {
+        setPrivacyBusy(true);
+        setPrivacyError('');
+        setPrivacyMessage('');
+        try {
+            await removeAppPrivacyLock(privacyCode);
+            setPrivacyCode('');
+            setPrivacyMessage('アプリロックを無効にしました。');
+        } catch (error) {
+            setPrivacyError(error.message || 'アプリロックを解除できませんでした。');
+        } finally {
+            setPrivacyBusy(false);
+        }
+    };
+
     return (
+        <>
         <section className="themeSettings" aria-labelledby="theme-settings-title">
             <div className="themeSettingsText">
                 <strong id="theme-settings-title">表示設定</strong>
@@ -101,5 +154,48 @@ export default function ThemeController() {
                 )}
             </div>
         </section>
+        <section className="themeSettings privacyLockSettings" aria-labelledby="privacy-lock-settings-title">
+            <div className="themeSettingsText">
+                <strong id="privacy-lock-settings-title">アプリロック</strong>
+                <span>起動時と15分間操作がない場合に、画面を解除コードで保護します。端末内ファイル自体を暗号化する機能ではありません。</span>
+            </div>
+            <div className="privacyLockFields">
+                <input
+                    type="password"
+                    value={privacyCode}
+                    onChange={event => setPrivacyCode(event.target.value)}
+                    autoComplete={privacyLockEnabled ? 'current-password' : 'new-password'}
+                    minLength={8}
+                    maxLength={256}
+                    placeholder={privacyLockEnabled ? '現在の解除コード' : '解除コード（8文字以上）'}
+                    disabled={privacyBusy}
+                    aria-label={privacyLockEnabled ? '現在の解除コード' : '新しい解除コード'}
+                />
+                {!privacyLockEnabled && (
+                    <input
+                        type="password"
+                        value={privacyCodeConfirm}
+                        onChange={event => setPrivacyCodeConfirm(event.target.value)}
+                        autoComplete="new-password"
+                        minLength={8}
+                        maxLength={256}
+                        placeholder="解除コードを再入力"
+                        disabled={privacyBusy}
+                        aria-label="解除コードの確認"
+                    />
+                )}
+                <button type="button" onClick={privacyLockEnabled ? disablePrivacyLock : enablePrivacyLock} disabled={privacyBusy || !privacyCode}>
+                    {privacyLockEnabled ? 'アプリロックを無効化' : 'アプリロックを有効化'}
+                </button>
+                {privacyLockEnabled && (
+                    <button type="button" className="secondaryPrivacyButton" onClick={requestAppPrivacyLock} disabled={privacyBusy}>
+                        今すぐロック
+                    </button>
+                )}
+            </div>
+            {privacyMessage && <p className="privacySettingsMessage" role="status">{privacyMessage}</p>}
+            {privacyError && <p className="privacySettingsError" role="alert">{privacyError}</p>}
+        </section>
+        </>
     );
 }

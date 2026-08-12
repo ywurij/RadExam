@@ -136,9 +136,58 @@ a {
   font-weight: 700;
 }
 
+.privacyLockSettings { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
+.privacyLockFields { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0.55rem; }
+.privacyLockFields input { min-height: 40px; padding: 0.5rem 0.65rem; border: 1px solid var(--border-color); border-radius: 0.55rem; color: var(--text-primary); }
+.privacyLockFields button { min-height: 40px; padding: 0.5rem 0.8rem; border: 0; border-radius: 0.55rem; background: var(--accent); color: #fff; font-weight: 700; }
+.privacyLockFields .secondaryPrivacyButton { border: 1px solid var(--border-color); background: var(--surface-soft); color: var(--text-primary); }
+.privacySettingsMessage, .privacySettingsError { grid-column: 1 / -1; margin: 0; font-size: 0.82rem; }
+.privacySettingsMessage { color: var(--success-text); }
+.privacySettingsError { color: var(--danger-text); }
+
 @media (max-width: 520px) {
   .themeSettings { align-items: stretch; flex-direction: column; }
   .displaySettingsFields { align-items: stretch; flex-direction: column; }
   .themeSettingsField { justify-content: space-between; }
   .themeSettingsField select { min-width: 0; width: min(62%, 13rem); }
+  .privacyLockSettings { grid-template-columns: 1fr; }
+  .privacyLockFields { justify-content: stretch; }
+  .privacyLockFields input, .privacyLockFields button { width: 100%; }
 }
+
+html[data-app-privacy-lock='locked'] .appPrivacyContent {
+  visibility: hidden;
+  pointer-events: none;
+  user-select: none;
+}
+
+.appPrivacyLock {
+  position: fixed;
+  inset: 0;
+  z-index: 100000;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: var(--surface);
+  color: var(--text-primary);
+}
+
+.appPrivacyLockCard {
+  width: min(100%, 420px);
+  display: grid;
+  gap: 0.9rem;
+  padding: 1.5rem;
+  border: 1px solid var(--border-color);
+  border-radius: 1rem;
+  background: var(--surface-raised);
+  box-shadow: 0 20px 50px rgba(15, 23, 42, 0.18);
+  text-align: center;
+}
+
+.appPrivacyLockIcon { font-size: 2rem; }
+.appPrivacyLockCard h1 { font-size: 1.3rem; }
+.appPrivacyLockCard p { color: var(--text-secondary); line-height: 1.5; }
+.appPrivacyLockCard input { min-height: 48px; padding: 0.7rem; border: 1px solid var(--border-color); border-radius: 0.7rem; color: var(--text-primary); }
+.appPrivacyLockCard button { min-height: 48px; border: 0; border-radius: 0.7rem; background: var(--accent); color: #fff; font-weight: 800; }
+.appPrivacyLockCard button:disabled { opacity: 0.55; }
+.appPrivacyLockCard .appPrivacyLockError { color: var(--danger-text); }
