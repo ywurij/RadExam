@@ -13,6 +13,8 @@ const {
   LOOPBACK_HOST,
   createNextServerEnv,
   createNextServerLaunch,
+  isAllowedLoopbackRequest,
+  isNextServerReadyOutput,
 } = require('./serverCommand');
 const { GoogleDesktopOAuthManager } = require('./googleDesktopOAuth');
 const { MicrosoftDesktopOAuthManager } = require('./microsoftDesktopOAuth');
@@ -32,12 +34,16 @@ app.setPath('userData', path.join(app.getPath('appData'), 'exam-app'));
 app.setName('RadExam');
 
 let nextProcess = null;
+let embeddedNextServer = null;
 let mainWindow = null;
 let serverPort = 3000;
 let googleOAuthManager = null;
 let microsoftOAuthManager = null;
 let cloudSyncConfig = null;
 let displayZoomFactor = DEFAULT_ZOOM_FACTOR;
+let applicationIsQuitting = false;
+
+const SERVER_STARTUP_TIMEOUT_MS = 60_000;
 
 const ensureMainWindowSender = event => {
   const expectedOrigin = `http://${LOOPBACK_HOST}:${serverPort}`;
@@ -105,14 +111,120 @@ function startNextServer(port, extraEnv = {}) {
   
   nextProcess.stdout.pipe(logStream);
   nextProcess.stderr.pipe(logStream);
-  
-  nextProcess.on('error', (err) => {
-    logStream.write(`[Spawn Error] ${err.message}\n`);
-  });
 
-  nextProcess.on('exit', (code, signal) => {
-    logStream.write(`[Process Exit] code: ${code}, signal: ${signal}\n`);
+  return new Promise((resolve, reject) => {
+    let startupOutput = '';
+    let startupComplete = false;
+    const startupTimer = setTimeout(() => {
+      if (startupComplete) return;
+      startupComplete = true;
+      reject(new Error('アプリ内サーバーの起動確認がタイムアウトしました。'));
+      nextProcess?.kill('SIGTERM');
+    }, SERVER_STARTUP_TIMEOUT_MS);
+
+    const rejectStartup = error => {
+      if (startupComplete) return;
+      startupComplete = true;
+      clearTimeout(startupTimer);
+      reject(error);
+    };
+
+    nextProcess.stdout.on('data', chunk => {
+      if (startupComplete) return;
+      startupOutput = `${startupOutput}${chunk.toString('utf8')}`.slice(-8192);
+      if (isNextServerReadyOutput(startupOutput)) {
+        startupComplete = true;
+        clearTimeout(startupTimer);
+        resolve();
+      }
+    });
+
+    nextProcess.once('error', err => {
+      logStream.write(`[Spawn Error] ${err.message}\n`);
+      rejectStartup(new Error(`アプリ内サーバーを起動できませんでした: ${err.message}`));
+    });
+
+    nextProcess.once('exit', (code, signal) => {
+      logStream.write(`[Process Exit] code: ${code}, signal: ${signal}\n`);
+      rejectStartup(new Error(`アプリ内サーバーが起動前に終了しました（code=${code}, signal=${signal}）。`));
+      nextProcess = null;
+
+      // 起動後にサーバーが失われた場合、同じポートへ別プロセスが入っても
+      // Electronがその内容を読み込まないよう、画面を即座に閉じる。
+      if (startupComplete && !applicationIsQuitting) {
+        mainWindow?.destroy();
+        mainWindow = null;
+        app.quit();
+      }
+    });
   });
+}
+
+async function startPackagedNextServer() {
+  const projectPath = app.getAppPath();
+  const requiredFilesPath = path.join(projectPath, '.next', 'required-server-files.json');
+  const requiredFiles = JSON.parse(fs.readFileSync(requiredFilesPath, 'utf8'));
+  process.env.NODE_ENV = 'production';
+  process.env.NEXT_MANUAL_SIG_HANDLE = '1';
+  process.env.__NEXT_PRIVATE_STANDALONE_CONFIG = JSON.stringify(requiredFiles.config);
+
+  // standalone出力が同梱する最小構成だけで起動する。通常のnext() APIは
+  // ビルド時専用依存を追加で要求するため使用しない。
+  require(path.join(projectPath, 'node_modules', 'next'));
+  const { startServer } = require(path.join(
+    projectPath,
+    'node_modules',
+    'next',
+    'dist',
+    'server',
+    'lib',
+    'start-server'
+  ));
+
+  const originalCreateServer = http.createServer;
+  http.createServer = function createProtectedServer(requestListener, ...args) {
+    const protectedListener = (request, response) => {
+      const activePort = Number(embeddedNextServer?.address()?.port);
+      if (!isAllowedLoopbackRequest({
+        hostHeader: request.headers.host,
+        port: activePort,
+      })) {
+        response.writeHead(421, {
+          'Content-Type': 'text/plain; charset=utf-8',
+          'Cache-Control': 'no-store',
+        });
+        response.end('Misdirected Request');
+        return;
+      }
+      requestListener(request, response);
+    };
+    embeddedNextServer = originalCreateServer.call(http, protectedListener, ...args);
+    embeddedNextServer.headersTimeout = 15_000;
+    embeddedNextServer.requestTimeout = 120_000;
+    embeddedNextServer.maxHeadersCount = 100;
+    return embeddedNextServer;
+  };
+
+  const previousTitle = process.title;
+  try {
+    await startServer({
+      dir: projectPath,
+      isDev: false,
+      config: requiredFiles.config,
+      hostname: LOOPBACK_HOST,
+      port: 0,
+      allowRetry: false,
+    });
+  } finally {
+    http.createServer = originalCreateServer;
+    process.title = previousTitle;
+  }
+
+  const assignedPort = Number(embeddedNextServer?.address()?.port);
+  if (!Number.isInteger(assignedPort) || assignedPort < 1) {
+    throw new Error('アプリ内サーバーの安全な待受ポートを確認できませんでした。');
+  }
+  return assignedPort;
 }
 
 // メインウィンドウの作成
@@ -164,19 +276,9 @@ function createWindow(port) {
     callback(false);
   });
   
-  // サーバーの応答をポーリングで待機し、立ち上がり次第ロード
-  const checkServer = () => {
-    http.get(url, (res) => {
-      if (mainWindow) {
-        mainWindow.loadURL(url);
-      }
-    }).on('error', () => {
-      if (mainWindow) {
-        setTimeout(checkServer, 200);
-      }
-    });
-  };
-  checkServer();
+  // 子プロセス自身の待受開始通知を確認した後にだけ呼ばれる。
+  // ポート上の第三者サーバーからの応答を起動完了判定には使用しない。
+  void mainWindow.loadURL(url);
 
   mainWindow.on('closed', () => {
     mainWindow = null;
@@ -269,12 +371,30 @@ app.whenReady().then(async () => {
   });
   registerCloudSyncIpc();
   registerDisplayIpc();
+  if (app.isPackaged) {
+    try {
+      // 本番版はElectron自身がポート0で待受を開始する。空きポート確認と
+      // 実際の待受の間に第三者プロセスが入り込む余地を作らない。
+      serverPort = await startPackagedNextServer();
+      createWindow(serverPort);
+    } catch (error) {
+      console.error(error);
+      app.quit();
+    }
+    return;
+  }
+
   // 開発版も必ず専用サーバーを起動する。インストール済みRadExam等が3000番を
   // 使用していても、空きポートと専用distDirを使うため古い画面を再利用しない。
-  findFreePort(3000, (port) => {
+  findFreePort(3000, async (port) => {
     serverPort = port;
-    startNextServer(port);
-    createWindow(port);
+    try {
+      await startNextServer(port);
+      createWindow(port);
+    } catch (error) {
+      console.error(error);
+      app.quit();
+    }
   });
 });
 
@@ -285,7 +405,12 @@ app.on('window-all-closed', () => {
 });
 
 // アプリケーション終了時にNext.jsサーバープロセスも確実にキル
+app.on('before-quit', () => {
+  applicationIsQuitting = true;
+});
+
 app.on('will-quit', () => {
+  embeddedNextServer?.close();
   if (nextProcess) {
     if (process.platform === 'win32') {
       // Windows ではツリー全体のプロセスをキル

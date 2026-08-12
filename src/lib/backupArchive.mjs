@@ -1,3 +1,9 @@
+import {
+    decryptBackupBlob,
+    encryptBackupBlob,
+    isEncryptedBackupBlob,
+} from './backupEncryption.mjs';
+
 const ARCHIVE_FORMAT = 'radexam-backup-archive';
 const ARCHIVE_VERSION = 1;
 export const MAX_BACKUP_FILE_BYTES = 2 * 1024 * 1024 * 1024;
@@ -174,6 +180,10 @@ export const createBackupArchiveBlob = async backup => {
     return new Blob([blob], { type: 'application/x-radexam-backup' });
 };
 
+export const createEncryptedBackupArchiveBlob = async (backup, passphrase) => (
+    encryptBackupBlob(await createBackupArchiveBlob(backup), passphrase)
+);
+
 export const parseBackupArchiveBlob = async file => {
     if (!(file instanceof Blob) || file.size > MAX_BACKUP_FILE_BYTES) {
         throw new Error('バックアップファイルのサイズが上限を超えています。');
@@ -266,9 +276,17 @@ export const parseBackupArchiveBlob = async file => {
     return validateBackupData(backup);
 };
 
-export const readBackupFile = async file => {
-    if (!(file instanceof Blob) || file.size > MAX_BACKUP_FILE_BYTES) {
+export const readBackupFile = async (file, { passphrase = '' } = {}) => {
+    if (!(file instanceof Blob) || file.size > MAX_BACKUP_FILE_BYTES + 32 * 1024 * 1024) {
         throw new Error('バックアップファイルのサイズが上限を超えています。');
+    }
+    if (await isEncryptedBackupBlob(file)) {
+        if (!passphrase) {
+            const error = new Error('暗号化バックアップのパスワードを入力してください。');
+            error.code = 'BACKUP_PASSPHRASE_REQUIRED';
+            throw error;
+        }
+        return parseBackupArchiveBlob(await decryptBackupBlob(file, passphrase));
     }
     if (file.name?.toLowerCase().endsWith('.json')) {
         return validateBackupData(JSON.parse(await file.text()));

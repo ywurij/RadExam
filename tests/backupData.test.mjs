@@ -8,7 +8,9 @@ import {
 } from '../src/lib/backupData.mjs';
 import {
     createBackupArchiveBlob,
+    createEncryptedBackupArchiveBlob,
     parseBackupArchiveBlob,
+    readBackupFile,
     validateBackupData,
 } from '../src/lib/backupArchive.mjs';
 
@@ -116,4 +118,29 @@ test('rejects unsafe or malformed backup structures before import', async () => 
         pdfs: {},
         sessions: [],
     }), /examsデータが不正/);
+});
+
+test('reads a password-protected archive and keeps legacy archives compatible', async () => {
+    const backup = {
+        version: 4,
+        timestamp: 12345,
+        exams: { diagnostic: { questions: [{ id: '2022048' }] } },
+        progress: {},
+        images: {},
+        pdfs: {},
+        sessions: [],
+    };
+    const encrypted = await createEncryptedBackupArchiveBlob(
+        backup,
+        'correct horse battery staple'
+    );
+
+    await assert.rejects(readBackupFile(encrypted), error => (
+        error?.code === 'BACKUP_PASSPHRASE_REQUIRED'
+    ));
+    assert.deepEqual(
+        await readBackupFile(encrypted, { passphrase: 'correct horse battery staple' }),
+        backup
+    );
+    assert.deepEqual(await readBackupFile(await createBackupArchiveBlob(backup)), backup);
 });

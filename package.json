@@ -52,6 +52,7 @@
     "yet-another-react-lightbox": "^3.27.0"
   },
   "devDependencies": {
+    "@electron/fuses": "^2.1.3",
     "electron": "^42.9.0",
     "electron-builder": "^26.15.3",
     "eslint": "^9",
@@ -69,10 +70,11 @@
       "buildResources": "public/assets/images",
       "output": "dist"
     },
+    "asar": true,
+    "afterPack": "scripts/after-pack.cjs",
     "files": [
       "**/*"
     ],
-    "asar": false,
     "mac": {
       "target": [
         "dmg",

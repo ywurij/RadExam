@@ -40,7 +40,7 @@ export default function UsagePage() {
                 </section>
                 <section style={sectionStyle}>
                     <h2 style={{ margin: '0 0 0.55rem', fontSize: '1.15rem' }}>5. 手動バックアップも保存する</h2>
-                    <p style={{ margin: 0, color: 'var(--text-secondary)', lineHeight: 1.7 }}>緊急復旧用として、データ管理から.radexamファイルを書き出して保管できます。クラウドを使わない端末間移動にも利用できます。このファイル自体は暗号化されないため、安全な場所へ保管してください。</p>
+                    <p style={{ margin: 0, color: 'var(--text-secondary)', lineHeight: 1.7 }}>緊急復旧用として、データ管理からパスワード付き.radexamファイルを書き出して保管できます。クラウドを使わない端末間移動にも利用できます。従来の暗号化されていない.radexamも読み込めます。</p>
                 </section>
             </div>
 

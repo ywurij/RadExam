@@ -987,7 +987,7 @@ export default function CloudSyncPage({ embedded = false }) {
 
             <aside className={styles.note}>
                 <strong>手動バックアップも引き続き利用できます</strong>
-                <p>従来の.radexamファイルは、緊急復旧やクラウドを使わないデータ移動用として維持されます。手動バックアップ自体は暗号化されないため、安全な場所へ保管してください。</p>
+                <p>データ管理では、緊急復旧やクラウドを使わないデータ移動用に、パスワード付き.radexamファイルを作成できます。クラウドのリセット前に自動保存される緊急バックアップは暗号化されないため、安全な場所へ移動してください。</p>
             </aside>
         </Root>
     );
