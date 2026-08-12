@@ -2,6 +2,7 @@ import localforage from 'localforage';
 import {
     createBackupArchiveBlob,
     parseBackupArchiveBlob,
+    validateBackupData,
 } from '@/lib/backupArchive.mjs';
 import {
     collectReferencedImageKeys,
@@ -1698,6 +1699,8 @@ export const importLocalData = async (jsonData, strategy = 'overwrite', { includ
         throw new Error("Unsupported import strategy");
     }
 
+    validateBackupData(jsonData);
+
     const {
         exams,
         progress,
@@ -1705,14 +1708,21 @@ export const importLocalData = async (jsonData, strategy = 'overwrite', { includ
         pdfs,
         sessions = [],
     } = jsonData;
-    const missingImageKeys = findMissingBackupImageKeys(exams, images);
+    const sanitizedExams = Object.fromEntries(Object.entries(exams || {}).map(([key, exam]) => [
+        key,
+        {
+            ...exam,
+            questions: (exam.questions || []).map(sanitizeQuestionRichText),
+        },
+    ]));
+    const missingImageKeys = findMissingBackupImageKeys(sanitizedExams, images);
     if (missingImageKeys.length > 0) {
         throw new Error(
             `バックアップ内の画像が${missingImageKeys.length}件不足しています。`
             + '現在のデータは変更していません。元の端末から新しくエクスポートしてください。'
         );
     }
-    const missingPdfKeys = includePdfs ? findMissingBackupPdfKeys(exams, pdfs) : [];
+    const missingPdfKeys = includePdfs ? findMissingBackupPdfKeys(sanitizedExams, pdfs) : [];
     if (missingPdfKeys.length > 0) {
         throw new Error(
             `バックアップ内の参照PDFが${missingPdfKeys.length}件不足しています。`
@@ -1747,7 +1757,7 @@ export const importLocalData = async (jsonData, strategy = 'overwrite', { includ
     ]);
     await Promise.all([
         exams && typeof exams === 'object'
-            ? writeLocalForageEntries(examsStore, Object.entries(exams))
+            ? writeLocalForageEntries(examsStore, Object.entries(sanitizedExams))
             : Promise.resolve(),
         progress && typeof progress === 'object'
             ? writeLocalForageEntries(progressStore, Object.entries(progress), 16)

@@ -2,6 +2,10 @@ const crypto = require('crypto');
 const fs = require('fs');
 const http = require('http');
 const path = require('path');
+const {
+  DEFAULT_OAUTH_REQUEST_TIMEOUT_MS,
+  fetchWithTimeout,
+} = require('./fetchWithTimeout');
 
 const MICROSOFT_AUTHORITY = 'https://login.microsoftonline.com/consumers/oauth2/v2.0';
 const MICROSOFT_ONEDRIVE_SCOPES = [
@@ -96,6 +100,7 @@ class MicrosoftDesktopOAuthManager {
     fetchImpl = (...args) => globalThis.fetch(...args),
     createServer = handler => http.createServer(handler),
     now = () => Date.now(),
+    requestTimeoutMs = DEFAULT_OAUTH_REQUEST_TIMEOUT_MS,
   }) {
     this.clientId = String(clientId || '');
     this.userDataPath = userDataPath;
@@ -104,6 +109,7 @@ class MicrosoftDesktopOAuthManager {
     this.fetch = (...args) => fetchImpl(...args);
     this.createServer = createServer;
     this.now = now;
+    this.requestTimeoutMs = requestTimeoutMs;
     this.memoryTokens = null;
     this.authorizationPromise = null;
   }
@@ -131,6 +137,7 @@ class MicrosoftDesktopOAuthManager {
       version: 1,
       encrypted: encrypted.toString('base64'),
     }), { mode: 0o600 });
+    fs.chmodSync(this.tokenPath, 0o600);
     return true;
   }
 
@@ -138,6 +145,7 @@ class MicrosoftDesktopOAuthManager {
     if (this.memoryTokens) return this.memoryTokens;
     if (!this.encryptionAvailable() || !fs.existsSync(this.tokenPath)) return null;
     try {
+      if (fs.statSync(this.tokenPath).size > 1024 * 1024) return null;
       const stored = JSON.parse(fs.readFileSync(this.tokenPath, 'utf8'));
       const decrypted = this.safeStorage.decryptString(
         Buffer.from(stored.encrypted, 'base64')
@@ -164,7 +172,7 @@ class MicrosoftDesktopOAuthManager {
   }
 
   async requestToken(parameters) {
-    const response = await this.fetch(`${MICROSOFT_AUTHORITY}/token`, {
+    const response = await fetchWithTimeout(this.fetch, `${MICROSOFT_AUTHORITY}/token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
@@ -172,7 +180,7 @@ class MicrosoftDesktopOAuthManager {
         scope: MICROSOFT_ONEDRIVE_SCOPES.join(' '),
         ...parameters,
       }),
-    });
+    }, this.requestTimeoutMs);
     return parseTokenResponse(response);
   }
 

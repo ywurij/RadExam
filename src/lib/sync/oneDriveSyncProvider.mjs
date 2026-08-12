@@ -4,6 +4,11 @@ import {
 import {
     SyncManifestConflictError,
 } from './syncManifest.mjs';
+import {
+    DEFAULT_SYNC_REQUEST_TIMEOUT_MS,
+    DEFAULT_SYNC_TRANSFER_TIMEOUT_MS,
+    fetchWithTimeout,
+} from './fetchWithTimeout.mjs';
 
 export const ONEDRIVE_APP_FOLDER_SCOPE = 'Files.ReadWrite.AppFolder';
 
@@ -171,6 +176,8 @@ export class OneDriveAppFolderClient {
         uploadStateStore = createDefaultUploadStateStore(),
         onUploadProgress = null,
         resumableChunkSize = DEFAULT_UPLOAD_CHUNK_SIZE,
+        requestTimeoutMs = DEFAULT_SYNC_REQUEST_TIMEOUT_MS,
+        transferTimeoutMs = DEFAULT_SYNC_TRANSFER_TIMEOUT_MS,
     }) {
         if (typeof getAccessToken !== 'function') {
             throw new Error('OneDrive接続にはgetAccessToken()が必要です。');
@@ -184,6 +191,8 @@ export class OneDriveAppFolderClient {
         this.maxRetries = maxRetries;
         this.uploadStateStore = uploadStateStore;
         this.onUploadProgress = onUploadProgress;
+        this.requestTimeoutMs = requestTimeoutMs;
+        this.transferTimeoutMs = transferTimeoutMs;
         this.resumableChunkSize = Math.max(
             UPLOAD_FRAGMENT_UNIT,
             Math.floor(resumableChunkSize / UPLOAD_FRAGMENT_UNIT) * UPLOAD_FRAGMENT_UNIT
@@ -202,11 +211,17 @@ export class OneDriveAppFolderClient {
             }
             let response;
             try {
-                response = await this.fetch(url, {
+                const isTransfer = String(url).endsWith('/content') || options.body != null;
+                response = await fetchWithTimeout({
+                    fetchImpl: this.fetch,
+                    url,
+                    timeoutMs: isTransfer ? this.transferTimeoutMs : this.requestTimeoutMs,
+                    options: {
                     ...options,
                     headers: {
                         Authorization: `Bearer ${accessToken}`,
                         ...(options.headers || {}),
+                    },
                     },
                 });
             } catch (cause) {
@@ -239,7 +254,12 @@ export class OneDriveAppFolderClient {
             let response;
             try {
                 // uploadUrlは認証済みURLなのでAuthorizationヘッダーを付けない。
-                response = await this.fetch(url, options);
+                response = await fetchWithTimeout({
+                    fetchImpl: this.fetch,
+                    url,
+                    options,
+                    timeoutMs: this.transferTimeoutMs,
+                });
             } catch (cause) {
                 if (attempt < this.maxRetries) {
                     await this.sleep(Math.min(1000 * (2 ** attempt), 8000));

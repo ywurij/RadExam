@@ -1,4 +1,8 @@
 import { ONEDRIVE_APP_FOLDER_SCOPE } from './oneDriveSyncProvider.mjs';
+import {
+    DEFAULT_SYNC_REQUEST_TIMEOUT_MS,
+    fetchWithTimeout,
+} from './fetchWithTimeout.mjs';
 
 export const MICROSOFT_AUTHORITY = 'https://login.microsoftonline.com/consumers/oauth2/v2.0';
 export const MICROSOFT_ONEDRIVE_SCOPES = Object.freeze([
@@ -84,6 +88,7 @@ export class MicrosoftOneDriveWebTokenManager {
         now = () => Date.now(),
         pollIntervalMs = 200,
         authorizationTimeoutMs = AUTHORIZATION_TIMEOUT_MS,
+        requestTimeoutMs = DEFAULT_SYNC_REQUEST_TIMEOUT_MS,
     }) {
         if (!clientId) throw new Error('Microsoft OAuthのクライアントIDが必要です。');
         this.clientId = clientId;
@@ -92,6 +97,7 @@ export class MicrosoftOneDriveWebTokenManager {
         this.now = now;
         this.pollIntervalMs = pollIntervalMs;
         this.authorizationTimeoutMs = authorizationTimeoutMs;
+        this.requestTimeoutMs = requestTimeoutMs;
         this.tokens = null;
     }
 
@@ -105,7 +111,11 @@ export class MicrosoftOneDriveWebTokenManager {
     }
 
     async exchangeToken(parameters) {
-        const response = await this.fetch(`${MICROSOFT_AUTHORITY}/token`, {
+        const response = await fetchWithTimeout({
+            fetchImpl: this.fetch,
+            url: `${MICROSOFT_AUTHORITY}/token`,
+            timeoutMs: this.requestTimeoutMs,
+            options: {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
             body: new URLSearchParams({
@@ -113,6 +123,7 @@ export class MicrosoftOneDriveWebTokenManager {
                 scope: MICROSOFT_ONEDRIVE_SCOPES.join(' '),
                 ...parameters,
             }),
+            },
         });
         return parseTokenResponse(response);
     }

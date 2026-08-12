@@ -4,6 +4,11 @@ import {
     SyncManifestConflictError,
     validateSyncManifest,
 } from './syncManifest.mjs';
+import {
+    DEFAULT_SYNC_REQUEST_TIMEOUT_MS,
+    DEFAULT_SYNC_TRANSFER_TIMEOUT_MS,
+    fetchWithTimeout,
+} from './fetchWithTimeout.mjs';
 
 export const GOOGLE_DRIVE_APPDATA_SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
 
@@ -161,6 +166,8 @@ export class GoogleDriveAppDataClient {
         uploadStateStore = createDefaultUploadStateStore(),
         onUploadProgress = null,
         resumableChunkSize = RESUMABLE_CHUNK_SIZE,
+        requestTimeoutMs = DEFAULT_SYNC_REQUEST_TIMEOUT_MS,
+        transferTimeoutMs = DEFAULT_SYNC_TRANSFER_TIMEOUT_MS,
     }) {
         if (typeof getAccessToken !== 'function') {
             throw new Error('Google Drive接続にはgetAccessToken()が必要です。');
@@ -176,6 +183,8 @@ export class GoogleDriveAppDataClient {
         this.maxRetries = maxRetries;
         this.uploadStateStore = uploadStateStore;
         this.onUploadProgress = onUploadProgress;
+        this.requestTimeoutMs = requestTimeoutMs;
+        this.transferTimeoutMs = transferTimeoutMs;
         this.resumableChunkSize = Math.max(
             256 * 1024,
             Math.floor(resumableChunkSize / (256 * 1024)) * (256 * 1024)
@@ -190,11 +199,19 @@ export class GoogleDriveAppDataClient {
             });
             let response;
             try {
-                response = await this.fetch(url, {
+                const isTransfer = options.body != null
+                    || String(url).includes('alt=media')
+                    || String(options.method || '').toUpperCase() === 'PUT';
+                response = await fetchWithTimeout({
+                    fetchImpl: this.fetch,
+                    url,
+                    timeoutMs: isTransfer ? this.transferTimeoutMs : this.requestTimeoutMs,
+                    options: {
                     ...options,
                     headers: {
                         Authorization: `Bearer ${accessToken}`,
                         ...(options.headers || {}),
+                    },
                     },
                 });
             } catch (cause) {

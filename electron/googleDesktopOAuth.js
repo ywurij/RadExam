@@ -2,6 +2,10 @@ const crypto = require('crypto');
 const fs = require('fs');
 const http = require('http');
 const path = require('path');
+const {
+  DEFAULT_OAUTH_REQUEST_TIMEOUT_MS,
+  fetchWithTimeout,
+} = require('./fetchWithTimeout');
 
 const GOOGLE_AUTHORIZATION_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
@@ -88,6 +92,7 @@ class GoogleDesktopOAuthManager {
     fetchImpl = (...args) => globalThis.fetch(...args),
     createServer = handler => http.createServer(handler),
     now = () => Date.now(),
+    requestTimeoutMs = DEFAULT_OAUTH_REQUEST_TIMEOUT_MS,
   }) {
     this.clientId = String(clientId || '');
     this.clientSecret = String(clientSecret || '');
@@ -97,6 +102,7 @@ class GoogleDesktopOAuthManager {
     this.fetch = (...args) => fetchImpl(...args);
     this.createServer = createServer;
     this.now = now;
+    this.requestTimeoutMs = requestTimeoutMs;
     this.memoryTokens = null;
     this.authorizationPromise = null;
   }
@@ -130,6 +136,7 @@ class GoogleDesktopOAuthManager {
       version: 1,
       encrypted: encrypted.toString('base64'),
     }), { mode: 0o600 });
+    fs.chmodSync(this.tokenPath, 0o600);
     return true;
   }
 
@@ -137,6 +144,7 @@ class GoogleDesktopOAuthManager {
     if (this.memoryTokens) return this.memoryTokens;
     if (!this.encryptionAvailable() || !fs.existsSync(this.tokenPath)) return null;
     try {
+      if (fs.statSync(this.tokenPath).size > 1024 * 1024) return null;
       const stored = JSON.parse(fs.readFileSync(this.tokenPath, 'utf8'));
       const decrypted = this.safeStorage.decryptString(
         Buffer.from(stored.encrypted, 'base64')
@@ -163,7 +171,7 @@ class GoogleDesktopOAuthManager {
   }
 
   async exchangeAuthorizationCode({ code, redirectUri, verifier }) {
-    const response = await this.fetch(GOOGLE_TOKEN_URL, {
+    const response = await fetchWithTimeout(this.fetch, GOOGLE_TOKEN_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
@@ -174,7 +182,7 @@ class GoogleDesktopOAuthManager {
         grant_type: 'authorization_code',
         redirect_uri: redirectUri,
       }),
-    });
+    }, this.requestTimeoutMs);
     const token = await parseTokenResponse(response);
     const previous = this.loadTokens();
     const tokens = {
@@ -195,7 +203,7 @@ class GoogleDesktopOAuthManager {
   }
 
   async refreshAccessToken(tokens) {
-    const response = await this.fetch(GOOGLE_TOKEN_URL, {
+    const response = await fetchWithTimeout(this.fetch, GOOGLE_TOKEN_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
@@ -204,7 +212,7 @@ class GoogleDesktopOAuthManager {
         refresh_token: tokens.refreshToken,
         grant_type: 'refresh_token',
       }),
-    });
+    }, this.requestTimeoutMs);
     const token = await parseTokenResponse(response);
     const refreshed = {
       ...tokens,

@@ -298,6 +298,19 @@ export const validateIncomingSyncChange = change => {
     if (!Array.isArray(normalized.blobRefs) || normalized.blobRefs.length > MAX_SYNC_BLOB_REFS_PER_CHANGE) {
         throw new Error('受信した同期変更の添付ファイル参照が上限を超えています。');
     }
+    if (normalized.blobRefs.some(ref => (
+        !ref
+        || typeof ref !== 'object'
+        || ![SYNC_ENTITY_TYPES.IMAGE, SYNC_ENTITY_TYPES.PDF].includes(ref.kind)
+        || typeof ref.localKey !== 'string'
+        || !ref.localKey
+        || ref.localKey.length > MAX_SYNC_ID_LENGTH
+        || typeof ref.contentHash !== 'string'
+        || !ref.contentHash.startsWith('sha256:')
+        || ref.contentHash.length > 256
+    ))) {
+        throw new Error('受信した同期変更の添付ファイル参照が不正です。');
+    }
     if (new TextEncoder().encode(JSON.stringify(normalized)).byteLength > MAX_SYNC_CHANGE_BYTES) {
         throw new Error('受信した同期変更のサイズが上限を超えています。');
     }

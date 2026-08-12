@@ -9,6 +9,7 @@ import {
 import {
     createBackupArchiveBlob,
     parseBackupArchiveBlob,
+    validateBackupData,
 } from '../src/lib/backupArchive.mjs';
 
 const exams = {
@@ -98,4 +99,21 @@ test('round-trips a chunked RadExam archive without one giant JSON string', asyn
     const archive = await createBackupArchiveBlob(backup);
     const restored = await parseBackupArchiveBlob(archive);
     assert.deepEqual(restored, backup);
+});
+
+test('rejects unsafe or malformed backup structures before import', async () => {
+    const counts = { exams: 1, progress: 0, images: 0, pdfs: 0, sessions: 0 };
+    const maliciousArchive = new Blob([
+        `${JSON.stringify({ type: 'header', format: 'radexam-backup-archive', archiveVersion: 1, backupVersion: 4, timestamp: 1, counts })}\n`,
+        '{"type":"exam","key":"__proto__","value":{"questions":[]}}\n',
+        `${JSON.stringify({ type: 'end', counts })}\n`,
+    ]);
+    await assert.rejects(parseBackupArchiveBlob(maliciousArchive), /不正なデータキー/);
+    assert.throws(() => validateBackupData({
+        exams: [],
+        progress: {},
+        images: {},
+        pdfs: {},
+        sessions: [],
+    }), /examsデータが不正/);
 });

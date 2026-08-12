@@ -22,6 +22,10 @@ const {
   loadZoomFactor,
   saveZoomFactor,
 } = require('./displayZoom');
+const {
+  normalizeGoogleClientId,
+  normalizeMicrosoftClientId,
+} = require('./oauthClientId');
 
 // 表示名を変更しても既存の試験・画像・進捗を失わないよう、保存先は旧版と共通にする。
 app.setPath('userData', path.join(app.getPath('appData'), 'exam-app'));
@@ -123,6 +127,9 @@ function createWindow(port) {
       contextIsolation: true,
       sandbox: true,
       webSecurity: true,
+      webviewTag: false,
+      devTools: !app.isPackaged,
+      navigateOnDragDrop: false,
       allowRunningInsecureContent: false,
       preload: path.join(__dirname, 'preload.js')
     }
@@ -140,6 +147,7 @@ function createWindow(port) {
     }
     event.preventDefault();
   });
+  mainWindow.webContents.on('will-attach-webview', event => event.preventDefault());
   mainWindow.webContents.setWindowOpenHandler(({ url: targetUrl }) => {
     try {
       const parsed = new URL(targetUrl);
@@ -177,7 +185,7 @@ function createWindow(port) {
 
 const registerCloudSyncIpc = () => {
   const getManager = clientId => {
-    const normalizedClientId = String(clientId || '');
+    const normalizedClientId = normalizeGoogleClientId(clientId);
     if (!googleOAuthManager || googleOAuthManager.clientId !== normalizedClientId) {
       googleOAuthManager = new GoogleDesktopOAuthManager({
         clientId: normalizedClientId,
@@ -190,7 +198,7 @@ const registerCloudSyncIpc = () => {
     return googleOAuthManager;
   };
   const getMicrosoftManager = clientId => {
-    const normalizedClientId = String(clientId || '');
+    const normalizedClientId = normalizeMicrosoftClientId(clientId);
     if (!microsoftOAuthManager || microsoftOAuthManager.clientId !== normalizedClientId) {
       microsoftOAuthManager = new MicrosoftDesktopOAuthManager({
         clientId: normalizedClientId,
@@ -243,6 +251,9 @@ const registerDisplayIpc = () => {
   });
   ipcMain.handle('display:set-zoom-factor', (event, value) => {
     ensureMainWindowSender(event);
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+      throw new Error('表示倍率の形式が不正です。');
+    }
     displayZoomFactor = saveZoomFactor(app.getPath('userData'), value);
     event.sender.setZoomFactor(displayZoomFactor);
     return displayZoomFactor;

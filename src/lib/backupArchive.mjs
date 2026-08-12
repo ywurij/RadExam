@@ -1,5 +1,95 @@
 const ARCHIVE_FORMAT = 'radexam-backup-archive';
 const ARCHIVE_VERSION = 1;
+export const MAX_BACKUP_FILE_BYTES = 2 * 1024 * 1024 * 1024;
+export const MAX_BACKUP_RECORD_BYTES = 512 * 1024 * 1024;
+export const MAX_BACKUP_RECORDS = 200_000;
+const MAX_BACKUP_KEY_LENGTH = 4096;
+const COUNT_KEYS = ['exams', 'progress', 'images', 'pdfs', 'sessions'];
+const UNSAFE_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
+
+const isPlainObject = value => (
+    value !== null
+    && typeof value === 'object'
+    && !Array.isArray(value)
+    && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null)
+);
+
+const assertSafeKey = key => {
+    if (
+        typeof key !== 'string'
+        || !key
+        || key.length > MAX_BACKUP_KEY_LENGTH
+        || /[\u0000-\u001f\u007f]/.test(key)
+        || UNSAFE_KEYS.has(key)
+    ) {
+        throw new Error('バックアップ内に不正なデータキーがあります。');
+    }
+};
+
+const validateCounts = counts => {
+    if (!isPlainObject(counts) || Object.keys(counts).some(key => !COUNT_KEYS.includes(key))) {
+        throw new Error('バックアップ内の件数情報が不正です。');
+    }
+    let total = 0;
+    for (const key of COUNT_KEYS) {
+        const count = counts[key];
+        if (!Number.isSafeInteger(count) || count < 0 || count > MAX_BACKUP_RECORDS) {
+            throw new Error(`バックアップ内の${key}件数が不正です。`);
+        }
+        total += count;
+    }
+    if (total > MAX_BACKUP_RECORDS) {
+        throw new Error('バックアップ内のデータ件数が上限を超えています。');
+    }
+    return counts;
+};
+
+const validateRecordMap = (value, label) => {
+    if (!isPlainObject(value)) throw new Error(`バックアップ内の${label}データが不正です。`);
+    const entries = Object.entries(value);
+    if (entries.length > MAX_BACKUP_RECORDS) {
+        throw new Error(`バックアップ内の${label}件数が上限を超えています。`);
+    }
+    for (const [key] of entries) assertSafeKey(key);
+    return value;
+};
+
+export const validateBackupData = backup => {
+    if (!isPlainObject(backup)) throw new Error('RadExamのバックアップファイルではありません。');
+    validateRecordMap(backup.exams, 'exams');
+    validateRecordMap(backup.progress || {}, 'progress');
+    validateRecordMap(backup.images || {}, 'images');
+    validateRecordMap(backup.pdfs || {}, 'pdfs');
+    if (!Array.isArray(backup.sessions || []) || (backup.sessions || []).length > MAX_BACKUP_RECORDS) {
+        throw new Error('バックアップ内の中断履歴が不正です。');
+    }
+    let questionCount = 0;
+    for (const exam of Object.values(backup.exams || {})) {
+        if (!isPlainObject(exam) || !Array.isArray(exam.questions || [])) {
+            throw new Error('バックアップ内の試験データが不正です。');
+        }
+        questionCount += (exam.questions || []).length;
+        if (questionCount > MAX_BACKUP_RECORDS) {
+            throw new Error('バックアップ内の問題数が上限を超えています。');
+        }
+        if ((exam.questions || []).some(question => !isPlainObject(question))) {
+            throw new Error('バックアップ内の問題データが不正です。');
+        }
+    }
+    if (Object.values(backup.images || {}).some(value => typeof value !== 'string' && !(value instanceof Blob))) {
+        throw new Error('バックアップ内の画像データが不正です。');
+    }
+    if (Object.values(backup.pdfs || {}).some(value => (
+        !isPlainObject(value)
+        || (typeof value.blob !== 'string' && !(value.blob instanceof Blob))
+    ))) {
+        throw new Error('バックアップ内のPDFデータが不正です。');
+    }
+    if ((backup.sessions || []).some(session => !isPlainObject(session) || !session.id)) {
+        throw new Error('バックアップ内の中断履歴が不正です。');
+    }
+    return backup;
+};
 
 const createRecordIterator = function* (backup) {
     const counts = {
@@ -60,6 +150,10 @@ const addArchiveRecord = (backup, record) => {
     if (!target || typeof record.key !== 'string') {
         throw new Error(`未対応のバックアップレコードです: ${record.type || 'unknown'}`);
     }
+    assertSafeKey(record.key);
+    if (Object.hasOwn(target, record.key)) {
+        throw new Error(`バックアップ内に重複したデータがあります: ${record.key}`);
+    }
     target[record.key] = record.value;
 };
 
@@ -81,6 +175,9 @@ export const createBackupArchiveBlob = async backup => {
 };
 
 export const parseBackupArchiveBlob = async file => {
+    if (!(file instanceof Blob) || file.size > MAX_BACKUP_FILE_BYTES) {
+        throw new Error('バックアップファイルのサイズが上限を超えています。');
+    }
     const reader = file.stream()
         .pipeThrough(new TextDecoderStream())
         .getReader();
@@ -96,9 +193,13 @@ export const parseBackupArchiveBlob = async file => {
     let header = null;
     let footer = null;
     let pending = '';
+    let recordCount = 0;
 
     const processLine = line => {
         if (!line.trim()) return;
+        if (new TextEncoder().encode(line).byteLength > MAX_BACKUP_RECORD_BYTES) {
+            throw new Error('バックアップ内の1件のデータが大きすぎます。');
+        }
         const record = JSON.parse(line);
         if (!header) {
             if (record.type !== 'header' || record.format !== ARCHIVE_FORMAT) {
@@ -108,16 +209,22 @@ export const parseBackupArchiveBlob = async file => {
                 throw new Error(`未対応のバックアップ形式です: ${record.archiveVersion}`);
             }
             header = record;
+            validateCounts(record.counts);
             backup.version = record.backupVersion;
             backup.timestamp = record.timestamp;
             return;
         }
+        if (footer) {
+            throw new Error('バックアップ終端の後に余分なデータがあります。');
+        }
         if (record.type === 'end') {
+            validateCounts(record.counts);
             footer = record;
             return;
         }
-        if (footer) {
-            throw new Error('バックアップ終端の後に余分なデータがあります。');
+        recordCount += 1;
+        if (recordCount > MAX_BACKUP_RECORDS) {
+            throw new Error('バックアップ内のデータ件数が上限を超えています。');
         }
         addArchiveRecord(backup, record);
     };
@@ -126,6 +233,10 @@ export const parseBackupArchiveBlob = async file => {
         const { value, done } = await reader.read();
         if (done) break;
         pending += value;
+        if (pending.length > MAX_BACKUP_RECORD_BYTES) {
+            await reader.cancel();
+            throw new Error('バックアップ内の1件のデータが大きすぎます。');
+        }
         let newlineIndex = pending.indexOf('\n');
         while (newlineIndex >= 0) {
             processLine(pending.slice(0, newlineIndex));
@@ -152,12 +263,15 @@ export const parseBackupArchiveBlob = async file => {
         }
     }
 
-    return backup;
+    return validateBackupData(backup);
 };
 
 export const readBackupFile = async file => {
+    if (!(file instanceof Blob) || file.size > MAX_BACKUP_FILE_BYTES) {
+        throw new Error('バックアップファイルのサイズが上限を超えています。');
+    }
     if (file.name?.toLowerCase().endsWith('.json')) {
-        return JSON.parse(await file.text());
+        return validateBackupData(JSON.parse(await file.text()));
     }
     return parseBackupArchiveBlob(file);
 };

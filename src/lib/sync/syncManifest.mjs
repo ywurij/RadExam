@@ -5,6 +5,9 @@ export const MAX_CHANGES_PER_BATCH = 100;
 export const MAX_CHANGES_PER_BULK_PACKAGE = 2000;
 export const MAX_SYNC_BATCH_BYTES = 128 * 1024 * 1024;
 export const MAX_SYNC_SNAPSHOT_BYTES = 2 * 1024 * 1024 * 1024;
+export const MAX_SYNC_MANIFEST_BATCHES = 50_000;
+const MAX_MANIFEST_ID_LENGTH = 2048;
+const MAX_MANIFEST_OBJECT_KEY_LENGTH = 4096;
 export const SYNC_BATCH_FORMATS = Object.freeze({
     STANDARD: 'change-batch',
     BULK: 'bulk-delta',
@@ -54,6 +57,9 @@ const validateBatchDescriptor = batch => {
         || batch.changeCount < 1
         || batch.changeCount > maximumChanges
         || !Object.values(SYNC_BATCH_FORMATS).includes(format)
+        || String(batch.batchId).length > MAX_MANIFEST_ID_LENGTH
+        || String(batch.deviceId).length > MAX_MANIFEST_ID_LENGTH
+        || String(batch.objectKey).length > MAX_MANIFEST_OBJECT_KEY_LENGTH
     ) {
         throw new Error(`manifest内の変更バッチが不正です: ${batch?.batchId || 'IDなし'}`);
     }
@@ -75,6 +81,10 @@ const validateSnapshotDescriptor = snapshot => {
         || snapshot.byteSize > MAX_SYNC_SNAPSHOT_BYTES
         || !String(snapshot?.contentHash || '').startsWith('sha256:')
         || !snapshot?.createdAt
+        || String(snapshot.snapshotId).length > MAX_MANIFEST_ID_LENGTH
+        || String(snapshot.deviceId).length > MAX_MANIFEST_ID_LENGTH
+        || String(snapshot.objectKey).length > MAX_MANIFEST_OBJECT_KEY_LENGTH
+        || String(snapshot.contentHash).length > 256
     ) {
         throw new Error(`manifest内のスナップショットが不正です: ${snapshot?.snapshotId || 'IDなし'}`);
     }
@@ -92,7 +102,7 @@ export const validateSyncManifest = manifest => {
     if (!Number.isSafeInteger(manifest.generation) || manifest.generation < 0) {
         throw new Error('manifestのgenerationが不正です。');
     }
-    if (!Array.isArray(manifest.batches)) {
+    if (!Array.isArray(manifest.batches) || manifest.batches.length > MAX_SYNC_MANIFEST_BATCHES) {
         throw new Error('manifestのbatchesが不正です。');
     }
 
