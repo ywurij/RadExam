@@ -32,6 +32,7 @@ import {
 } from '@/lib/sync/localSyncJournal';
 import { processIncomingSyncChange } from '@/lib/sync/syncReceiver.mjs';
 import { resolveStoredSyncConflict } from '@/lib/sync/syncConflictResolution.mjs';
+import { sanitizeQuestionRichText } from '@/lib/sanitizeRichHtml.mjs';
 import {
     checkSyncUpdates,
     runSyncCycle,
@@ -842,7 +843,7 @@ const applyRemoteQuestionChange = async change => {
             ? questions[questionIndex]
             : { id: questionId };
         const nextQuestion = normalizeQuestionId(
-            applySyncFieldDelta(currentQuestion, change)
+            sanitizeQuestionRichText(applySyncFieldDelta(currentQuestion, change))
         );
         if (questionIndex >= 0) questions[questionIndex] = nextQuestion;
         else {

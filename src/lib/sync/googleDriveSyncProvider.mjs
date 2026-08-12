@@ -18,6 +18,8 @@ const DELETE_BATCH_SIZE = 100;
 const DRIVE_PROPERTY_BYTE_LIMIT = 124;
 const PATH_PROPERTY_KEY = 'radexamPath';
 const PATH_HASH_PROPERTY_KEY = 'radexamPathHash';
+const MAX_SYNC_JSON_FILE_BYTES = 128 * 1024 * 1024;
+const MAX_SYNC_BLOB_FILE_BYTES = 2 * 1024 * 1024 * 1024;
 
 const escapeDriveQueryValue = value => String(value)
     .replace(/\\/g, '\\\\')
@@ -74,6 +76,13 @@ const parseJsonSafely = async response => {
         return JSON.parse(text);
     } catch {
         return null;
+    }
+};
+
+const assertFileSizeWithin = (file, maximumBytes, label) => {
+    const size = Number(file?.size);
+    if (Number.isFinite(size) && size > maximumBytes) {
+        throw new GoogleDriveSyncError(`${label}が許容サイズを超えているため、取得を中止しました。`);
     }
 };
 
@@ -332,15 +341,25 @@ export class GoogleDriveAppDataClient {
     async readJson(path) {
         const file = await this.findFile(path);
         if (!file) return { file: null, value: null };
+        assertFileSizeWithin(file, MAX_SYNC_JSON_FILE_BYTES, 'クラウド上の同期データ');
         const response = await this.downloadFile(file.id);
-        return { file, value: await response.json() };
+        const text = await response.text();
+        if (new TextEncoder().encode(text).byteLength > MAX_SYNC_JSON_FILE_BYTES) {
+            throw new GoogleDriveSyncError('クラウド上の同期データが許容サイズを超えているため、取得を中止しました。');
+        }
+        return { file, value: JSON.parse(text) };
     }
 
     async readBlob(path) {
         const file = await this.findFile(path);
         if (!file) return { file: null, blob: null };
+        assertFileSizeWithin(file, MAX_SYNC_BLOB_FILE_BYTES, 'クラウド上の添付ファイル');
         const response = await this.downloadFile(file.id);
-        return { file, blob: await response.blob() };
+        const blob = await response.blob();
+        if (blob.size > MAX_SYNC_BLOB_FILE_BYTES) {
+            throw new GoogleDriveSyncError('クラウド上の添付ファイルが許容サイズを超えているため、取得を中止しました。');
+        }
+        return { file, blob };
     }
 
     async startResumableUpload({

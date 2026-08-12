@@ -12,31 +12,33 @@ const withPWA = withPWAInit({
   reloadOnOnline: false, // PREVENT AUTO RELOAD ON RECONNECT
   // Exclude images from being precached (public folder scan)
   publicExcludes: ["!assets/images/**/*"],
-  runtimeCaching: [
-    {
-      // Cache images when they are loaded
-      urlPattern: ({ url }) => url.pathname.startsWith("/assets/images/"),
-      handler: "CacheFirst",
-      options: {
-        cacheName: "question-images",
-        expiration: {
-          maxEntries: 500,
-          maxAgeSeconds: 60 * 60 * 24 * 365, // 1 year
+  workboxOptions: {
+    runtimeCaching: [
+      {
+        // Cache images when they are loaded
+        urlPattern: ({ sameOrigin, url }) => sameOrigin && url.pathname.startsWith("/assets/images/"),
+        handler: "CacheFirst",
+        options: {
+          cacheName: "question-images",
+          expiration: {
+            maxEntries: 500,
+            maxAgeSeconds: 60 * 60 * 24 * 365, // 1 year
+          },
         },
       },
-    },
-    {
-      // Cache other static assets (standard Next.js pattern)
-      urlPattern: /^https?.*/,
-      handler: "NetworkFirst",
-      options: {
-        cacheName: "offlineCache",
-        expiration: {
-          maxEntries: 200,
+      {
+        // 外部の認証・クラウドAPI応答は端末キャッシュに保存しない。
+        urlPattern: ({ sameOrigin, url }) => sameOrigin && !url.pathname.startsWith("/api/"),
+        handler: "NetworkFirst",
+        options: {
+          cacheName: "offline-cache-v2",
+          expiration: {
+            maxEntries: 200,
+          },
         },
       },
-    },
-  ],
+    ],
+  },
 });
 
 /** @type {import('next').NextConfig} */
@@ -46,6 +48,39 @@ const nextConfig = {
   output: appTarget === "desktop" ? "standalone" : undefined,
   env: {
     NEXT_PUBLIC_APP_TARGET: appTarget,
+  },
+  async headers() {
+    const scriptSources = [
+      "'self'",
+      "'unsafe-inline'",
+      "https://accounts.google.com",
+      ...(process.env.NODE_ENV === "development" ? ["'unsafe-eval'"] : []),
+    ];
+    const contentSecurityPolicy = [
+      "default-src 'self'",
+      `script-src ${scriptSources.join(" ")}`,
+      "script-src-attr 'none'",
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data: blob: https:",
+      "font-src 'self' data:",
+      "connect-src 'self' https://accounts.google.com https://oauth2.googleapis.com https://www.googleapis.com https://login.microsoftonline.com https://graph.microsoft.com",
+      "frame-src https://accounts.google.com https://login.microsoftonline.com",
+      "worker-src 'self' blob:",
+      "object-src 'none'",
+      "base-uri 'self'",
+      "form-action 'self'",
+      "frame-ancestors 'none'",
+    ].join('; ');
+    return [{
+      source: '/:path*',
+      headers: [
+        { key: 'Content-Security-Policy', value: contentSecurityPolicy },
+        { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
+        { key: 'X-Content-Type-Options', value: 'nosniff' },
+        { key: 'X-Frame-Options', value: 'DENY' },
+        { key: 'Permissions-Policy', value: 'camera=(), microphone=(), geolocation=(), payment=(), usb=()' },
+      ],
+    }];
   },
   webpack(config) {
     config.resolve.alias["@target/admin"] = targetModule("src/app/admin/AdminDesktop.js", "src/app/admin/AdminMobile.js");

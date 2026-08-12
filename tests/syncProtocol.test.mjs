@@ -770,6 +770,19 @@ test('validates incoming schema and rejects unsafe field paths', () => {
     });
 });
 
+test('rejects oversized incoming identifiers and attachment reference lists', () => {
+    assert.throws(() => validateIncomingSyncChange(buildIncomingChange({
+        entityId: 'x'.repeat(2049),
+    })), /IDが長すぎ/);
+    assert.throws(() => validateIncomingSyncChange(buildIncomingChange({
+        blobRefs: Array.from({ length: 257 }, (_, index) => ({
+            kind: SYNC_ENTITY_TYPES.IMAGE,
+            localKey: `image-${index}`,
+            contentHash: `sha256:${index}`,
+        })),
+    })), /添付ファイル参照/);
+});
+
 test('applies a non-conflicting incoming change and remembers it', async () => {
     const storage = new MemoryStorage();
     const journal = new SyncJournal(storage, {

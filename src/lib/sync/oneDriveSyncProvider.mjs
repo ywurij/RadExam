@@ -12,6 +12,8 @@ const SIMPLE_UPLOAD_LIMIT = 4 * 1024 * 1024;
 const UPLOAD_FRAGMENT_UNIT = 320 * 1024;
 const DEFAULT_UPLOAD_CHUNK_SIZE = 10 * 1024 * 1024;
 const LEGACY_SYNC_ID = 'legacy';
+const MAX_SYNC_JSON_FILE_BYTES = 128 * 1024 * 1024;
+const MAX_SYNC_BLOB_FILE_BYTES = 2 * 1024 * 1024 * 1024;
 
 const defaultFetch = (...args) => globalThis.fetch(...args);
 const defaultSleep = milliseconds => new Promise(resolve => {
@@ -72,6 +74,13 @@ const parseJsonSafely = async response => {
         return JSON.parse(text);
     } catch {
         return null;
+    }
+};
+
+const assertFileSizeWithin = (file, maximumBytes, label) => {
+    const size = Number(file?.size);
+    if (Number.isFinite(size) && size > maximumBytes) {
+        throw new OneDriveSyncError(`${label}が許容サイズを超えているため、取得を中止しました。`);
     }
 };
 
@@ -297,15 +306,25 @@ export class OneDriveAppFolderClient {
     async readJson(path) {
         const file = await this.findFile(path);
         if (!file) return { file: null, value: null };
+        assertFileSizeWithin(file, MAX_SYNC_JSON_FILE_BYTES, 'クラウド上の同期データ');
         const response = await this.downloadFile(file.id);
-        return { file, value: await response.json() };
+        const text = await response.text();
+        if (new TextEncoder().encode(text).byteLength > MAX_SYNC_JSON_FILE_BYTES) {
+            throw new OneDriveSyncError('クラウド上の同期データが許容サイズを超えているため、取得を中止しました。');
+        }
+        return { file, value: JSON.parse(text) };
     }
 
     async readBlob(path) {
         const file = await this.findFile(path);
         if (!file) return { file: null, blob: null };
+        assertFileSizeWithin(file, MAX_SYNC_BLOB_FILE_BYTES, 'クラウド上の添付ファイル');
         const response = await this.downloadFile(file.id);
-        return { file, blob: await response.blob() };
+        const blob = await response.blob();
+        if (blob.size > MAX_SYNC_BLOB_FILE_BYTES) {
+            throw new OneDriveSyncError('クラウド上の添付ファイルが許容サイズを超えているため、取得を中止しました。');
+        }
+        return { file, blob };
     }
 
     async ensureFolder(path) {

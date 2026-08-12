@@ -20,6 +20,7 @@ import styles from './AnswerEditor.module.scss';
 import { MathExtension } from './MathExtension';
 import { IndentExtension } from './IndentExtension';
 import { searchQuestions } from '@/lib/data';
+import { sanitizeRichHtml } from '@/lib/sanitizeRichHtml.mjs';
 import { HtmlTagExtension } from './HtmlTagExtension';
 import { useState, useEffect, useRef } from 'react';
 // ... (imports remain same)
@@ -427,7 +428,7 @@ const MenuBar = ({ editor }) => {
                                                     <div className={styles.headerContent}>
                                                         <div className={styles.resultMeta}>{res.year} - {res.genre || 'その他'} (ID: {res.id})</div>
                                                         {isExpanded ? (
-                                                            <div className={styles.expandedQuestion} dangerouslySetInnerHTML={{ __html: res.question }} onClick={(e) => e.stopPropagation() || toggleExpand(res.id)} />
+                                                            <div className={styles.expandedQuestion} dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(res.question) }} onClick={(e) => e.stopPropagation() || toggleExpand(res.id)} />
                                                         ) : (
                                                             <div className={styles.previewText} title={res.question}>
                                                                 {res.question.replace(/<[^>]+>/g, '').substring(0, 60)}...
@@ -448,7 +449,7 @@ const MenuBar = ({ editor }) => {
                                                         {res.explanation && (
                                                             <div className={styles.detailSection}>
                                                                 <span className={styles.detailLabel}>解説:</span>
-                                                                <div className={styles.detailContent} dangerouslySetInnerHTML={{ __html: res.explanation }} />
+                                                                <div className={styles.detailContent} dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(res.explanation) }} />
                                                             </div>
                                                         )}
 

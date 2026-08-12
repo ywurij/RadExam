@@ -3,6 +3,8 @@ import { SYNC_SCHEMA_VERSION } from './syncProtocol.mjs';
 export const SYNC_MANIFEST_VERSION = 1;
 export const MAX_CHANGES_PER_BATCH = 100;
 export const MAX_CHANGES_PER_BULK_PACKAGE = 2000;
+export const MAX_SYNC_BATCH_BYTES = 128 * 1024 * 1024;
+export const MAX_SYNC_SNAPSHOT_BYTES = 2 * 1024 * 1024 * 1024;
 export const SYNC_BATCH_FORMATS = Object.freeze({
     STANDARD: 'change-batch',
     BULK: 'bulk-delta',
@@ -70,6 +72,7 @@ const validateSnapshotDescriptor = snapshot => {
         || snapshot.cutoffSequence < 0
         || !Number.isSafeInteger(snapshot?.byteSize)
         || snapshot.byteSize < 0
+        || snapshot.byteSize > MAX_SYNC_SNAPSHOT_BYTES
         || !String(snapshot?.contentHash || '').startsWith('sha256:')
         || !snapshot?.createdAt
     ) {
@@ -253,6 +256,9 @@ export const validateSyncChangeBatch = (batch, descriptor) => {
         || !Object.values(SYNC_BATCH_FORMATS).includes(format)
     ) {
         throw new Error(`クラウド上の変更バッチが不正です: ${batch?.batchId || 'IDなし'}`);
+    }
+    if (new TextEncoder().encode(JSON.stringify(batch)).byteLength > MAX_SYNC_BATCH_BYTES) {
+        throw new Error(`クラウド上の変更バッチが大きすぎます: ${batch.batchId}`);
     }
     const sequences = batch.changes.map(change => change.sequence);
     if (

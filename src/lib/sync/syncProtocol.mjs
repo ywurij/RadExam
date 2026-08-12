@@ -1,4 +1,8 @@
 export const SYNC_SCHEMA_VERSION = 1;
+export const MAX_SYNC_CHANGE_BYTES = 32 * 1024 * 1024;
+export const MAX_SYNC_ID_LENGTH = 2048;
+export const MAX_SYNC_FIELDS_PER_CHANGE = 256;
+export const MAX_SYNC_BLOB_REFS_PER_CHANGE = 256;
 
 export const SYNC_ENTITY_TYPES = Object.freeze({
     EXAM: 'exam',
@@ -276,6 +280,27 @@ export const validateIncomingSyncChange = change => {
         throw new Error(`未対応の同期データ種別です: ${change.entityType}`);
     }
     const normalized = createSyncChange(change);
+    if (
+        normalized.changeId.length > MAX_SYNC_ID_LENGTH
+        || normalized.deviceId.length > MAX_SYNC_ID_LENGTH
+        || normalized.entityId.length > MAX_SYNC_ID_LENGTH
+    ) {
+        throw new Error('受信した同期変更のIDが長すぎます。');
+    }
+    if (
+        normalized.changedFields.length > MAX_SYNC_FIELDS_PER_CHANGE
+        || normalized.unsetFields.length > MAX_SYNC_FIELDS_PER_CHANGE
+        || normalized.changedFields.some(field => field.length > 256)
+        || normalized.unsetFields.some(field => field.length > 256)
+    ) {
+        throw new Error('受信した同期変更のフィールド数または名前が上限を超えています。');
+    }
+    if (!Array.isArray(normalized.blobRefs) || normalized.blobRefs.length > MAX_SYNC_BLOB_REFS_PER_CHANGE) {
+        throw new Error('受信した同期変更の添付ファイル参照が上限を超えています。');
+    }
+    if (new TextEncoder().encode(JSON.stringify(normalized)).byteLength > MAX_SYNC_CHANGE_BYTES) {
+        throw new Error('受信した同期変更のサイズが上限を超えています。');
+    }
     if (normalized.operation === SYNC_OPERATIONS.UPSERT) {
         if (!isPlainObject(normalized.payload)) {
             throw new Error('更新変更のpayloadはオブジェクトである必要があります。');

@@ -36,7 +36,14 @@ let cloudSyncConfig = null;
 let displayZoomFactor = DEFAULT_ZOOM_FACTOR;
 
 const ensureMainWindowSender = event => {
-  if (!mainWindow || event.sender !== mainWindow.webContents) {
+  const expectedOrigin = `http://${LOOPBACK_HOST}:${serverPort}`;
+  let senderOrigin = '';
+  try {
+    senderOrigin = new URL(event.senderFrame?.url || event.sender.getURL()).origin;
+  } catch {
+    senderOrigin = '';
+  }
+  if (!mainWindow || event.sender !== mainWindow.webContents || senderOrigin !== expectedOrigin) {
     throw new Error('許可されていないアプリ操作です。');
   }
 };
@@ -114,12 +121,40 @@ function createWindow(port) {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
+      sandbox: true,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
       preload: path.join(__dirname, 'preload.js')
     }
   });
   mainWindow.webContents.setZoomFactor(displayZoomFactor);
 
   const url = `http://${LOOPBACK_HOST}:${port}`;
+  const allowedOrigin = new URL(url).origin;
+
+  mainWindow.webContents.on('will-navigate', (event, navigationUrl) => {
+    try {
+      if (new URL(navigationUrl).origin === allowedOrigin) return;
+    } catch {
+      // 不正なURLも同様に拒否する。
+    }
+    event.preventDefault();
+  });
+  mainWindow.webContents.setWindowOpenHandler(({ url: targetUrl }) => {
+    try {
+      const parsed = new URL(targetUrl);
+      if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
+        void shell.openExternal(parsed.toString());
+      }
+    } catch {
+      // 不正なURLは何も開かず拒否する。
+    }
+    return { action: 'deny' };
+  });
+  mainWindow.webContents.session.setPermissionCheckHandler(() => false);
+  mainWindow.webContents.session.setPermissionRequestHandler((_webContents, _permission, callback) => {
+    callback(false);
+  });
   
   // サーバーの応答をポーリングで待機し、立ち上がり次第ロード
   const checkServer = () => {

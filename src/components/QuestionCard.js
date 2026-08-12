@@ -10,6 +10,7 @@ import QuestionSourcePages from './QuestionSourcePages';
 import StructuredLegendEditor, { createStructuredLegendFromText } from '@target/structured-legend-editor';
 import { getSelectionCount } from '@/lib/utils';
 import { APP_FEATURES } from '@/lib/appTarget';
+import { sanitizeQuestionRichText, sanitizeRichHtml } from '@/lib/sanitizeRichHtml.mjs';
 import styles from './QuestionCard.module.scss';
 import 'katex/dist/katex.min.css';
 
@@ -25,7 +26,7 @@ const FigureLabels = ({ labels, position }) => {
             return <span
                 key={`${position}-${label.text}-${index}`}
                 style={isSide ? { top: offset } : { left: offset }}
-                dangerouslySetInnerHTML={{ __html: label.text }}
+                dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(label.text) }}
             />;
         })}
     </div>;
@@ -132,7 +133,7 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveQ
         if (!draft || isSaving) return;
         setIsSaving(true);
         try {
-            await onSaveQuestionData?.(question.id, draft);
+            await onSaveQuestionData?.(question.id, sanitizeQuestionRichText(draft));
             closeEditing();
         } catch (error) {
             console.error('Failed to save question:', error);
@@ -208,7 +209,7 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveQ
         setIsEditingGenre(false);
     };
     const saveExplanation = async () => {
-        await onSaveQuestionData?.(question.id, { explanation: editExplanation });
+        await onSaveQuestionData?.(question.id, { explanation: sanitizeRichHtml(editExplanation) });
         setIsEditingExplanation(false);
     };
 
@@ -275,7 +276,7 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveQ
                     </div>
                 ) : (
                     <>
-                        <div className={styles.questionSection} style={{ marginBottom: '1.5rem' }}><div className={styles.questionText} dangerouslySetInnerHTML={{ __html: question.question || '' }} /></div>
+                        <div className={styles.questionSection} style={{ marginBottom: '1.5rem' }}><div className={styles.questionText} dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(question.question) }} /></div>
                         <QuestionSourcePages sourcePages={question.sourcePages || []} pdfFiles={pdfFiles} />
                         {currentImages.length > 0 && <div className={`${styles.responsiveImageGrid} ${currentImages.length === 1 ? styles.singleGrid : ''}`}>{currentImages.map((img, idx) => {
                             const labels = Array.isArray(img.legendLayout?.labels) ? img.legendLayout.labels : [];
@@ -303,16 +304,16 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveQ
                                     <FigureLabels labels={labels} position="right" />
                                 </div>
                                 <FigureLabels labels={labels} position="bottom" />
-                                {displayedLegend && <div className={styles.legend} dangerouslySetInnerHTML={{ __html: displayedLegend }} />}
+                                {displayedLegend && <div className={styles.legend} dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(displayedLegend) }} />}
                             </div>;
                         })}</div>}
-                        <div className={styles.optionsSection} style={{ marginBottom: '2rem' }}><h4>選択肢</h4><div className={styles.options}>{Object.entries(currentOptions).sort((a, b) => a[0].localeCompare(b[0])).map(([key, text]) => { const selected = selectedOptions.includes(key); const answer = normalizeAnswer(currentAnswer).includes(key); let className = styles.optionBtn; if (selected) className += ` ${styles.selected}`; if (showAnswer && answer) className += ` ${styles.correct}`; if (showAnswer && selected && !answer) className += ` ${styles.wrong}`; return <button key={key} className={className} onClick={() => toggleOption(key)}><span className={styles.optionKey}>{key}</span><span dangerouslySetInnerHTML={{ __html: text }} /></button>; })}</div></div>
+                        <div className={styles.optionsSection} style={{ marginBottom: '2rem' }}><h4>選択肢</h4><div className={styles.options}>{Object.entries(currentOptions).sort((a, b) => a[0].localeCompare(b[0])).map(([key, text]) => { const selected = selectedOptions.includes(key); const answer = normalizeAnswer(currentAnswer).includes(key); let className = styles.optionBtn; if (selected) className += ` ${styles.selected}`; if (showAnswer && answer) className += ` ${styles.correct}`; if (showAnswer && selected && !answer) className += ` ${styles.wrong}`; return <button key={key} className={className} onClick={() => toggleOption(key)}><span className={styles.optionKey}>{key}</span><span dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(text) }} /></button>; })}</div></div>
                         <div className={styles.actionRow}>{!showAnswer ? <button className={styles.revealBtn} onClick={revealAnswer}>回答・解説を見る</button> : <div className={`${styles.explicitAnswer} ${isCorrect ? styles.correct : ''}`}><div className={styles.answerBlock}>{isEditingAnswer ? <div className={styles.inlineEditAnswer}><span className={styles.label}>正解を選択:</span><div className={styles.answerSelectionGrid}>{Object.keys(currentOptions).sort().map(key => <button type="button" key={key} className={`${styles.answerTileBtn} ${editAnswer.includes(key) ? styles.draftAnswerActive : ''}`} onClick={() => setEditAnswer(previous => previous.includes(key) ? previous.filter(item => item !== key) : [...previous, key].sort())}>{key}</button>)}</div><div className={styles.editActions}><button onClick={() => setIsEditingAnswer(false)} className={styles.cancelBtn}>キャンセル</button><button onClick={saveAnswer} className={styles.saveBtn}>保存</button></div></div> : <><div className={styles.answerText}><span className={styles.label}>正解は</span><span className={styles.value}>{normalizeAnswer(currentAnswer).join(', ')} です</span></div>{APP_FEATURES.answerEditing && <button onClick={() => { setEditAnswer(normalizeAnswer(currentAnswer)); setIsEditingAnswer(true); }} className={styles.iconEditBtn} title="正解を編集">✎</button>}</>}</div></div>}</div>
                     </>
                 )}
             </div>
 
-            {showAnswer && !isEditing && <><div className={styles.explanation}><div className={styles.expHeader}><h3>解説</h3>{!isEditingExplanation && <button onClick={() => { setEditExplanation(question.explanation || ''); setIsEditingExplanation(true); }} className={styles.iconEditBtn} title="解説を編集">✎</button>}</div>{isEditingExplanation ? <div className={styles.editorWrapper}><AnswerEditor content={editExplanation} onChange={setEditExplanation} /><div className={styles.editActions}><button onClick={() => setIsEditingExplanation(false)} className={styles.cancelBtn}>キャンセル</button><button onClick={saveExplanation} className={styles.saveBtn}>保存</button></div></div> : <div className={`richTextContent ${styles.richTextContent}`} dangerouslySetInnerHTML={{ __html: question.explanation || '解説がありません' }} />}</div><div className={styles.genreArea}>{isEditingGenre ? <div className={styles.genreEdit}><span className={styles.label}>ジャンル:</span><input className={styles.fullWidthInput} value={editGenre} onChange={event => setEditGenre(event.target.value)} list="question-genres" /><datalist id="question-genres">{availableGenres?.map(genre => <option key={genre} value={genre} />)}</datalist><div className={styles.editActions}><button onClick={() => setIsEditingGenre(false)} className={styles.cancelBtn}>キャンセル</button><button onClick={saveGenre} className={styles.saveBtn}>保存</button></div></div> : <><div className={styles.genreContent}><span className={styles.label}>ジャンル:</span><div className={styles.genreTags}>{(Array.isArray(question.genre) ? question.genre : (question.genre || '未設定').split(/[,、\s]+/)).map((genre, index) => genre && <span key={index} className={styles.genreBadge}>{genre}</span>)}</div></div><button onClick={() => { setEditGenre(Array.isArray(question.genre) ? question.genre.join(', ') : (question.genre || '')); setIsEditingGenre(true); }} className={styles.iconEditBtn} title="ジャンルを編集">✎</button></>}</div></>}
+            {showAnswer && !isEditing && <><div className={styles.explanation}><div className={styles.expHeader}><h3>解説</h3>{!isEditingExplanation && <button onClick={() => { setEditExplanation(question.explanation || ''); setIsEditingExplanation(true); }} className={styles.iconEditBtn} title="解説を編集">✎</button>}</div>{isEditingExplanation ? <div className={styles.editorWrapper}><AnswerEditor content={editExplanation} onChange={setEditExplanation} /><div className={styles.editActions}><button onClick={() => setIsEditingExplanation(false)} className={styles.cancelBtn}>キャンセル</button><button onClick={saveExplanation} className={styles.saveBtn}>保存</button></div></div> : <div className={`richTextContent ${styles.richTextContent}`} dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(question.explanation || '解説がありません') }} />}</div><div className={styles.genreArea}>{isEditingGenre ? <div className={styles.genreEdit}><span className={styles.label}>ジャンル:</span><input className={styles.fullWidthInput} value={editGenre} onChange={event => setEditGenre(event.target.value)} list="question-genres" /><datalist id="question-genres">{availableGenres?.map(genre => <option key={genre} value={genre} />)}</datalist><div className={styles.editActions}><button onClick={() => setIsEditingGenre(false)} className={styles.cancelBtn}>キャンセル</button><button onClick={saveGenre} className={styles.saveBtn}>保存</button></div></div> : <><div className={styles.genreContent}><span className={styles.label}>ジャンル:</span><div className={styles.genreTags}>{(Array.isArray(question.genre) ? question.genre : (question.genre || '未設定').split(/[,、\s]+/)).map((genre, index) => genre && <span key={index} className={styles.genreBadge}>{genre}</span>)}</div></div><button onClick={() => { setEditGenre(Array.isArray(question.genre) ? question.genre.join(', ') : (question.genre || '')); setIsEditingGenre(true); }} className={styles.iconEditBtn} title="ジャンルを編集">✎</button></>}</div></>}
 
             <Lightbox
                 open={lightboxOpen}
