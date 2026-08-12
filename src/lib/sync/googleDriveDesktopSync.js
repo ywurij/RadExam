@@ -90,6 +90,10 @@ export const getGoogleDriveDesktopSyncState = async ({ clientId } = {}) => {
         hasSessionToken: Boolean(credentialStatus?.hasCredentials),
         bridgeAvailable: Boolean(bridge),
         encryptionAvailable: credentialStatus?.encryptionAvailable !== false,
+        cloudEncryption: activeSession?.provider?.encryptionStatus?.() || {
+            enabled: Boolean(config.cloudEncryptionEnabled),
+            unlocked: false,
+        },
         dataStatus: !connected
             ? 'not-connected'
             : config.lastSyncError
@@ -103,6 +107,48 @@ export const getGoogleDriveDesktopSyncState = async ({ clientId } = {}) => {
                         : 'not-verified',
     };
 };
+
+export const unlockGoogleDriveDesktopEncryption = async ({ clientId, passphrase }) => (
+    runExclusive(async () => {
+        const state = await getGoogleDriveDesktopSyncState({ clientId });
+        if (!state.connected) throw new Error('先にGoogle Driveへ接続してください。');
+        const session = createSession(clientId);
+        if (!state.hasSessionToken) await session.bridge.authorize(clientId);
+        await session.provider.ensureActiveSyncSpace();
+        await session.provider.unlockEncryption(passphrase);
+        await connectLocalSyncTracking({
+            ...state.config,
+            cloudEncryptionEnabled: true,
+        });
+        return { state: await getGoogleDriveDesktopSyncState({ clientId }) };
+    })
+);
+
+export const enableGoogleDriveDesktopEncryption = async ({ clientId, passphrase }) => (
+    runExclusive(async () => {
+        const state = await getGoogleDriveDesktopSyncState({ clientId });
+        if (!state.connected) throw new Error('先にGoogle Driveへ接続してください。');
+        const session = createSession(clientId);
+        if (!state.hasSessionToken) await session.bridge.authorize(clientId);
+        const user = await getSessionUser(session);
+        const accountId = user?.permissionId || user?.emailAddress;
+        if (String(accountId) !== String(state.config.accountId)) throw new Error('接続済みとは別のGoogleアカウントです。');
+        const encryption = await session.provider.prepareEncryption(passphrase);
+        await session.provider.deleteAllCloudSyncData();
+        await session.provider.ensureActiveSyncSpace();
+        const root = await session.provider.rotateSyncSpace({ encryption });
+        await disconnectLocalSyncTracking({ discardPending: true });
+        await connectLocalSyncTracking({
+            provider: SYNC_PROVIDERS.GOOGLE_DRIVE,
+            accountId,
+            accountLabel: user?.emailAddress || user?.displayName || 'Google Drive',
+            deviceName: `RadExam ${globalThis.navigator?.platform || 'Mac/PC'}`,
+            cloudSyncId: root.activeSyncId,
+            cloudEncryptionEnabled: true,
+        });
+        return { root, state: await getGoogleDriveDesktopSyncState({ clientId }) };
+    })
+);
 
 export const connectGoogleDriveDesktopSync = async ({ clientId }) => (
     runExclusive(async () => {
@@ -121,6 +167,7 @@ export const connectGoogleDriveDesktopSync = async ({ clientId }) => (
             accountLabel,
             deviceName: `RadExam ${globalThis.navigator?.platform || 'Mac/PC'}`,
             cloudSyncId: root.activeSyncId,
+            cloudEncryptionEnabled: Boolean(root.encryption),
         });
         return {
             result: { status: 'connected' },
@@ -294,11 +341,12 @@ export const resetGoogleDriveDesktopSync = async ({
             throw new Error('接続済みとは別のGoogleアカウントです。');
         }
         let deletedFiles = 0;
+        const preservedEncryption = session.provider.prepareRotationEncryption();
         if (hard) {
             ({ deletedFiles } = await session.provider.deleteAllCloudSyncData());
             await session.provider.ensureActiveSyncSpace();
         }
-        const root = await session.provider.rotateSyncSpace();
+        const root = await session.provider.rotateSyncSpace({ encryption: preservedEncryption });
         await disconnectLocalSyncTracking({ discardPending: true });
         await connectLocalSyncTracking({
             provider: SYNC_PROVIDERS.GOOGLE_DRIVE,
@@ -306,6 +354,7 @@ export const resetGoogleDriveDesktopSync = async ({
             accountLabel: user?.emailAddress || user?.displayName || 'Google Drive',
             deviceName: `RadExam ${globalThis.navigator?.platform || 'Mac/PC'}`,
             cloudSyncId: root.activeSyncId,
+            cloudEncryptionEnabled: Boolean(root.encryption),
         });
         return {
             deletedFiles,
@@ -335,6 +384,9 @@ export const runGoogleDriveDesktopBackgroundSync = async ({ clientId } = {}) => 
     if (!state.connected) return { status: 'skipped', reason: 'not-connected' };
     if (!state.bridgeAvailable) return { status: 'skipped', reason: 'bridge-unavailable' };
     if (!state.hasSessionToken) return { status: 'skipped', reason: 'reauth-required' };
+    if (state.cloudEncryption.enabled && !state.cloudEncryption.unlocked) {
+        return { status: 'skipped', reason: 'encryption-locked' };
+    }
     if (globalThis.navigator?.onLine === false) {
         return { status: 'skipped', reason: 'offline' };
     }

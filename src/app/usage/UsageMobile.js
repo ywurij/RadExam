@@ -28,7 +28,7 @@ export default function UsagePage() {
                 </section>
                 <section style={sectionStyle}>
                     <h2 style={{ margin: '0 0 0.55rem', fontSize: '1.15rem' }}>2. Mac/PC版のデータを取得する</h2>
-                    <p style={{ margin: 0, color: 'var(--text-secondary)', lineHeight: 1.7 }}>Mac/PC版で変更を送信してから、モバイル版で「クラウドから更新を取得」を押します。試験、画像・PDF、解説、学習履歴、中断履歴が端末内へ保存されます。</p>
+                    <p style={{ margin: 0, color: 'var(--text-secondary)', lineHeight: 1.7 }}>Mac/PC版で変更を送信してから、モバイル版で「クラウドから更新を取得」を押します。暗号化が有効な場合は、Mac/PC版で設定したものと同じ同期パスフレーズを入力します。試験、画像・PDF、解説、学習履歴、中断履歴が端末内へ保存されます。</p>
                 </section>
                 <section style={sectionStyle}>
                     <h2 style={{ margin: '0 0 0.55rem', fontSize: '1.15rem' }}>3. 演習・記録・編集</h2>
@@ -40,12 +40,12 @@ export default function UsagePage() {
                 </section>
                 <section style={sectionStyle}>
                     <h2 style={{ margin: '0 0 0.55rem', fontSize: '1.15rem' }}>5. 手動バックアップも保存する</h2>
-                    <p style={{ margin: 0, color: 'var(--text-secondary)', lineHeight: 1.7 }}>緊急復旧用として、データ管理から.radexamファイルを書き出して保管できます。クラウドを使わない端末間移動にも利用できます。</p>
+                    <p style={{ margin: 0, color: 'var(--text-secondary)', lineHeight: 1.7 }}>緊急復旧用として、データ管理から.radexamファイルを書き出して保管できます。クラウドを使わない端末間移動にも利用できます。このファイル自体は暗号化されないため、安全な場所へ保管してください。</p>
                 </section>
             </div>
 
             <aside style={{ marginTop: '1rem', padding: '1rem', borderRadius: '0.9rem', background: 'var(--warning-soft)', color: 'var(--warning-text)', lineHeight: 1.65 }}>
-                同じ項目を複数端末で変更すると競合になります。内容を比較して端末側・クラウド側のどちらを残すか選択し、件数が多い場合は一括処理を利用してください。
+                同期パスフレーズは保存されず、紛失すると暗号化されたクラウドデータを復元できません。安全な場所へ保管してください。同じ項目を複数端末で変更すると競合になります。
             </aside>
 
             <aside style={{ marginTop: '1rem', padding: '1rem', borderRadius: '0.9rem', background: 'var(--accent-soft)', color: 'var(--accent)', lineHeight: 1.65 }}>

@@ -548,6 +548,83 @@ test('rotates to a new sync ID while retaining the previous cloud space', async 
     assert.equal(client.writes.at(-1).path, 'sync-root.json');
 });
 
+test('encrypts change batches and unlocks them on another device', async () => {
+    const client = new FakeDriveClient();
+    const firstDevice = new GoogleDriveSyncProvider({ client });
+    const root = await firstDevice.rotateSyncSpace({
+        passphrase: 'correct horse battery staple',
+    });
+    const batch = {
+        batchVersion: 1,
+        format: 'change-batch',
+        batchId: 'device-a-1-1',
+        deviceId: 'device-a',
+        fromSequence: 1,
+        toSequence: 1,
+        changeCount: 1,
+        createdAt: '2026-07-26T00:00:00.000Z',
+        changes: [{ sequence: 1, payload: { explanation: '秘密の解説' } }],
+    };
+    const { objectKey } = await firstDevice.uploadChangeBatch(batch);
+    const encrypted = client.writes.find(write => write.path === objectKey).value;
+    assert.equal(JSON.stringify(encrypted).includes('秘密の解説'), false);
+
+    client.files.set('sync-root.json', {
+        file: { id: 'root', version: '1' },
+        value: root,
+    });
+    client.files.set(objectKey, {
+        file: { id: 'batch', version: '1' },
+        value: encrypted,
+    });
+    const otherDevice = new GoogleDriveSyncProvider({ client });
+    await otherDevice.ensureActiveSyncSpace();
+    assert.equal(otherDevice.encryptionStatus().unlocked, false);
+    await assert.rejects(otherDevice.downloadChangeBatch({ objectKey }), /パスフレーズ/);
+    await otherDevice.unlockEncryption('correct horse battery staple');
+    assert.deepEqual(await otherDevice.downloadChangeBatch({ objectKey }), batch);
+});
+
+test('encrypts binary objects while preserving their MIME type', async () => {
+    const client = new FakeDriveClient();
+    const provider = new GoogleDriveSyncProvider({ client });
+    await provider.rotateSyncSpace({ passphrase: 'correct horse battery staple' });
+    const plaintext = new Blob(['private-pdf'], { type: 'application/pdf' });
+    await provider.uploadBlob('sha256:test', plaintext);
+    const encryptedWrite = client.writes.find(write => write.type === 'blob');
+    assert.equal(await encryptedWrite.blob.text().then(value => value.includes('private-pdf')), false);
+    client.listFiles = async ({ kind } = {}) => kind === 'object' ? [{
+        id: 'encrypted-object',
+        appProperties: { radexamSyncId: provider.syncId, contentHash: 'sha256:test' },
+    }] : [];
+    client.downloadFile = async () => new Response(encryptedWrite.blob);
+    const restored = await provider.downloadBlob('sha256:test');
+    assert.equal(restored.type, 'application/pdf');
+    assert.equal(await restored.text(), 'private-pdf');
+});
+
+test('keeps end-to-end encryption when rotating an encrypted sync space', async () => {
+    const client = new FakeDriveClient();
+    const provider = new GoogleDriveSyncProvider({ client });
+    const firstRoot = await provider.rotateSyncSpace({
+        passphrase: 'correct horse battery staple',
+    });
+    client.files.set('sync-root.json', {
+        file: { id: 'root', version: '1' },
+        value: firstRoot,
+    });
+
+    const nextRoot = await provider.rotateSyncSpace();
+
+    assert.notEqual(nextRoot.activeSyncId, firstRoot.activeSyncId);
+    assert.deepEqual(nextRoot.encryption, firstRoot.encryption);
+    assert.deepEqual(provider.encryptionStatus(), {
+        enabled: true,
+        unlocked: true,
+        metadata: firstRoot.encryption,
+    });
+});
+
 test('development reset deletes every file in the app data folder', async () => {
     const client = new FakeDriveClient();
     client.allFiles = [{ id: 'file-1' }, { id: 'file-2' }, { id: 'file-3' }];

@@ -13,41 +13,49 @@ import {
     checkGoogleDriveUpdates,
     connectGoogleDriveSync,
     disconnectGoogleDriveSync,
+    enableGoogleDriveEncryption,
     getGoogleDriveSyncState,
     resetGoogleDriveSync,
     resolveGoogleDriveSyncConflict,
     pullGoogleDriveUpdates,
     pushGoogleDriveChanges,
+    unlockGoogleDriveEncryption,
 } from '@/lib/sync/googleDriveBrowserSync';
 import {
     checkGoogleDriveDesktopUpdates,
     connectGoogleDriveDesktopSync,
     disconnectGoogleDriveDesktopSync,
+    enableGoogleDriveDesktopEncryption,
     getGoogleDriveDesktopSyncState,
     resetGoogleDriveDesktopSync,
     resolveGoogleDriveDesktopSyncConflict,
     pullGoogleDriveDesktopUpdates,
     pushGoogleDriveDesktopChanges,
+    unlockGoogleDriveDesktopEncryption,
 } from '@/lib/sync/googleDriveDesktopSync';
 import {
     checkOneDriveUpdates,
     connectOneDriveSync,
     disconnectOneDriveSync,
+    enableOneDriveEncryption,
     getOneDriveSyncState,
     resetOneDriveSync,
     resolveOneDriveSyncConflict,
     pullOneDriveUpdates,
     pushOneDriveChanges,
+    unlockOneDriveEncryption,
 } from '@/lib/sync/oneDriveBrowserSync';
 import {
     checkOneDriveDesktopUpdates,
     connectOneDriveDesktopSync,
     disconnectOneDriveDesktopSync,
+    enableOneDriveDesktopEncryption,
     getOneDriveDesktopSyncState,
     resetOneDriveDesktopSync,
     resolveOneDriveDesktopSyncConflict,
     pullOneDriveDesktopUpdates,
     pushOneDriveDesktopChanges,
+    unlockOneDriveDesktopEncryption,
 } from '@/lib/sync/oneDriveDesktopSync';
 import { SYNC_PROVIDERS } from '@/lib/sync/syncProtocol.mjs';
 import styles from './sync.module.scss';
@@ -216,6 +224,8 @@ export default function CloudSyncPage({ embedded = false }) {
     const [error, setError] = useState('');
     const [progress, setProgress] = useState(null);
     const [progressClock, setProgressClock] = useState(0);
+    const [encryptionPassphrase, setEncryptionPassphrase] = useState('');
+    const [encryptionConfirmation, setEncryptionConfirmation] = useState('');
     const progressPhase = progress?.phase || '';
     const provider = syncState?.connected
         ? syncState.config.provider
@@ -367,6 +377,68 @@ export default function CloudSyncPage({ embedded = false }) {
             'pushing'
         );
         if (response) setMessage(`この端末の変更を送信しました。送信 ${response.result.sentChanges || 0}件。`);
+    };
+
+    const encryptionAction = mode => {
+        if (isOneDrive && isMobileTarget) {
+            return mode === 'enable' ? enableOneDriveEncryption : unlockOneDriveEncryption;
+        }
+        if (isOneDrive) {
+            return mode === 'enable' ? enableOneDriveDesktopEncryption : unlockOneDriveDesktopEncryption;
+        }
+        if (isMobileTarget) {
+            return mode === 'enable' ? enableGoogleDriveEncryption : unlockGoogleDriveEncryption;
+        }
+        return mode === 'enable' ? enableGoogleDriveDesktopEncryption : unlockGoogleDriveDesktopEncryption;
+    };
+
+    const handleUnlockEncryption = async () => {
+        const response = await runAction(
+            () => encryptionAction('unlock')({ clientId, passphrase: encryptionPassphrase }),
+            'unlocking-encryption'
+        );
+        if (response) {
+            setEncryptionPassphrase('');
+            setMessage('クラウド暗号化を解除しました。このアプリを終了するまで同期できます。');
+        }
+    };
+
+    const handleEnableEncryption = async () => {
+        if (encryptionPassphrase !== encryptionConfirmation) {
+            setError('同期パスフレーズの確認入力が一致しません。');
+            return;
+        }
+        if (encryptionPassphrase.length < 12) {
+            setError('同期パスフレーズは12文字以上で入力してください。');
+            return;
+        }
+        if (!window.confirm(
+            `${providerName}上の現在の同期データを削除し、暗号化した新しい同期領域へ切り替えます。\n\n`
+            + '別端末では同じ同期パスフレーズが必要です。パスフレーズを紛失するとクラウドデータは復元できません。続けますか？'
+        )) return;
+        setMessage('');
+        setError('');
+        try {
+            await saveEmergencyBackup('radexam-before-encryption-enable');
+            const response = await runAction(
+                () => encryptionAction('enable')({ clientId, passphrase: encryptionPassphrase }),
+                'enabling-encryption'
+            );
+            if (!response) return;
+            setEncryptionPassphrase('');
+            setEncryptionConfirmation('');
+            setMessage('暗号化を有効にしました。端末データを暗号化してクラウドへ初回送信します。');
+            await new Promise(resolve => window.requestAnimationFrame(resolve));
+            const syncResponse = await runAction(
+                () => directionalAction('push')({ clientId }),
+                'pushing'
+            );
+            if (syncResponse) setMessage(`暗号化した初回同期が完了しました。${describeSyncResult(syncResponse.result)}`);
+        } catch (encryptionError) {
+            console.error('Failed to enable cloud encryption:', encryptionError);
+            setError(encryptionError.message || 'クラウド暗号化を有効にできませんでした。');
+            setBusyPhase('');
+        }
     };
 
     const handleResolveConflicts = async (conflicts, resolution) => {
@@ -536,6 +608,9 @@ export default function CloudSyncPage({ embedded = false }) {
     };
 
     const connected = Boolean(syncState?.connected);
+    const cloudEncryptionEnabled = Boolean(syncState?.cloudEncryption?.enabled);
+    const cloudEncryptionUnlocked = Boolean(syncState?.cloudEncryption?.unlocked);
+    const encryptionLocked = cloudEncryptionEnabled && !cloudEncryptionUnlocked;
     const desktopBridgeUnavailable = !isMobileTarget && syncState && !syncState.bridgeAvailable;
     const configurationMissing = !clientId;
     const unavailable = desktopBridgeUnavailable || configurationMissing;
@@ -637,6 +712,9 @@ export default function CloudSyncPage({ embedded = false }) {
                             <div><dt>データ状態</dt><dd>{describeDataStatus(syncState)}</dd></div>
                             <div><dt>未送信（残り）</dt><dd>{syncState.pendingCount}件</dd></div>
                             <div><dt>競合</dt><dd>{syncState.conflictCount}件</dd></div>
+                            <div><dt>クラウド暗号化</dt><dd>{cloudEncryptionEnabled
+                                ? cloudEncryptionUnlocked ? '有効・解除済み' : '有効・入力待ち'
+                                : '未設定'}</dd></div>
                         </dl>
                         <p className={styles.statusHelp}>
                             起動時・復帰時には更新の有無だけを確認します。
@@ -666,7 +744,7 @@ export default function CloudSyncPage({ embedded = false }) {
                                 type="button"
                                 className={styles.primaryButton}
                                 onClick={handlePull}
-                                disabled={busy || unavailable}
+                                disabled={busy || unavailable || encryptionLocked}
                             >
                                 {busyPhase === 'pulling'
                                     ? '取得中…'
@@ -678,7 +756,7 @@ export default function CloudSyncPage({ embedded = false }) {
                                 type="button"
                                 className={styles.primaryButton}
                                 onClick={handlePush}
-                                disabled={busy || unavailable || syncState.config.remoteChangesAvailable}
+                                disabled={busy || unavailable || encryptionLocked || syncState.config.remoteChangesAvailable}
                             >
                                 {busyPhase === 'pushing'
                                     ? '送信中…'
@@ -688,7 +766,7 @@ export default function CloudSyncPage({ embedded = false }) {
                                 type="button"
                                 className={styles.secondaryButton}
                                 onClick={handleCheck}
-                                disabled={busy || unavailable}
+                                disabled={busy || unavailable || encryptionLocked}
                             >
                                 {busyPhase === 'checking' ? '確認中…' : '更新だけ確認'}
                             </button>
@@ -703,6 +781,51 @@ export default function CloudSyncPage({ embedded = false }) {
                         </>
                     )}
                 </div>
+                {connected && encryptionLocked && (
+                    <div className={styles.encryptionArea}>
+                        <strong>🔒 暗号化された同期データです</strong>
+                        <p>この同期領域を作成したときと同じ同期パスフレーズを入力してください。入力内容は保存されません。</p>
+                        <input
+                            type="password"
+                            autoComplete="current-password"
+                            value={encryptionPassphrase}
+                            onChange={event => setEncryptionPassphrase(event.target.value)}
+                            placeholder="同期パスフレーズ"
+                            disabled={busy}
+                        />
+                        <button type="button" className={styles.primaryButton} onClick={handleUnlockEncryption} disabled={busy || encryptionPassphrase.length < 12}>
+                            暗号化を解除
+                        </button>
+                    </div>
+                )}
+                {connected && !cloudEncryptionEnabled && (
+                    <div className={styles.encryptionArea}>
+                        <strong>クラウド上のデータを端末間暗号化する</strong>
+                        <p>
+                            問題文、解説、進捗、画像、PDFを送信前に暗号化します。
+                            同じパスフレーズを別端末にも入力します。紛失時は復元できません。
+                        </p>
+                        <input
+                            type="password"
+                            autoComplete="new-password"
+                            value={encryptionPassphrase}
+                            onChange={event => setEncryptionPassphrase(event.target.value)}
+                            placeholder="新しい同期パスフレーズ（12文字以上）"
+                            disabled={busy}
+                        />
+                        <input
+                            type="password"
+                            autoComplete="new-password"
+                            value={encryptionConfirmation}
+                            onChange={event => setEncryptionConfirmation(event.target.value)}
+                            placeholder="同期パスフレーズを再入力"
+                            disabled={busy}
+                        />
+                        <button type="button" className={styles.resetButton} onClick={handleEnableEncryption} disabled={busy || encryptionPassphrase.length < 12}>
+                            暗号化を有効にして同期を作り直す
+                        </button>
+                    </div>
+                )}
                 {connected && syncState.config.remoteChangesAvailable && (
                     <p className={styles.syncError}>
                         {syncState.config.remoteSnapshotAvailable
@@ -733,7 +856,7 @@ export default function CloudSyncPage({ embedded = false }) {
                             type="button"
                             className={styles.resetButton}
                             onClick={() => handleReset(false)}
-                            disabled={busy}
+                            disabled={busy || encryptionLocked}
                         >
                             クラウド同期をリセット
                         </button>
@@ -742,7 +865,7 @@ export default function CloudSyncPage({ embedded = false }) {
                                 type="button"
                                 className={styles.hardResetButton}
                                 onClick={() => handleReset(true)}
-                                disabled={busy}
+                                disabled={busy || encryptionLocked}
                             >
                                 開発用：クラウドデータを完全削除
                             </button>
@@ -864,7 +987,7 @@ export default function CloudSyncPage({ embedded = false }) {
 
             <aside className={styles.note}>
                 <strong>手動バックアップも引き続き利用できます</strong>
-                <p>従来の.radexamファイルは、緊急復旧やクラウドを使わないデータ移動用として維持されます。</p>
+                <p>従来の.radexamファイルは、緊急復旧やクラウドを使わないデータ移動用として維持されます。手動バックアップ自体は暗号化されないため、安全な場所へ保管してください。</p>
             </aside>
         </Root>
     );

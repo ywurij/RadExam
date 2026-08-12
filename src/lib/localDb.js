@@ -611,6 +611,7 @@ export const connectLocalSyncTracking = async ({
     deviceName,
     accountLabel,
     cloudSyncId,
+    cloudEncryptionEnabled,
 }) => {
     const supportedProviders = Object.values(SYNC_PROVIDERS);
     if (!supportedProviders.includes(provider)) {
@@ -629,8 +630,12 @@ export const connectLocalSyncTracking = async ({
         throw new Error('同期中のクラウドとは別のサービスまたはアカウントです。先に同期を解除してください。');
     }
     if (currentConfig.enabled && currentConfig.bootstrapCompleted) {
-        const config = cloudSyncId && !currentConfig.cloudSyncId
-            ? await configureLocalSyncJournal({ cloudSyncId })
+        const configUpdates = {
+            ...(cloudSyncId && !currentConfig.cloudSyncId ? { cloudSyncId } : {}),
+            ...(typeof cloudEncryptionEnabled === 'boolean' ? { cloudEncryptionEnabled } : {}),
+        };
+        const config = Object.keys(configUpdates).length > 0
+            ? await configureLocalSyncJournal(configUpdates)
             : currentConfig;
         return {
             alreadyInitialized: true,
@@ -647,6 +652,7 @@ export const connectLocalSyncTracking = async ({
         ...(deviceName ? { deviceName } : {}),
         ...(accountLabel ? { accountLabel } : {}),
         ...(cloudSyncId ? { cloudSyncId } : {}),
+        ...(typeof cloudEncryptionEnabled === 'boolean' ? { cloudEncryptionEnabled } : {}),
         bootstrapCompleted: false,
         connectedAt,
     });

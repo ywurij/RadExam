@@ -243,3 +243,46 @@ test('normalizes a OneDrive ETag race as a manifest conflict', async () => {
         error => error?.code === 'SYNC_MANIFEST_CONFLICT'
     );
 });
+
+test('encrypts and decrypts OneDrive change batches across devices', async () => {
+    const files = new Map();
+    const client = {
+        async readJson(path) {
+            return files.get(path) || { file: null, value: null };
+        },
+        async writeJson(path, value) {
+            const file = { id: `file-${path}`, version: '1' };
+            files.set(path, { file, value });
+            return file;
+        },
+        async listFiles() {
+            return [];
+        },
+        async findFile(path) {
+            return files.get(path)?.file || null;
+        },
+    };
+    const sender = new OneDriveSyncProvider({ client });
+    const root = await sender.rotateSyncSpace({
+        passphrase: 'correct horse battery staple',
+    });
+    const batch = {
+        batchVersion: 1,
+        format: 'change-batch',
+        batchId: 'device-a-1-1',
+        deviceId: 'device-a',
+        fromSequence: 1,
+        toSequence: 1,
+        changeCount: 1,
+        changes: [{ sequence: 1, payload: { explanation: 'OneDriveの秘密' } }],
+    };
+    const { objectKey } = await sender.uploadChangeBatch(batch);
+    assert.equal(JSON.stringify(files.get(objectKey).value).includes('OneDriveの秘密'), false);
+
+    const receiver = new OneDriveSyncProvider({ client });
+    await receiver.ensureActiveSyncSpace();
+    assert.deepEqual(receiver.encryptionStatus().metadata, root.encryption);
+    await assert.rejects(receiver.downloadChangeBatch({ objectKey }), /パスフレーズ/);
+    await receiver.unlockEncryption('correct horse battery staple');
+    assert.deepEqual(await receiver.downloadChangeBatch({ objectKey }), batch);
+});

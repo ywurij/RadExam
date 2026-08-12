@@ -208,6 +208,28 @@
   p { margin: 0; color: var(--text-secondary); font-size: 0.78rem; line-height: 1.55; }
 }
 
+.encryptionArea {
+  display: grid;
+  gap: 0.6rem;
+  margin-top: 1rem;
+  padding: 0.9rem;
+  border: 1px solid var(--border-color);
+  border-radius: 0.8rem;
+  background: var(--surface);
+
+  strong { color: var(--text-primary); font-size: 0.88rem; }
+  p { margin: 0; color: var(--text-secondary); font-size: 0.78rem; line-height: 1.6; }
+  input {
+    min-height: 44px;
+    padding: 0.65rem 0.75rem;
+    border: 1px solid var(--border-color);
+    border-radius: 0.65rem;
+    background: var(--surface-raised);
+    color: var(--text-primary);
+    font: inherit;
+  }
+}
+
 .resetButton, .hardResetButton {
   min-height: 42px;
   padding: 0.6rem 0.85rem;

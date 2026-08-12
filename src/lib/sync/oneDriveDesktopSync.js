@@ -105,6 +105,10 @@ export const getOneDriveDesktopSyncState = async ({ clientId } = {}) => {
         hasSessionToken: Boolean(credentialStatus?.hasCredentials),
         bridgeAvailable: Boolean(bridge),
         encryptionAvailable: credentialStatus?.encryptionAvailable !== false,
+        cloudEncryption: activeSession?.provider?.encryptionStatus?.() || {
+            enabled: Boolean(config.cloudEncryptionEnabled),
+            unlocked: false,
+        },
         dataStatus: !connected
             ? 'not-connected'
             : config.lastSyncError
@@ -118,6 +122,47 @@ export const getOneDriveDesktopSyncState = async ({ clientId } = {}) => {
                             : 'not-verified',
     };
 };
+
+export const unlockOneDriveDesktopEncryption = async ({ clientId, passphrase }) => (
+    runExclusive(async () => {
+        const state = await getOneDriveDesktopSyncState({ clientId });
+        if (!state.connected) throw new Error('先にOneDriveへ接続してください。');
+        const session = createSession(clientId);
+        if (!state.hasSessionToken) await session.bridge.authorize(clientId);
+        await session.provider.ensureActiveSyncSpace();
+        await session.provider.unlockEncryption(passphrase);
+        await connectLocalSyncTracking({
+            ...state.config,
+            cloudEncryptionEnabled: true,
+        });
+        return { state: await getOneDriveDesktopSyncState({ clientId }) };
+    })
+);
+
+export const enableOneDriveDesktopEncryption = async ({ clientId, passphrase }) => (
+    runExclusive(async () => {
+        const state = await getOneDriveDesktopSyncState({ clientId });
+        if (!state.connected) throw new Error('先にOneDriveへ接続してください。');
+        const session = createSession(clientId);
+        if (!state.hasSessionToken) await session.bridge.authorize(clientId);
+        const user = await getSessionUser(session);
+        const { accountId, accountLabel } = verifyAccount(user, state);
+        const encryption = await session.provider.prepareEncryption(passphrase);
+        await session.provider.deleteAllCloudSyncData();
+        await session.provider.ensureActiveSyncSpace();
+        const root = await session.provider.rotateSyncSpace({ encryption });
+        await disconnectLocalSyncTracking({ discardPending: true });
+        await connectLocalSyncTracking({
+            provider: SYNC_PROVIDERS.ONE_DRIVE,
+            accountId,
+            accountLabel,
+            deviceName: `RadExam ${globalThis.navigator?.platform || 'Mac/PC'}`,
+            cloudSyncId: root.activeSyncId,
+            cloudEncryptionEnabled: true,
+        });
+        return { root, state: await getOneDriveDesktopSyncState({ clientId }) };
+    })
+);
 
 export const connectOneDriveDesktopSync = async ({ clientId }) => (
     runExclusive(async () => {
@@ -135,6 +180,7 @@ export const connectOneDriveDesktopSync = async ({ clientId }) => (
             accountLabel,
             deviceName: `RadExam ${globalThis.navigator?.platform || 'Mac/PC'}`,
             cloudSyncId: root.activeSyncId,
+            cloudEncryptionEnabled: Boolean(root.encryption),
         });
         return {
             result: { status: 'connected' },
@@ -293,11 +339,12 @@ export const resetOneDriveDesktopSync = async ({
         const user = await getSessionUser(session);
         const { accountId, accountLabel } = verifyAccount(user, state);
         let deletedFiles = 0;
+        const preservedEncryption = session.provider.prepareRotationEncryption();
         if (hard) {
             ({ deletedFiles } = await session.provider.deleteAllCloudSyncData());
             await session.provider.ensureActiveSyncSpace();
         }
-        const root = await session.provider.rotateSyncSpace();
+        const root = await session.provider.rotateSyncSpace({ encryption: preservedEncryption });
         await disconnectLocalSyncTracking({ discardPending: true });
         await connectLocalSyncTracking({
             provider: SYNC_PROVIDERS.ONE_DRIVE,
@@ -305,6 +352,7 @@ export const resetOneDriveDesktopSync = async ({
             accountLabel,
             deviceName: `RadExam ${globalThis.navigator?.platform || 'Mac/PC'}`,
             cloudSyncId: root.activeSyncId,
+            cloudEncryptionEnabled: Boolean(root.encryption),
         });
         return {
             deletedFiles,
@@ -334,6 +382,9 @@ export const runOneDriveDesktopBackgroundSync = async ({ clientId } = {}) => {
     if (!state.connected) return { status: 'skipped', reason: 'not-connected' };
     if (!state.bridgeAvailable) return { status: 'skipped', reason: 'bridge-unavailable' };
     if (!state.hasSessionToken) return { status: 'skipped', reason: 'reauth-required' };
+    if (state.cloudEncryption.enabled && !state.cloudEncryption.unlocked) {
+        return { status: 'skipped', reason: 'encryption-locked' };
+    }
     if (globalThis.navigator?.onLine === false) {
         return { status: 'skipped', reason: 'offline' };
     }

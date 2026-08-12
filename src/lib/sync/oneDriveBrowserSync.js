@@ -86,6 +86,10 @@ export const getOneDriveSyncState = async () => {
         conflictCount: conflicts.length,
         conflicts,
         hasSessionToken: Boolean(activeSession?.tokenManager?.hasValidToken()),
+        cloudEncryption: activeSession?.provider?.encryptionStatus?.() || {
+            enabled: Boolean(config.cloudEncryptionEnabled),
+            unlocked: false,
+        },
         dataStatus: !connected
             ? 'not-connected'
             : config.lastSyncError
@@ -99,6 +103,45 @@ export const getOneDriveSyncState = async () => {
                             : 'not-verified',
     };
 };
+
+export const unlockOneDriveEncryption = async ({ clientId, passphrase }) => (
+    runExclusive(async () => {
+        const state = await getOneDriveSyncState();
+        if (!state.connected) throw new Error('先にOneDriveへ接続してください。');
+        const session = await authorizeSession(clientId, { interactive: true });
+        await session.provider.ensureActiveSyncSpace();
+        await session.provider.unlockEncryption(passphrase);
+        await connectLocalSyncTracking({
+            ...state.config,
+            cloudEncryptionEnabled: true,
+        });
+        return { state: await getOneDriveSyncState() };
+    })
+);
+
+export const enableOneDriveEncryption = async ({ clientId, passphrase }) => (
+    runExclusive(async () => {
+        const state = await getOneDriveSyncState();
+        if (!state.connected) throw new Error('先にOneDriveへ接続してください。');
+        const session = await authorizeSession(clientId, { interactive: true });
+        const user = await getSessionUser(session);
+        const { accountId, accountLabel } = verifyAccount(user, state);
+        const encryption = await session.provider.prepareEncryption(passphrase);
+        await session.provider.deleteAllCloudSyncData();
+        await session.provider.ensureActiveSyncSpace();
+        const root = await session.provider.rotateSyncSpace({ encryption });
+        await disconnectLocalSyncTracking({ discardPending: true });
+        await connectLocalSyncTracking({
+            provider: SYNC_PROVIDERS.ONE_DRIVE,
+            accountId,
+            accountLabel,
+            deviceName: getDeviceName(),
+            cloudSyncId: root.activeSyncId,
+            cloudEncryptionEnabled: true,
+        });
+        return { root, state: await getOneDriveSyncState() };
+    })
+);
 
 const authorizeSession = async (clientId, { interactive }) => {
     if (!clientId) throw new Error('Microsoft OAuthクライアントIDが設定されていません。');
@@ -142,6 +185,7 @@ export const connectOneDriveSync = async ({ clientId }) => (
             accountLabel,
             deviceName: getDeviceName(),
             cloudSyncId: root.activeSyncId,
+            cloudEncryptionEnabled: Boolean(root.encryption),
         });
         return {
             result: { status: 'connected' },
@@ -275,11 +319,12 @@ export const resetOneDriveSync = async ({
         const user = await getSessionUser(session);
         const { accountId, accountLabel } = verifyAccount(user, state);
         let deletedFiles = 0;
+        const preservedEncryption = session.provider.prepareRotationEncryption();
         if (hard) {
             ({ deletedFiles } = await session.provider.deleteAllCloudSyncData());
             await session.provider.ensureActiveSyncSpace();
         }
-        const root = await session.provider.rotateSyncSpace();
+        const root = await session.provider.rotateSyncSpace({ encryption: preservedEncryption });
         await disconnectLocalSyncTracking({ discardPending: true });
         await connectLocalSyncTracking({
             provider: SYNC_PROVIDERS.ONE_DRIVE,
@@ -287,6 +332,7 @@ export const resetOneDriveSync = async ({
             accountLabel,
             deviceName: getDeviceName(),
             cloudSyncId: root.activeSyncId,
+            cloudEncryptionEnabled: Boolean(root.encryption),
         });
         return { deletedFiles, root, state: await getOneDriveSyncState() };
     })
@@ -308,6 +354,9 @@ export const runOneDriveBackgroundSync = async ({ clientId } = {}) => {
     }
     if (!activeSession?.tokenManager?.hasValidToken()) {
         return { status: 'skipped', reason: 'reauth-required' };
+    }
+    if (state.cloudEncryption.enabled && !state.cloudEncryption.unlocked) {
+        return { status: 'skipped', reason: 'encryption-locked' };
     }
     const response = await checkOneDriveUpdates({ clientId, interactive: false });
     return { status: 'completed', ...response };

@@ -9,6 +9,15 @@ import {
     DEFAULT_SYNC_TRANSFER_TIMEOUT_MS,
     fetchWithTimeout,
 } from './fetchWithTimeout.mjs';
+import {
+    createCloudEncryption,
+    decryptCloudBlob,
+    decryptCloudJson,
+    encryptCloudBlob,
+    encryptCloudJson,
+    unlockCloudEncryption,
+    validateCloudEncryptionMetadata,
+} from './cloudEncryption.mjs';
 
 export const GOOGLE_DRIVE_APPDATA_SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
 
@@ -73,6 +82,28 @@ const scopedPath = (syncId, path) => (
         ? path
         : `spaces/${encodePathSegment(syncId)}/${path}`
 );
+
+const validateSyncRoot = root => {
+    if (
+        !root
+        || root.version !== 1
+        || typeof root.activeSyncId !== 'string'
+        || !root.activeSyncId
+        || root.activeSyncId.length > 2048
+        || !Array.isArray(root.previousSyncIds || [])
+        || (root.previousSyncIds || []).length > 100
+        || (root.previousSyncIds || []).some(item => (
+            !item
+            || typeof item.syncId !== 'string'
+            || !item.syncId
+            || item.syncId.length > 2048
+        ))
+    ) {
+        throw new Error('クラウド同期領域の管理情報が不正です。');
+    }
+    if (root.encryption) validateCloudEncryptionMetadata(root.encryption);
+    return root;
+};
 
 const parseJsonSafely = async response => {
     const text = await response.text();
@@ -598,6 +629,8 @@ export class GoogleDriveSyncProvider {
         this.blobInventory = null;
         this.blobFiles = null;
         this.syncId = syncId || LEGACY_SYNC_ID;
+        this.encryptionMetadata = null;
+        this.encryptionKey = null;
     }
 
     reportProgress(progress) {
@@ -613,6 +646,73 @@ export class GoogleDriveSyncProvider {
         this.blobInventory = null;
         this.blobFiles = null;
         return this.syncId;
+    }
+
+    setEncryptionState(metadata = null, key = null) {
+        this.encryptionMetadata = metadata || null;
+        this.encryptionKey = key || null;
+    }
+
+    encryptionStatus() {
+        return {
+            enabled: Boolean(this.encryptionMetadata),
+            unlocked: Boolean(this.encryptionKey),
+            metadata: this.encryptionMetadata,
+        };
+    }
+
+    requireEncryptionKey() {
+        if (this.encryptionMetadata && !this.encryptionKey) {
+            const error = new Error('クラウド同期は暗号化されています。同期パスフレーズを入力してください。');
+            error.code = 'CLOUD_ENCRYPTION_LOCKED';
+            throw error;
+        }
+        return this.encryptionKey;
+    }
+
+    async unlockEncryption(passphrase) {
+        if (!this.encryptionMetadata) {
+            throw new Error('このクラウド同期領域は暗号化されていません。');
+        }
+        this.encryptionKey = await unlockCloudEncryption(passphrase, this.encryptionMetadata);
+        return this.encryptionStatus();
+    }
+
+    async prepareEncryption(passphrase) {
+        return createCloudEncryption(passphrase);
+    }
+
+    prepareRotationEncryption() {
+        if (!this.encryptionMetadata) return null;
+        return {
+            metadata: this.encryptionMetadata,
+            key: this.requireEncryptionKey(),
+        };
+    }
+
+    lockEncryption() {
+        this.encryptionKey = null;
+        return this.encryptionStatus();
+    }
+
+    async encryptJson(value, logicalPath) {
+        const key = this.requireEncryptionKey();
+        return key ? encryptCloudJson(key, value, logicalPath) : value;
+    }
+
+    async decryptJson(value, logicalPath) {
+        const key = this.requireEncryptionKey();
+        return key ? decryptCloudJson(key, value, logicalPath) : value;
+    }
+
+    async encryptBlob(blob, logicalPath) {
+        const key = this.requireEncryptionKey();
+        return key ? encryptCloudBlob(key, blob, logicalPath) : blob;
+    }
+
+    async decryptBlob(blob, logicalPath) {
+        const key = this.requireEncryptionKey();
+        return key ? decryptCloudBlob(key, blob, logicalPath) : blob;
     }
 
     async ensureActiveSyncSpace() {
@@ -632,16 +732,25 @@ export class GoogleDriveSyncProvider {
                 existingFile: stored.file,
             });
         }
+        validateSyncRoot(root);
         this.setSyncId(root.activeSyncId);
+        const metadata = root.encryption || null;
+        if (JSON.stringify(metadata) !== JSON.stringify(this.encryptionMetadata)) {
+            this.setEncryptionState(metadata, null);
+        }
         return root;
     }
 
-    async rotateSyncSpace() {
+    async rotateSyncSpace({ passphrase = null, encryption: preparedEncryption = null } = {}) {
         const current = await this.ensureActiveSyncSpace();
         const now = new Date().toISOString();
         const nextSyncId = globalThis.crypto?.randomUUID?.()
             || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
         const stored = await this.client.readJson(SYNC_ROOT_PATH);
+        const encryption = preparedEncryption
+            || (passphrase ? await createCloudEncryption(passphrase) : null)
+            || this.prepareRotationEncryption()
+            || { metadata: null, key: null };
         const next = {
             ...current,
             activeSyncId: nextSyncId,
@@ -650,12 +759,14 @@ export class GoogleDriveSyncProvider {
                 { syncId: current.activeSyncId, retiredAt: now },
             ],
             updatedAt: now,
+            encryption: encryption.metadata,
         };
         await this.client.writeJson(SYNC_ROOT_PATH, next, {
             kind: 'sync-root',
             existingFile: stored.file,
         });
         this.setSyncId(nextSyncId);
+        this.setEncryptionState(encryption.metadata, encryption.key);
         return next;
     }
 
@@ -696,11 +807,15 @@ export class GoogleDriveSyncProvider {
     }
 
     async readManifest({ recoverMissingBatches = true } = {}) {
-        const stored = await this.client.readJson(this.path(MANIFEST_PATH));
+        const manifestPath = this.path(MANIFEST_PATH);
+        const stored = await this.client.readJson(manifestPath);
+        const storedManifest = stored.value
+            ? await this.decryptJson(stored.value, manifestPath)
+            : null;
         let manifest = validateSyncManifest(
-            stored.value || createEmptySyncManifest()
+            storedManifest || createEmptySyncManifest()
         );
-        if (recoverMissingBatches) {
+        if (recoverMissingBatches && !this.encryptionMetadata) {
             const knownBatchIds = new Set(manifest.batches.map(batch => batch.batchId));
             const [standardBatchFiles, bulkBatchFiles] = await Promise.all([
                 this.client.listFiles({ kind: 'change-batch' }),
@@ -738,7 +853,7 @@ export class GoogleDriveSyncProvider {
         if (currentRevision !== expectedRevision) {
             throw new SyncManifestConflictError();
         }
-        await this.client.writeJson(path, manifest, {
+        await this.client.writeJson(path, await this.encryptJson(manifest, path), {
             kind: 'manifest',
             existingFile,
             appProperties: { radexamSyncId: this.syncId },
@@ -749,7 +864,7 @@ export class GoogleDriveSyncProvider {
         const path = this.path(batchPath(batch.batchId));
         const existing = await this.client.findFile(path);
         if (!existing) {
-            await this.client.writeJson(path, batch, {
+            await this.client.writeJson(path, await this.encryptJson(batch, path), {
                 kind: 'change-batch',
                 existingFile: null,
                 appProperties: {
@@ -770,7 +885,7 @@ export class GoogleDriveSyncProvider {
         const path = this.path(bulkBatchPath(batch.batchId));
         const existing = await this.client.findFile(path);
         if (!existing) {
-            await this.client.writeJson(path, batch, {
+            await this.client.writeJson(path, await this.encryptJson(batch, path), {
                 kind: 'bulk-change-batch',
                 existingFile: null,
                 appProperties: {
@@ -792,7 +907,7 @@ export class GoogleDriveSyncProvider {
         if (!stored.value) {
             throw new GoogleDriveSyncError(`Google Driveに変更バッチがありません: ${descriptor.objectKey}`);
         }
-        return stored.value;
+        return this.decryptJson(stored.value, descriptor.objectKey);
     }
 
     async loadBlobInventory() {
@@ -825,7 +940,7 @@ export class GoogleDriveSyncProvider {
             : await this.client.findFile(path);
         let written = existing;
         if (!existing) {
-            written = await this.client.writeBlob(path, blob, {
+            written = await this.client.writeBlob(path, await this.encryptBlob(blob, path), {
                 kind: 'object',
                 existingFile: null,
                 appProperties: {
@@ -847,14 +962,19 @@ export class GoogleDriveSyncProvider {
                 `クラウドに同期ファイルがありません: ${contentHash}`
             );
         }
-        return (await this.client.downloadFile(file.id)).blob();
+        assertFileSizeWithin(file, MAX_SYNC_BLOB_FILE_BYTES, 'クラウド上の添付ファイル');
+        const encryptedBlob = await (await this.client.downloadFile(file.id)).blob();
+        if (encryptedBlob.size > MAX_SYNC_BLOB_FILE_BYTES) {
+            throw new GoogleDriveSyncError('クラウド上の添付ファイルが許容サイズを超えているため、取得を中止しました。');
+        }
+        return this.decryptBlob(encryptedBlob, this.path(blobPath(contentHash)));
     }
 
     async uploadSnapshot(snapshotId, blob, descriptor = {}) {
         const path = this.path(snapshotPath(snapshotId));
         const existing = await this.client.findFile(path);
         if (!existing) {
-            await this.client.writeBlob(path, blob, {
+            await this.client.writeBlob(path, await this.encryptBlob(blob, path), {
                 kind: 'snapshot',
                 existingFile: null,
                 resumeKey: `${path}:${descriptor.contentHash}`,
@@ -876,6 +996,7 @@ export class GoogleDriveSyncProvider {
     }
 
     async downloadSnapshot(descriptor) {
-        return (await this.client.readBlob(descriptor.objectKey)).blob;
+        const stored = await this.client.readBlob(descriptor.objectKey);
+        return stored.blob ? this.decryptBlob(stored.blob, descriptor.objectKey) : null;
     }
 }

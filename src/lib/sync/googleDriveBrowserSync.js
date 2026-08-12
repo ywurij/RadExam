@@ -74,6 +74,10 @@ export const getGoogleDriveSyncState = async () => {
         conflictCount: conflicts.length,
         conflicts,
         hasSessionToken: Boolean(activeSession?.tokenManager?.hasValidToken()),
+        cloudEncryption: activeSession?.provider?.encryptionStatus?.() || {
+            enabled: Boolean(config.cloudEncryptionEnabled),
+            unlocked: false,
+        },
         dataStatus: !connected
             ? 'not-connected'
             : config.lastSyncError
@@ -87,6 +91,46 @@ export const getGoogleDriveSyncState = async () => {
                         : 'not-verified',
     };
 };
+
+export const unlockGoogleDriveEncryption = async ({ clientId, passphrase }) => (
+    runExclusive(async () => {
+        const state = await getGoogleDriveSyncState();
+        if (!state.connected) throw new Error('先にGoogle Driveへ接続してください。');
+        const session = await authorizeSession(clientId, { prompt: '' });
+        await session.provider.ensureActiveSyncSpace();
+        await session.provider.unlockEncryption(passphrase);
+        await connectLocalSyncTracking({
+            ...state.config,
+            cloudEncryptionEnabled: true,
+        });
+        return { state: await getGoogleDriveSyncState() };
+    })
+);
+
+export const enableGoogleDriveEncryption = async ({ clientId, passphrase }) => (
+    runExclusive(async () => {
+        const state = await getGoogleDriveSyncState();
+        if (!state.connected) throw new Error('先にGoogle Driveへ接続してください。');
+        const session = await authorizeSession(clientId, { prompt: '' });
+        const user = await getSessionUser(session);
+        const accountId = user?.permissionId || user?.emailAddress;
+        if (String(accountId) !== String(state.config.accountId)) throw new Error('接続済みとは別のGoogleアカウントです。');
+        const encryption = await session.provider.prepareEncryption(passphrase);
+        await session.provider.deleteAllCloudSyncData();
+        await session.provider.ensureActiveSyncSpace();
+        const root = await session.provider.rotateSyncSpace({ encryption });
+        await disconnectLocalSyncTracking({ discardPending: true });
+        await connectLocalSyncTracking({
+            provider: SYNC_PROVIDERS.GOOGLE_DRIVE,
+            accountId,
+            accountLabel: user?.emailAddress || user?.displayName || 'Google Drive',
+            deviceName: getDeviceName(),
+            cloudSyncId: root.activeSyncId,
+            cloudEncryptionEnabled: true,
+        });
+        return { root, state: await getGoogleDriveSyncState() };
+    })
+);
 
 const runExclusive = task => {
     if (activeSync) return activeSync;
@@ -128,6 +172,7 @@ export const connectGoogleDriveSync = async ({ clientId }) => {
             accountLabel,
             deviceName: getDeviceName(),
             cloudSyncId: root.activeSyncId,
+            cloudEncryptionEnabled: Boolean(root.encryption),
         });
         return {
             result: { status: 'connected' },
@@ -281,11 +326,12 @@ export const resetGoogleDriveSync = async ({
             throw new Error('接続済みとは別のGoogleアカウントです。');
         }
         let deletedFiles = 0;
+        const preservedEncryption = session.provider.prepareRotationEncryption();
         if (hard) {
             ({ deletedFiles } = await session.provider.deleteAllCloudSyncData());
             await session.provider.ensureActiveSyncSpace();
         }
-        const root = await session.provider.rotateSyncSpace();
+        const root = await session.provider.rotateSyncSpace({ encryption: preservedEncryption });
         await disconnectLocalSyncTracking({ discardPending: true });
         await connectLocalSyncTracking({
             provider: SYNC_PROVIDERS.GOOGLE_DRIVE,
@@ -293,6 +339,7 @@ export const resetGoogleDriveSync = async ({
             accountLabel: user?.emailAddress || user?.displayName || 'Google Drive',
             deviceName: getDeviceName(),
             cloudSyncId: root.activeSyncId,
+            cloudEncryptionEnabled: Boolean(root.encryption),
         });
         return {
             deletedFiles,
@@ -321,6 +368,9 @@ export const runGoogleDriveBackgroundSync = async ({ clientId } = {}) => {
     }
     if (!activeSession?.tokenManager?.hasValidToken()) {
         return { status: 'skipped', reason: 'reauth-required' };
+    }
+    if (state.cloudEncryption.enabled && !state.cloudEncryption.unlocked) {
+        return { status: 'skipped', reason: 'encryption-locked' };
     }
     const response = await checkGoogleDriveUpdates({ clientId, interactive: false });
     return { status: 'completed', ...response };

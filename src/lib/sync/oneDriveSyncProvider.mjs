@@ -650,6 +650,6 @@ export class OneDriveSyncProvider extends GoogleDriveSyncProvider {
                 `OneDriveに変更バッチがありません: ${descriptor.objectKey}`
             );
         }
-        return stored.value;
+        return this.decryptJson(stored.value, descriptor.objectKey);
     }
 }
