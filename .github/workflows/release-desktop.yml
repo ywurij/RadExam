@@ -163,7 +163,8 @@ jobs:
         working-directory: release-assets
         run: find . -maxdepth 1 -type f ! -name SHA256SUMS.txt -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS.txt
 
-      - name: Attest release artifacts and SBOM
+      - name: Attest release artifacts and SBOM when repository supports it
+        if: ${{ github.event.repository.visibility == 'public' }}
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-path: release-assets/*
