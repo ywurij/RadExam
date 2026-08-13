@@ -1,108 +1,115 @@
-# RadExam - Electron版／モバイル簡易版
+# RadExam
 
-同じNext.jsソースから、Mac・Windows向けElectron版と、iPhone・iPad・Android向けPWA簡易版をビルドします。共通の演習・保存処理は共有し、ビルドターゲットによって管理・編集機能を切り替えます。
+RadExamは、放射線科専門医試験の問題を登録・整理し、Mac、Windows、スマートフォン、タブレットで演習するための学習アプリです。
 
-## ビルドターゲット
+問題、解説、学習履歴などのデータ本体は各端末内に保存されます。クラウド同期を使用しない限り、インターネット接続なしで利用できます。
 
-| コマンド | 対象 | 有効な機能 |
-| --- | --- | --- |
-| `npm run dev:desktop` / `npm run build:desktop` | Electron版 | PDF取込、試験管理、設問・選択肢・正答・画像編集を含む全機能 |
-| `npm run dev:mobile` / `npm run build:mobile` | モバイルPWA | データ転送、問題演習、正答・解説・ジャンル編集、正誤・お気に入り |
-
-`npm run dev`、`npm run build` は後方互換のためElectron版を選択します。機能定義は `src/lib/appTarget.js`、ターゲット別ページの解決は `next.config.mjs` に集約しています。
+> このリポジトリと配布アプリには試験問題や試験PDFは含まれていません。利用者自身が、使用許諾や著作権を確認できる資料だけを登録してください。
 
 ## 主な機能
 
-### 1. 問題演習
-*   **高度なフィルタリング**:
-    *   「不正解のみ」「お気に入り（★）のみ」といった条件で問題を絞り込み。
-    *   複数の条件を「AND（かつ）」「OR（または）」で組み合わせ可能。
-*   **中断再開**:
-    *   演習画面の「中断」を選ぶと、次回アクセス時に保存位置から再開できます。
-    *   選択した条件や問題の並び順も保持されます。
-*   **出題数制限**: 10問、50問など、隙間時間に合わせて出題数を選択可能。
+- PDFから試験・問題を登録し、問題文、選択肢、正答、画像、解説を編集
+- 年度、ジャンル、正誤、お気に入りなどによる問題の絞り込み
+- 正誤履歴、お気に入り、中断位置の端末内保存
+- 解説、表、数式、ジャンルの編集
+- `.radexam`ファイルによるバックアップ・端末間移行
+- Google DriveまたはOneDriveを使った任意の端末間同期
+- ライト、ダーク、端末設定連動の表示モード
 
-### 2. 解説・ジャンル編集
-回答表示後に、問題の解説とジャンルを自分用に編集できます。
-*   **Tiptapエディタ採用**: 直感的な操作でリッチなテキストを作成。
-*   **多機能フォーマット**:太字、色、リスト、テーブル（表）作成に対応。
-*   **数式入力**: LaTeX記法（$E=mc^2$）をサポート。
-### 3. 学習管理
-*   **ステータス管理**: 各問題に「正解」「不正解」「未回答」を記録。
-*   **お気に入り**: 重要な問題や後で見直したい問題に★マークを付与。
-*   **ローカル保存**: 学習状況やメモは端末内に保存されます。
+## 版ごとの違い
 
-### 4. 手動データ転送
-* Electron版から書き出した`.radexam`バックアップを「データ転送」画面で登録します。
-* 試験、問題画像、参照PDF、正誤、お気に入り、解説・ジャンル編集をまとめて引き継ぎます。
-* モバイル側の変更も`.radexam`ファイルへ書き出してバックアップできます。
+| 版 | 対応端末 | 主な用途 |
+| --- | --- | --- |
+| Mac/PC版 | macOS、Windows | PDF取込、試験・問題の登録と編集、問題演習 |
+| モバイル版（PWA） | iPhone、iPad、Android | Mac/PC版で作成したデータの演習、解説・ジャンル編集 |
 
-## モバイル簡易版に含まれない機能
+モバイル版では、PDFからの新規試験作成や問題文・選択肢・画像の編集は行いません。登録済みの参照PDFは表示できます。
 
-* PDFからの問題抽出・新規試験作成
-* 問題文、選択肢、問題画像の編集
-* 試験データ管理ダッシュボード
+## Mac/PC版のインストール
 
-登録済み問題に紐づく参照PDFの表示は、演習に必要なため利用できます。
+[GitHub Releases](https://github.com/ywurij/RadExam/releases)から、お使いの端末に合うファイルをダウンロードします。
 
----
+| 端末 | 選ぶファイル |
+| --- | --- |
+| Apple Silicon Mac（M1以降） | `RadExam-*-macOS-Apple-Silicon.dmg` |
+| Intel Mac | `RadExam-*-macOS-Intel.dmg` |
+| Windows（通常はこちら） | `RadExam-*-Windows-Installer-x64.exe` |
+| Windows（インストール不要） | `RadExam-*-Windows-Portable-x64.exe` |
 
-## 技術スタック
-*   **Frontend**: Next.js 16 (App Router), React 19, Sass (CSS Modules)
-*   **PWA**: オフライン対応（Service Worker）
-*   **Editor**: Tiptap, KaTeX (Math), ProseMirror
-*   **Storage**: localForage / IndexedDB
+### macOS
 
----
+1. DMGを開き、RadExamをApplicationsフォルダーへドラッグします。
+2. ApplicationsからRadExamを起動します。
+3. 未公証版で警告が出た場合は、FinderでControlキーを押しながらRadExamをクリックして「開く」を選びます。または「システム設定」→「プライバシーとセキュリティ」から起動を許可します。
 
-## セットアップ手順
+### Windows
 
-### 1. 環境構築
+Installer版は通常のアプリとしてインストールされ、スタートメニューなどから起動できます。迷った場合はこちらを選んでください。
+
+Portable版はインストールを行わず、ダウンロードしたEXEを置いた場所から直接起動します。一時的な動作確認、USBメモリ等への配置、PCへインストールしたくない場合に向いています。アプリを削除しても端末内データが別の保存領域に残る場合があるため、データ削除はアプリ内の「データ管理」から行ってください。
+
+現在の配布物はコード署名されていないため、macOSやMicrosoft Defender SmartScreenの警告が表示される場合があります。必ず公式GitHub Releasesから取得したファイルだけを使用してください。
+
+## iPhone・iPad・Androidへの導入
+
+モバイル版はPWAとして、次のURLで配信しています。
+
+**[RadExam モバイル版を開く](https://rad-exam.vercel.app/)**
+
+- iPhone / iPad: Safariの共有メニューから「ホーム画面に追加」を選択
+- Android: Chromeのメニューから「アプリをインストール」または「ホーム画面に追加」を選択
+
+モバイル版のURLを変更すると、別アプリ・別保存領域として扱われることがあります。URL変更や再インストールの前に`.radexam`バックアップを保存してください。
+
+詳しい配布方法は[配布・インストールガイド](docs/installation-guide.md)を参照してください。
+
+## 基本的な使い方
+
+1. Mac/PC版の「試験管理」からPDFを取り込み、試験名、年度、問題内容を確認します。
+2. ホーム画面で試験、年度、ジャンル、出題数などを選んで演習を開始します。
+3. 回答後に正誤、お気に入り、解説、ジャンルを記録します。
+4. 「データ管理 / バックアップ」から、定期的に`.radexam`バックアップを書き出します。
+5. 別端末へ移す場合は、バックアップを読み込むか、端末間共有でクラウド同期を使用します。
+
+アプリ内の「使い方」ページにも、各画面の操作方法があります。
+
+## データ保存とクラウド同期
+
+- データ本体は常に各端末内へ保存され、オフラインでも演習・編集できます。
+- Google DriveまたはOneDriveのアプリ専用領域へ、利用者の操作で変更を送受信できます。
+- 同時に接続するクラウドは1サービスだけです。
+- クラウド暗号化を有効にした場合、同じ同期パスフレーズがないと別端末で復元できません。
+- クラウド同期はバックアップの代わりではありません。緊急復旧用の`.radexam`ファイルも保管してください。
+
+クラウド同期を使わない場合、GoogleまたはMicrosoftアカウントへの接続は不要です。
+
+## 更新時の注意
+
+更新前に`.radexam`バックアップを保存してください。通常、Mac/PC版は新しいInstallerまたはDMGを使って更新でき、端末内データは維持されます。Portable版は新しいEXEへ置き換えます。
+
+Releaseに含まれる`SHA256SUMS.txt`は、ダウンロードした配布ファイルが破損・改変していないか確認するための上級者向け情報です。通常のインストールには不要です。
+
+## 開発者向け
+
+Node.js 22を推奨します。
+
 ```bash
-# 依存パッケージのインストール
-npm install
+npm ci
+npm run dev:desktop  # Mac/PC版
+npm run dev:mobile   # モバイル版
+npm test
 ```
 
-### 2. Electron版として起動
-```bash
-npm run dev:desktop
-```
-ブラウザで `http://localhost:3000` にアクセスします。
+デスクトップ配布版のビルドには、GitHub Actions側のOAuth設定が必要です。[GitHub Releases版のOAuth設定](docs/desktop-release-oauth.md)を参照してください。
 
-### 3. モバイル版を実機で利用する
+- [GitHub・Vercel公開手順](docs/github-vercel-deployment.md)
+- [GitHub Releasesによるデスクトップ版配布ガイド](docs/github-electron-release.md)
+- [デスクトップ版の署名・公証ガイド](docs/desktop-code-signing-guide.md)
 
-同じネットワーク上の端末から開けるように起動します。
+## 使用技術
 
-```bash
-npm run dev:mobile -- --hostname 0.0.0.0
-```
+Next.js、React、Electron、localForage / IndexedDB、Tiptap、KaTeXを使用しています。依存パッケージの正確なバージョンは`package-lock.json`で管理しています。一般利用者がインストール時に追加パッケージを用意する必要はありません。
 
-SafariまたはChromeでアクセスし、ブラウザのメニューからホーム画面へ追加します。本番利用ではHTTPS配信が必要です。
+## 利用条件
 
-### 4. 核医学PDFの巻末図ページ参照
-
-核医学専門医試験PDFは、標準では個別図を切り出さず、問題文中の「別紙 No.」と一致する巻末図ページを設問に紐付けます。問題文・選択肢のページは表示せず、複雑な画像・レジェンド配置を巻末の原本どおり確認できます。元PDFは一度だけ保存されるため、同じページを複数設問で共有してもページ画像は複製されません。
-
-従来の個別図抽出とQwen3-VL連携はアプリから外し、参照用ソースを
-[`archive/nuclear-vlm`](archive/nuclear-vlm) に保存しています。
-
----
-
-## モバイル版のデプロイ（Vercel等）
-本番環境として Vercel へのデプロイを推奨します。
-
-1.  GitHubにコードをプッシュ。
-2.  Vercelと連携し、リポジトリをインポート。
-3.  ビルドコマンドを `npm run build:mobile` に設定。
-4.  自動的にビルド・デプロイが完了し、URLが発行されます。
-
-Mac・Windows・iPhone・iPad・Android への配布方法と、HTTPS 公開を使わない APK / TestFlight の選択肢は、[配布・インストールガイド](docs/installation-guide.md)を参照してください。
-
-ローカル Git リポジトリの GitHub への初回アップロード、Vercel 連携、モバイル版の HTTPS 公開と更新運用は、[GitHub・Vercel 公開手順](docs/github-vercel-deployment.md)を参照してください。
-
-Electron版のmacOS／Windows向けアプリをGitHub Releasesで配布する方法と、配布前の修正事項は、[GitHub ReleasesによるElectron版配布ガイド](docs/github-electron-release.md)を参照してください。
-
----
-
-## ライセンス
-Private / Personal Use Only
+ソースコードのライセンス条件は現在整備中です。利用・再配布条件は各Releaseの案内に従ってください。

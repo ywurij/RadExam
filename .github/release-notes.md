@@ -1,23 +1,23 @@
 ## RadExam デスクトップ版
 
-このReleaseは、macOS版とWindows版の配布候補を確認するためのドラフトです。
+放射線科専門医試験の問題登録・編集・演習に使えるMac/PC版です。
 
-### ファイル
+### ダウンロードするファイル
 
-- `RadExam-*-mac-arm64.dmg` / `.zip`: Apple Silicon Mac
-- `RadExam-*-mac-x64.dmg` / `.zip`: Intel Mac
-- `RadExam-Setup-*-windows-x64.exe`: Windows NSISインストーラー
-- `RadExam-Portable-*-windows-x64.exe`: Windows Portable版
-- `RadExam-v*-sbom.cdx.json`: 使用パッケージを記録したCycloneDX SBOM
-- `SHA256SUMS.txt`: 配布ファイルのSHA-256チェックサム
+- Apple Silicon Mac（M1以降）: `RadExam-*-macOS-Apple-Silicon.dmg`
+- Intel Mac: `RadExam-*-macOS-Intel.dmg`
+- Windows（推奨）: `RadExam-*-Windows-Installer-x64.exe`
+- Windows（インストール不要）: `RadExam-*-Windows-Portable-x64.exe`
 
-### 公開前の注意
+WindowsのInstaller版は通常利用向けで、スタートメニュー等へ登録されます。Portable版はインストールせず、そのEXEを置いた場所から起動したい場合に使用します。迷った場合はInstaller版を選んでください。
 
-現在のmacOS版は証明書なしのad-hoc署名で、公証されていません。Windows版もコード署名されていません。一般公開する場合は、少なくとも次のいずれかを行ってください。
+`SHA256SUMS.txt`は、ダウンロードしたファイルが破損・改変していないか確認するための上級者向け情報です。通常のインストールには使用しません。
 
-1. macOSをDeveloper IDで署名・公証し、Windowsをコード署名する。
-2. macOS版がad-hoc署名・未公証、Windows版が署名なしであることと、OSの警告画面から起動する手順をRelease本文へ明記する。
+### 初回起動時の注意
 
-macOS版の初回起動時は、FinderでアプリをControlキーを押しながらクリックして「開く」を選ぶか、「システム設定」→「プライバシーとセキュリティ」から「このまま開く」を選んでください。
+現在のmacOS版はAppleの公証なし、Windows版はコード署名なしです。このため、OSの警告が表示される場合があります。必ずこのGitHub Releaseから入手したファイルだけを使用してください。
 
-ドラフトを公開する前に、GitHubから成果物をダウンロードし、macOSとWindows 11の実機で起動、PDF取り込み、演習、編集、バックアップ移行を再確認してください。
+- macOS: FinderでアプリをControlキーを押しながらクリックして「開く」を選ぶか、「システム設定」→「プライバシーとセキュリティ」から起動を許可します。
+- Windows: Microsoft Defender SmartScreenが表示された場合は、配布元とファイル名を確認してから実行します。
+
+データ移行・復旧に備え、更新前には「データ管理 / バックアップ」から`.radexam`バックアップを保存してください。

@@ -37,29 +37,40 @@ jobs:
       - name: Match tag and package version
         run: node scripts/check-release-tag.mjs "${GITHUB_REF_NAME}"
 
+      - name: Validate desktop OAuth configuration
+        shell: bash
+        env:
+          NEXT_PUBLIC_GOOGLE_DESKTOP_CLIENT_ID: ${{ vars.NEXT_PUBLIC_GOOGLE_DESKTOP_CLIENT_ID }}
+          GOOGLE_DESKTOP_CLIENT_SECRET: ${{ secrets.GOOGLE_DESKTOP_CLIENT_SECRET }}
+          NEXT_PUBLIC_MICROSOFT_DESKTOP_CLIENT_ID: ${{ vars.NEXT_PUBLIC_MICROSOFT_DESKTOP_CLIENT_ID }}
+        run: |
+          missing=0
+          for name in NEXT_PUBLIC_GOOGLE_DESKTOP_CLIENT_ID GOOGLE_DESKTOP_CLIENT_SECRET NEXT_PUBLIC_MICROSOFT_DESKTOP_CLIENT_ID; do
+            if [ -z "${!name}" ]; then
+              echo "::error::GitHub Actions setting ${name} is not configured."
+              missing=1
+            fi
+          done
+          exit "${missing}"
+
       - name: Run tests
         run: npm test
 
       - name: Run lint
         run: npm run lint
 
-      - name: Create CycloneDX SBOM
-        run: npm sbom --sbom-format cyclonedx > RadExam-${GITHUB_REF_NAME}-sbom.cdx.json
-
-      - name: Create draft Release and upload SBOM
+      - name: Create draft Release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
-          SBOM_FILE: RadExam-${{ github.ref_name }}-sbom.cdx.json
         run: |
           if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
             if [ "$(gh release view "${RELEASE_TAG}" --json isDraft --jq .isDraft)" != "true" ]; then
               echo "Refusing to overwrite published release ${RELEASE_TAG}."
               exit 1
             fi
-            gh release upload "${RELEASE_TAG}" "${SBOM_FILE}" --clobber
           else
-            gh release create "${RELEASE_TAG}" "${SBOM_FILE}" \
+            gh release create "${RELEASE_TAG}" \
               --draft \
               --verify-tag \
               --notes-file .github/release-notes.md \
@@ -75,9 +86,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        arch:
-          - arm64
-          - x64
+        include:
+          - arch: arm64
+            label: Apple-Silicon
+          - arch: x64
+            label: Intel
     steps:
       - name: Check out tagged source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -93,17 +106,27 @@ jobs:
 
       - name: Build desktop runtime
         run: npm run build:desktop
+        env:
+          NEXT_PUBLIC_GOOGLE_DESKTOP_CLIENT_ID: ${{ vars.NEXT_PUBLIC_GOOGLE_DESKTOP_CLIENT_ID }}
+          GOOGLE_DESKTOP_CLIENT_SECRET: ${{ secrets.GOOGLE_DESKTOP_CLIENT_SECRET }}
+          NEXT_PUBLIC_MICROSOFT_DESKTOP_CLIENT_ID: ${{ vars.NEXT_PUBLIC_MICROSOFT_DESKTOP_CLIENT_ID }}
 
       - name: Build ad-hoc signed macOS packages
         run: npx electron-builder --mac --${{ matrix.arch }} --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
 
+      - name: Rename macOS package for users
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mv "dist/RadExam-${version}-macOS-${{ matrix.arch }}.dmg" "dist/RadExam-${version}-macOS-${{ matrix.label }}.dmg"
+
       - name: Upload macOS packages to draft Release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
-        run: gh release upload "${RELEASE_TAG}" dist/*.dmg dist/*.zip --clobber
+        run: gh release upload "${RELEASE_TAG}" dist/*.dmg --clobber
 
   windows:
     name: Build Windows (x64)
@@ -126,6 +149,10 @@ jobs:
 
       - name: Build desktop runtime
         run: npm run build:desktop
+        env:
+          NEXT_PUBLIC_GOOGLE_DESKTOP_CLIENT_ID: ${{ vars.NEXT_PUBLIC_GOOGLE_DESKTOP_CLIENT_ID }}
+          GOOGLE_DESKTOP_CLIENT_SECRET: ${{ secrets.GOOGLE_DESKTOP_CLIENT_SECRET }}
+          NEXT_PUBLIC_MICROSOFT_DESKTOP_CLIENT_ID: ${{ vars.NEXT_PUBLIC_MICROSOFT_DESKTOP_CLIENT_ID }}
 
       - name: Build unsigned Windows packages
         run: npx electron-builder --win --x64 --publish never
@@ -163,7 +190,7 @@ jobs:
         working-directory: release-assets
         run: find . -maxdepth 1 -type f ! -name SHA256SUMS.txt -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS.txt
 
-      - name: Attest release artifacts and SBOM when repository supports it
+      - name: Attest release artifacts when repository supports it
         if: ${{ github.event.repository.visibility == 'public' }}
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:

@@ -1,6 +1,6 @@
 {
   "name": "exam-app",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "private": true,
   "main": "electron/main.js",
   "scripts": {
@@ -76,13 +76,10 @@
       "**/*"
     ],
     "mac": {
-      "target": [
-        "dmg",
-        "zip"
-      ],
+      "target": "dmg",
       "category": "public.app-category.education",
       "icon": "icon-512x512.png",
-      "artifactName": "${productName}-${version}-mac-${arch}.${ext}",
+      "artifactName": "${productName}-${version}-macOS-${arch}.${ext}",
       "identity": "-",
       "hardenedRuntime": false,
       "notarize": false
@@ -95,10 +92,10 @@
       "icon": "icon-512x512.png"
     },
     "nsis": {
-      "artifactName": "${productName}-Setup-${version}-windows-${arch}.${ext}"
+      "artifactName": "${productName}-${version}-Windows-Installer-${arch}.${ext}"
     },
     "portable": {
-      "artifactName": "${productName}-Portable-${version}-windows-${arch}.${ext}"
+      "artifactName": "${productName}-${version}-Windows-Portable-${arch}.${ext}"
     },
     "publish": [
       {
