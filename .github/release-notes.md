@@ -8,6 +8,7 @@
 - `RadExam-*-mac-x64.dmg` / `.zip`: Intel Mac
 - `RadExam-Setup-*-windows-x64.exe`: Windows NSISインストーラー
 - `RadExam-Portable-*-windows-x64.exe`: Windows Portable版
+- `RadExam-v*-sbom.cdx.json`: 使用パッケージを記録したCycloneDX SBOM
 - `SHA256SUMS.txt`: 配布ファイルのSHA-256チェックサム
 
 ### 公開前の注意

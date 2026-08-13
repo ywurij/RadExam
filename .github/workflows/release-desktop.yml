@@ -19,6 +19,8 @@ jobs:
   validate:
     name: Validate release source
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Check out tagged source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -44,17 +46,32 @@ jobs:
       - name: Create CycloneDX SBOM
         run: npm sbom --sbom-format cyclonedx > RadExam-${GITHUB_REF_NAME}-sbom.cdx.json
 
-      - name: Upload SBOM
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: release-security-metadata
-          path: RadExam-${{ github.ref_name }}-sbom.cdx.json
-          if-no-files-found: error
+      - name: Create draft Release and upload SBOM
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          SBOM_FILE: RadExam-${{ github.ref_name }}-sbom.cdx.json
+        run: |
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            if [ "$(gh release view "${RELEASE_TAG}" --json isDraft --jq .isDraft)" != "true" ]; then
+              echo "Refusing to overwrite published release ${RELEASE_TAG}."
+              exit 1
+            fi
+            gh release upload "${RELEASE_TAG}" "${SBOM_FILE}" --clobber
+          else
+            gh release create "${RELEASE_TAG}" "${SBOM_FILE}" \
+              --draft \
+              --verify-tag \
+              --notes-file .github/release-notes.md \
+              --title "RadExam ${RELEASE_TAG}"
+          fi
 
   mac:
     name: Build macOS (${{ matrix.arch }})
     needs: validate
     runs-on: macos-14
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -82,20 +99,18 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
 
-      - name: Upload macOS packages
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: release-macos-${{ matrix.arch }}
-          path: |
-            dist/*.dmg
-            dist/*.zip
-          if-no-files-found: error
-          compression-level: 0
+      - name: Upload macOS packages to draft Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: gh release upload "${RELEASE_TAG}" dist/*.dmg dist/*.zip --clobber
 
   windows:
     name: Build Windows (x64)
     needs: validate
     runs-on: windows-latest
+    permissions:
+      contents: write
     steps:
       - name: Check out tagged source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -117,13 +132,12 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
 
-      - name: Upload Windows packages
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: release-windows-x64
-          path: dist/*.exe
-          if-no-files-found: error
-          compression-level: 0
+      - name: Upload Windows packages to draft Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: gh release upload "${RELEASE_TAG}" dist/*.exe --clobber
 
   release:
     name: Create draft GitHub Release
@@ -139,37 +153,23 @@ jobs:
       - name: Check out release metadata
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - name: Download packages
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          pattern: release-*
-          path: release-assets
-          merge-multiple: true
+      - name: Download packages from draft Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: gh release download "${RELEASE_TAG}" --dir release-assets
 
       - name: Create SHA-256 checksums
         working-directory: release-assets
-        run: sha256sum * > SHA256SUMS.txt
+        run: find . -maxdepth 1 -type f ! -name SHA256SUMS.txt -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS.txt
 
       - name: Attest release artifacts and SBOM
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-path: release-assets/*
 
-      - name: Create or update draft Release
+      - name: Upload checksums to draft Release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
-        run: |
-          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
-            if [ "$(gh release view "${RELEASE_TAG}" --json isDraft --jq .isDraft)" != "true" ]; then
-              echo "Refusing to overwrite published release ${RELEASE_TAG}."
-              exit 1
-            fi
-            gh release upload "${RELEASE_TAG}" release-assets/* --clobber
-          else
-            gh release create "${RELEASE_TAG}" release-assets/* \
-              --draft \
-              --verify-tag \
-              --notes-file .github/release-notes.md \
-              --title "RadExam ${RELEASE_TAG}"
-          fi
+        run: gh release upload "${RELEASE_TAG}" release-assets/SHA256SUMS.txt --clobber
