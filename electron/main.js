@@ -19,6 +19,7 @@ const {
 const { GoogleDesktopOAuthManager } = require('./googleDesktopOAuth');
 const { MicrosoftDesktopOAuthManager } = require('./microsoftDesktopOAuth');
 const { loadCloudSyncConfig } = require('./cloudSyncConfig');
+const { performCloudSyncFetch } = require('./cloudSyncFetch');
 const {
   DEFAULT_ZOOM_FACTOR,
   loadZoomFactor,
@@ -343,6 +344,10 @@ const registerCloudSyncIpc = () => {
   ipcMain.handle('cloud-sync:microsoft-clear', (event, clientId) => {
     ensureMainWindowSender(event);
     return getMicrosoftManager(clientId).clear();
+  });
+  ipcMain.handle('cloud-sync:fetch', async (event, request) => {
+    ensureMainWindowSender(event);
+    return performCloudSyncFetch(request);
   });
 };
 

@@ -2,6 +2,11 @@
 
 放射線科専門医試験の問題登録・編集・演習に使えるMac/PC版です。
 
+### v0.1.5の修正
+
+- Mac/PC版でGoogle Drive／OneDriveへ接続後、クラウドデータ取得時に`Failed to fetch`となる問題を修正しました。
+- クラウドAPI通信をElectronの保護された通信経路へ移し、取得・送信・分割転送を安定させました。
+
 ### ダウンロードするファイル
 
 - Apple Silicon Mac（M1以降）: `RadExam-*-macOS-Apple-Silicon.dmg`

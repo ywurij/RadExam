@@ -14,6 +14,7 @@ import {
     GoogleDriveSyncProvider,
 } from './googleDriveSyncProvider.mjs';
 import { SYNC_PROVIDERS } from './syncProtocol.mjs';
+import { createDesktopCloudFetch } from './desktopCloudFetch.mjs';
 
 let activeSession = null;
 let activeSync = null;
@@ -33,6 +34,7 @@ const createSession = clientId => {
     if (!bridge) throw new Error('Mac/PC版アプリのGoogle認証機能を利用できません。');
     const client = new GoogleDriveAppDataClient({
         getAccessToken: () => bridge.getAccessToken(clientId),
+        fetchImpl: createDesktopCloudFetch(bridge),
         onUploadProgress: progress => publishProgress({
             phase: progress.progressPhase || (
                 String(progress.path || '').startsWith('snapshots/')
