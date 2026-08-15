@@ -2,6 +2,7 @@ const {
   app,
   BrowserWindow,
   ipcMain,
+  Menu,
   safeStorage,
   shell,
 } = require('electron');
@@ -29,10 +30,16 @@ const {
   normalizeGoogleClientId,
   normalizeMicrosoftClientId,
 } = require('./oauthClientId');
+const {
+  APPLICATION_NAME,
+  installMacApplicationMenu,
+  setApplicationProcessName,
+} = require('./applicationIdentity');
 
 // 表示名を変更しても既存の試験・画像・進捗を失わないよう、保存先は旧版と共通にする。
 app.setPath('userData', path.join(app.getPath('appData'), 'exam-app'));
-app.setName('RadExam');
+app.setName(APPLICATION_NAME);
+setApplicationProcessName(process);
 
 let nextProcess = null;
 let embeddedNextServer = null;
@@ -206,7 +213,6 @@ async function startPackagedNextServer() {
     return embeddedNextServer;
   };
 
-  const previousTitle = process.title;
   try {
     await startServer({
       dir: projectPath,
@@ -218,7 +224,8 @@ async function startPackagedNextServer() {
     });
   } finally {
     http.createServer = originalCreateServer;
-    process.title = previousTitle;
+    // Next.jsは起動中にprocess.titleを変更するため、macOSのアプリメニュー名を復元する。
+    setApplicationProcessName(process);
   }
 
   const assignedPort = Number(embeddedNextServer?.address()?.port);
@@ -369,6 +376,7 @@ const registerDisplayIpc = () => {
 
 // Electron の初期化完了時に実行
 app.whenReady().then(async () => {
+  installMacApplicationMenu(Menu);
   displayZoomFactor = loadZoomFactor(app.getPath('userData'));
   cloudSyncConfig = loadCloudSyncConfig({
     appPath: app.getAppPath(),
