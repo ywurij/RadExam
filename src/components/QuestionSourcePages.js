@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { configurePdfJsWorker } from '@/lib/pdfJsWorker.mjs';
 
 const documentCache = new WeakMap();
 
@@ -8,7 +9,7 @@ const loadPdfDocument = async blob => {
     if (documentCache.has(blob)) return documentCache.get(blob);
     const promise = (async () => {
         const pdfjs = await import('pdfjs-dist/build/pdf.mjs');
-        pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
+        configurePdfJsWorker(pdfjs);
         const bytes = new Uint8Array(await blob.arrayBuffer());
         return pdfjs.getDocument({
             data: bytes,

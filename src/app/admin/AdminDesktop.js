@@ -26,6 +26,7 @@ import {
 } from '@/lib/nuclearFigureGeometry.mjs';
 import { buildNuclearSourcePageAssignments } from '@/lib/nuclearSourcePages.mjs';
 import { getExamImportDefaults } from '@/lib/examImportDefaults.mjs';
+import { configurePdfJsWorker } from '@/lib/pdfJsWorker.mjs';
 import {
     assignNearestUniqueLabels,
     buildSourceGridLayouts,
@@ -3381,7 +3382,7 @@ export default function AdminPage() {
 
             // pdfjs-dist の ESM モジュールを動的インポート
             const pdfjsLib = await import('pdfjs-dist/build/pdf.mjs');
-            pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
+            configurePdfJsWorker(pdfjsLib);
 
             const arrayBuffer = await file.arrayBuffer();
             const loadingTask = pdfjsLib.getDocument({

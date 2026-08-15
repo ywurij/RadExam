@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from 'react';
+import { configurePdfJsWorker } from '@/lib/pdfJsWorker.mjs';
 
 function PdfPage({ pdf, pageNumber, active, onClip, onClipReady }) {
     const canvasRef = useRef(null);
@@ -108,7 +109,7 @@ export default function PdfClipper({ pdfBlob, onClip, initialSearchText = '', sc
         if (!pdfBlob) return undefined;
         (async () => {
             const pdfjs = await import('pdfjs-dist/build/pdf.mjs');
-            pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
+            configurePdfJsWorker(pdfjs);
             const bytes = new Uint8Array(await pdfBlob.arrayBuffer());
             const document = await pdfjs.getDocument({ data: bytes, cMapUrl: '/cmaps/', cMapPacked: true, standardFontDataUrl: '/standard_fonts/', wasmUrl: '/' }).promise;
             if (cancelled) return;

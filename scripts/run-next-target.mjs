@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { rmSync } from 'node:fs';
 import path from 'node:path';
+import { syncPdfJsWorker } from './sync-pdfjs-assets.mjs';
 
 const [target, command, ...args] = process.argv.slice(2);
 
@@ -10,6 +11,10 @@ if (!['desktop', 'mobile'].includes(target) || !['dev', 'build', 'start'].includ
 }
 
 const nextBin = path.join(process.cwd(), 'node_modules', 'next', 'dist', 'bin', 'next');
+
+if (command === 'dev' || command === 'build') {
+    syncPdfJsWorker();
+}
 
 // ターゲットを切り替えた際に、前回ビルドのルートやチャンクが混在しないよう生成物だけを初期化する。
 if (command === 'build') {
