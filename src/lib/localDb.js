@@ -10,6 +10,7 @@ import {
     findMissingBackupImageKeys,
     findMissingBackupPdfKeys,
 } from '@/lib/backupData.mjs';
+import { dataUrlToBlob } from '@/lib/dataUrl.mjs';
 import {
     buildDeleteSyncChangeInput,
     buildInitialSyncChangeInputs,
@@ -260,11 +261,6 @@ const buildExamImageKey = (examId, questionId, imageIndex) => {
         ? crypto.randomUUID()
         : `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
     return `${buildExamImageKeyPrefix(examId)}${questionId}::${imageIndex}::${suffix}`;
-};
-
-const dataUrlToBlob = async (dataUrl) => {
-    const response = await fetch(dataUrl);
-    return response.blob();
 };
 
 const blobToDataUrl = (blob) => new Promise((resolve, reject) => {
