@@ -12,6 +12,8 @@ test('uses restrictive browser security headers without broad remote images', as
     assert.match(csp, /script-src-attr 'none'/);
     assert.match(csp, /manifest-src 'self'/);
     assert.match(csp, /media-src 'self' blob:/);
+    assert.match(csp, /connect-src[^;]*https:\/\/\*\.1drv\.com/);
+    assert.match(csp, /connect-src[^;]*https:\/\/\*\.microsoftpersonalcontent\.com/);
     assert.doesNotMatch(csp, /img-src[^;]*https:/);
     assert.equal(headers['Cross-Origin-Opener-Policy'], 'same-origin-allow-popups');
     assert.equal(headers['Cross-Origin-Resource-Policy'], 'same-origin');

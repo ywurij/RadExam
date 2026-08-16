@@ -13,6 +13,16 @@ import {
 export const ONEDRIVE_APP_FOLDER_SCOPE = 'Files.ReadWrite.AppFolder';
 
 const GRAPH_BASE = 'https://graph.microsoft.com/v1.0';
+const MICROSOFT_STORAGE_DOMAINS = Object.freeze([
+    '1drv.com',
+    'onedrive.com',
+    'onedrive.live.com',
+    'storage.live.com',
+    'livefilestore.com',
+    'microsoftpersonalcontent.com',
+    'sharepoint.com',
+    'sharepoint-df.com',
+]);
 const SIMPLE_UPLOAD_LIMIT = 4 * 1024 * 1024;
 const UPLOAD_FRAGMENT_UNIT = 320 * 1024;
 const DEFAULT_UPLOAD_CHUNK_SIZE = 10 * 1024 * 1024;
@@ -24,6 +34,28 @@ const defaultFetch = (...args) => globalThis.fetch(...args);
 const defaultSleep = milliseconds => new Promise(resolve => {
     setTimeout(resolve, milliseconds);
 });
+
+const isHostOrSubdomain = (hostname, domain) => (
+    hostname === domain || hostname.endsWith(`.${domain}`)
+);
+
+const assertMicrosoftDownloadUrl = rawUrl => {
+    let url;
+    try {
+        url = new URL(String(rawUrl || ''));
+    } catch {
+        throw new OneDriveSyncError('OneDriveのダウンロード先URLが不正です。');
+    }
+    if (
+        url.protocol !== 'https:'
+        || url.username
+        || url.password
+        || !MICROSOFT_STORAGE_DOMAINS.some(domain => isHostOrSubdomain(url.hostname, domain))
+    ) {
+        throw new OneDriveSyncError('OneDriveから許可されていないダウンロード先が返されました。');
+    }
+    return url.toString();
+};
 
 const createDefaultUploadStateStore = () => ({
     get(key) {
@@ -344,24 +376,63 @@ export class OneDriveAppFolderClient {
         return normalizeDriveItem(await response.json(), normalized);
     }
 
-    async getFileMetadata(fileId) {
+    async getFileMetadata(fileId, { includeDownloadUrl = false } = {}) {
+        const query = includeDownloadUrl
+            ? `?$select=${encodeURIComponent('id,name,size,eTag,cTag,lastModifiedDateTime,@microsoft.graph.downloadUrl')}`
+            : '';
         const response = await this.request(
-            `${GRAPH_BASE}/me/drive/items/${encodeURIComponent(fileId)}`
+            `${GRAPH_BASE}/me/drive/items/${encodeURIComponent(fileId)}${query}`
         );
         return normalizeDriveItem(await response.json(), '');
     }
 
-    async downloadFile(fileId) {
-        return this.request(
-            `${GRAPH_BASE}/me/drive/items/${encodeURIComponent(fileId)}/content`
-        );
+    async downloadFile(fileOrId) {
+        const knownFile = fileOrId && typeof fileOrId === 'object' ? fileOrId : null;
+        const fileId = knownFile?.id || fileOrId;
+        let downloadUrl = knownFile?.['@microsoft.graph.downloadUrl'];
+        if (!downloadUrl) {
+            const metadata = await this.getFileMetadata(fileId, { includeDownloadUrl: true });
+            downloadUrl = metadata?.['@microsoft.graph.downloadUrl'];
+        }
+        const url = assertMicrosoftDownloadUrl(downloadUrl);
+        for (let attempt = 0; attempt <= this.maxRetries; attempt += 1) {
+            try {
+                const response = await fetchWithTimeout({
+                    fetchImpl: this.fetch,
+                    url,
+                    timeoutMs: this.transferTimeoutMs,
+                    // 事前認証済みURLのためAuthorizationを付けない。Graphの/contentは
+                    // 認証ヘッダーを伴うCORS preflightから302へ遷移できない。
+                    options: {},
+                });
+                if (response.ok) return response;
+                if (attempt === this.maxRetries) {
+                    throw new OneDriveSyncError(
+                        `OneDriveからデータを取得できませんでした（HTTP ${response.status}）。`,
+                        { status: response.status, retryable: response.status >= 500 }
+                    );
+                }
+            } catch (cause) {
+                if (cause instanceof OneDriveSyncError) throw cause;
+                if (attempt === this.maxRetries) {
+                    const error = new OneDriveSyncError(
+                        'OneDriveからデータを取得できませんでした。通信を再試行してください。',
+                        { code: 'download-interrupted', retryable: true }
+                    );
+                    error.cause = cause;
+                    throw error;
+                }
+            }
+            await this.sleep(Math.min(1000 * (2 ** attempt), 8000));
+        }
+        throw new OneDriveSyncError('OneDriveからデータを取得できませんでした。');
     }
 
     async readJson(path) {
         const file = await this.findFile(path);
         if (!file) return { file: null, value: null };
         assertFileSizeWithin(file, MAX_SYNC_JSON_FILE_BYTES, 'クラウド上の同期データ');
-        const response = await this.downloadFile(file.id);
+        const response = await this.downloadFile(file);
         const text = await response.text();
         if (new TextEncoder().encode(text).byteLength > MAX_SYNC_JSON_FILE_BYTES) {
             throw new OneDriveSyncError('クラウド上の同期データが許容サイズを超えているため、取得を中止しました。');
@@ -375,7 +446,7 @@ export class OneDriveAppFolderClient {
         assertFileSizeWithin(file, MAX_SYNC_BLOB_FILE_BYTES, 'クラウド上の添付ファイル');
         const expectedSize = Number(file.size);
         for (let attempt = 0; attempt < 2; attempt += 1) {
-            const response = await this.downloadFile(file.id);
+            const response = await this.downloadFile(file);
             const blob = await response.blob();
             if (blob.size > MAX_SYNC_BLOB_FILE_BYTES) {
                 throw new OneDriveSyncError('クラウド上の添付ファイルが許容サイズを超えているため、取得を中止しました。');
@@ -660,7 +731,7 @@ export class OneDriveAppFolderClient {
             : files;
         if (kind === 'change-batch' || kind === 'bulk-change-batch') {
             await Promise.all(matching.map(async file => {
-                const response = await this.downloadFile(file.id);
+                const response = await this.downloadFile(file);
                 const batch = await response.json();
                 Object.assign(file.appProperties, {
                     batchId: batch.batchId,

@@ -63,7 +63,7 @@ const nextConfig = {
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data: blob:",
       "font-src 'self' data:",
-      "connect-src 'self' https://accounts.google.com https://oauth2.googleapis.com https://www.googleapis.com https://login.microsoftonline.com https://graph.microsoft.com",
+      "connect-src 'self' https://accounts.google.com https://oauth2.googleapis.com https://www.googleapis.com https://login.microsoftonline.com https://graph.microsoft.com https://*.1drv.com https://*.onedrive.com https://onedrive.live.com https://*.onedrive.live.com https://*.storage.live.com https://*.livefilestore.com https://*.microsoftpersonalcontent.com https://*.sharepoint.com https://*.sharepoint-df.com",
       "frame-src https://accounts.google.com https://login.microsoftonline.com",
       "media-src 'self' blob:",
       "manifest-src 'self'",

@@ -69,6 +69,41 @@ test('reads the currently authorized Microsoft account', async () => {
     assert.match(url.searchParams.get('$select'), /userPrincipalName/);
 });
 
+test('downloads browser files from the preauthenticated OneDrive URL without a bearer token', async () => {
+    const requests = [];
+    const client = new OneDriveAppFolderClient({
+        getAccessToken: async () => 'access-token',
+        fetchImpl: async (url, options = {}) => {
+            requests.push({ url: String(url), options });
+            return new Response('cloud-data');
+        },
+    });
+
+    const response = await client.downloadFile({
+        id: 'cloud-file',
+        '@microsoft.graph.downloadUrl': 'https://download.files.1drv.com/temporary-file',
+    });
+
+    assert.equal(await response.text(), 'cloud-data');
+    assert.equal(requests[0].url, 'https://download.files.1drv.com/temporary-file');
+    assert.equal(requests[0].options.headers, undefined);
+});
+
+test('rejects a preauthenticated OneDrive URL outside Microsoft storage', async () => {
+    const client = new OneDriveAppFolderClient({
+        getAccessToken: async () => 'access-token',
+        fetchImpl: async () => new Response('should not be called'),
+    });
+
+    await assert.rejects(
+        () => client.downloadFile({
+            id: 'cloud-file',
+            '@microsoft.graph.downloadUrl': 'https://example.com/stolen-token',
+        }),
+        /許可されていないダウンロード先/
+    );
+});
+
 test('uploads a small manifest into the OneDrive app folder', async () => {
     const requests = [];
     const client = new OneDriveAppFolderClient({
