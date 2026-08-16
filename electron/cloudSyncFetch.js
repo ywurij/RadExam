@@ -113,7 +113,9 @@ const performCloudSyncFetch = async (request, {
     status: response.status,
     statusText: response.statusText,
     headers: responseHeaders(response.headers),
-    body,
+    // ArrayBufferとしてIPCへ渡す。Node側のUint8Arrayを直接返すと、Electronの
+    // structured clone後に環境によって通常のオブジェクトとして見えることがある。
+    body: body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength),
   };
 };
 

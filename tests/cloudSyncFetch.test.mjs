@@ -65,7 +65,21 @@ test('Electronメインプロセスがクラウド応答を安全に転送する
         },
     });
     assert.equal(new TextDecoder().decode(result.body), 'cloud data');
+    assert.ok(result.body instanceof ArrayBuffer);
     assert.equal(result.status, 200);
+});
+
+test('同期クライアントがWindowsで複製されたBuffer応答を復元する', async () => {
+    const fetchImpl = createDesktopCloudFetch({
+        fetch: async () => ({
+            status: 200,
+            statusText: 'OK',
+            headers: [['content-type', 'application/octet-stream']],
+            body: { type: 'Buffer', data: [0, 1, 127, 128, 255] },
+        }),
+    });
+    const response = await fetchImpl('https://graph.microsoft.com/v1.0/me/drive/items/id/content');
+    assert.deepEqual([...new Uint8Array(await response.arrayBuffer())], [0, 1, 127, 128, 255]);
 });
 
 test('同期クライアントがIPC応答を標準Responseとして扱える', async () => {

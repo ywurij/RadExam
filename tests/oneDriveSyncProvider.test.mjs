@@ -350,3 +350,45 @@ test('encrypts and decrypts OneDrive change batches across devices', async () =>
     await receiver.unlockEncryption('correct horse battery staple');
     assert.deepEqual(await receiver.downloadChangeBatch({ objectKey }), batch);
 });
+
+test('verifies a OneDrive snapshot and replaces a corrupt existing file', async () => {
+    const path = 'snapshots/device-1.radexam';
+    const source = new Blob([new TextEncoder().encode('valid snapshot')]);
+    const digest = await crypto.subtle.digest('SHA-256', await source.arrayBuffer());
+    const contentHash = `sha256:${Array.from(new Uint8Array(digest), value => (
+        value.toString(16).padStart(2, '0')
+    )).join('')}`;
+    let stored = new Blob([new TextEncoder().encode('corrupt snapshot')]);
+    let deleted = 0;
+    let written = 0;
+    const client = {
+        async findFile(objectKey) {
+            return stored ? { id: 'snapshot-file', size: stored.size, radexamPath: objectKey } : null;
+        },
+        async readBlob() {
+            return stored
+                ? { file: { id: 'snapshot-file', size: stored.size }, blob: stored }
+                : { file: null, blob: null };
+        },
+        async writeBlob(_objectKey, blob) {
+            stored = blob;
+            written += 1;
+            return { id: 'snapshot-file', size: blob.size };
+        },
+        async deleteFile() {
+            stored = null;
+            deleted += 1;
+        },
+    };
+    const provider = new OneDriveSyncProvider({ client });
+
+    const result = await provider.uploadSnapshot('device-1', source, {
+        contentHash,
+        byteSize: source.size,
+    });
+
+    assert.equal(result.objectKey, path);
+    assert.equal(deleted, 1);
+    assert.equal(written, 1);
+    assert.equal(await stored.text(), 'valid snapshot');
+});

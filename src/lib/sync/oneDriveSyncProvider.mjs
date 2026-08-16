@@ -89,6 +89,17 @@ const assertFileSizeWithin = (file, maximumBytes, label) => {
     }
 };
 
+const calculateBlobHash = async blob => {
+    if (!(blob instanceof Blob) || !globalThis.crypto?.subtle) {
+        throw new Error('OneDrive上のスナップショット検証に必要なSHA-256を利用できません。');
+    }
+    const digest = await globalThis.crypto.subtle.digest('SHA-256', await blob.arrayBuffer());
+    const hex = Array.from(new Uint8Array(digest), value => (
+        value.toString(16).padStart(2, '0')
+    )).join('');
+    return `sha256:${hex}`;
+};
+
 export class OneDriveSyncError extends Error {
     constructor(message, {
         status = 0,
@@ -351,12 +362,21 @@ export class OneDriveAppFolderClient {
         const file = await this.findFile(path);
         if (!file) return { file: null, blob: null };
         assertFileSizeWithin(file, MAX_SYNC_BLOB_FILE_BYTES, 'クラウド上の添付ファイル');
-        const response = await this.downloadFile(file.id);
-        const blob = await response.blob();
-        if (blob.size > MAX_SYNC_BLOB_FILE_BYTES) {
-            throw new OneDriveSyncError('クラウド上の添付ファイルが許容サイズを超えているため、取得を中止しました。');
+        const expectedSize = Number(file.size);
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+            const response = await this.downloadFile(file.id);
+            const blob = await response.blob();
+            if (blob.size > MAX_SYNC_BLOB_FILE_BYTES) {
+                throw new OneDriveSyncError('クラウド上の添付ファイルが許容サイズを超えているため、取得を中止しました。');
+            }
+            if (!Number.isFinite(expectedSize) || blob.size === expectedSize) {
+                return { file, blob };
+            }
         }
-        return { file, blob };
+        throw new OneDriveSyncError(
+            'OneDriveから取得したファイルのサイズが一致しません。通信を再試行してください。',
+            { code: 'download-integrity-error', retryable: true }
+        );
     }
 
     async ensureFolder(path) {
@@ -697,5 +717,48 @@ export class OneDriveSyncProvider extends GoogleDriveSyncProvider {
             );
         }
         return this.decryptJson(stored.value, descriptor.objectKey);
+    }
+
+    async remoteSnapshotMatches(descriptor, objectKey) {
+        try {
+            const stored = await this.client.readBlob(objectKey);
+            if (!stored.blob) return false;
+            const plaintext = await this.decryptBlob(stored.blob, objectKey);
+            if (
+                Number.isFinite(Number(descriptor.byteSize))
+                && plaintext.size !== Number(descriptor.byteSize)
+            ) {
+                return false;
+            }
+            return await calculateBlobHash(plaintext) === descriptor.contentHash;
+        } catch (error) {
+            if (error?.code === 'download-integrity-error') return false;
+            // 暗号化ファイルの認証失敗も、保存内容の不一致として再送信する。
+            if (/暗号|復号|形式が不正|OperationError/i.test(String(error?.message || error))) {
+                return false;
+            }
+            throw error;
+        }
+    }
+
+    async removeSnapshotObject(objectKey) {
+        const file = await this.client.findFile(objectKey);
+        if (file?.id) await this.client.deleteFile(file.id);
+    }
+
+    async uploadSnapshot(snapshotId, blob, descriptor = {}) {
+        // OneDriveでは大容量アップロードの完了応答だけが失われる場合がある。
+        // 台帳へ登録する前に保存済みファイルを読み戻し、別端末で復元できることを確認する。
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+            const uploaded = await super.uploadSnapshot(snapshotId, blob, descriptor);
+            if (await this.remoteSnapshotMatches(descriptor, uploaded.objectKey)) {
+                return uploaded;
+            }
+            await this.removeSnapshotObject(uploaded.objectKey);
+        }
+        throw new OneDriveSyncError(
+            'OneDriveへ送信した初期データの検証に失敗しました。もう一度同期してください。',
+            { code: 'upload-integrity-error', retryable: true }
+        );
     }
 }
