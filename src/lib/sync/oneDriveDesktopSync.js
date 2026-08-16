@@ -173,9 +173,11 @@ export const connectOneDriveDesktopSync = async ({ clientId }) => (
         }
         const session = createSession(clientId);
         await session.bridge.authorize(clientId);
-        const user = await getSessionUser(session, { refresh: true });
+        const [user, root] = await Promise.all([
+            getSessionUser(session, { refresh: true }),
+            session.provider.ensureActiveSyncSpace(),
+        ]);
         const { accountId, accountLabel } = verifyAccount(user);
-        const root = await session.provider.ensureActiveSyncSpace();
         await connectLocalSyncTracking({
             provider: SYNC_PROVIDERS.ONE_DRIVE,
             accountId,

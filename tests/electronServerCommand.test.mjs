@@ -6,11 +6,21 @@ import test from 'node:test';
 const require = createRequire(import.meta.url);
 const {
     LOOPBACK_HOST,
+    PACKAGED_SERVER_PORT,
     createNextServerEnv,
     createNextServerLaunch,
     isAllowedLoopbackRequest,
     isNextServerReadyOutput,
 } = require('../electron/serverCommand.js');
+
+test('uses a stable packaged port so browser storage survives app restarts', () => {
+    assert.equal(LOOPBACK_HOST, '127.0.0.1');
+    assert.equal(PACKAGED_SERVER_PORT, 32147);
+    assert.equal(isAllowedLoopbackRequest({
+        hostHeader: `${LOOPBACK_HOST}:${PACKAGED_SERVER_PORT}`,
+        port: PACKAGED_SERVER_PORT,
+    }), true);
+});
 
 test('trusts only the spawned Next.js ready message as startup completion', () => {
     assert.equal(isNextServerReadyOutput('✓ Ready in 843ms'), true);

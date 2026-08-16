@@ -16,6 +16,9 @@ export const MICROSOFT_ONEDRIVE_SCOPES = Object.freeze([
 
 const TOKEN_EXPIRY_MARGIN_MS = 60_000;
 const AUTHORIZATION_TIMEOUT_MS = 5 * 60_000;
+const REDIRECT_PENDING_STORAGE_KEY = 'radexam_microsoft_oauth_pending';
+const REDIRECT_PENDING_MAX_AGE_MS = 10 * 60_000;
+const MICROSOFT_CALLBACK_PATH = '/sync';
 
 const base64Url = bytes => {
     let binary = '';
@@ -66,6 +69,49 @@ export const buildMicrosoftAuthorizationUrl = ({
         prompt,
     });
     return `${MICROSOFT_AUTHORITY}/authorize?${query}`;
+};
+
+const storageFromWindow = windowRef => {
+    try {
+        return windowRef?.localStorage || null;
+    } catch {
+        return null;
+    }
+};
+
+const readPendingRedirect = windowRef => {
+    const storage = storageFromWindow(windowRef);
+    if (!storage) return null;
+    try {
+        const pending = JSON.parse(storage.getItem(REDIRECT_PENDING_STORAGE_KEY) || 'null');
+        if (!pending?.state || !pending?.verifier || !pending?.redirectUri) return null;
+        return pending;
+    } catch {
+        return null;
+    }
+};
+
+export const hasPendingMicrosoftAuthorizationRedirect = (
+    windowRef = globalThis.window,
+    now = () => Date.now()
+) => {
+    const pending = readPendingRedirect(windowRef);
+    if (!pending || Number(pending.expiresAt) <= now()) return false;
+    try {
+        const currentUrl = new URL(windowRef.location.href);
+        return Boolean(
+            currentUrl.searchParams.get('code')
+            || currentUrl.searchParams.get('error')
+        );
+    } catch {
+        return false;
+    }
+};
+
+const shouldUsePageRedirect = windowRef => {
+    const userAgent = String(windowRef?.navigator?.userAgent || '');
+    return /Android|iPhone|iPad|iPod|Mobile/i.test(userAgent)
+        || Boolean(windowRef?.matchMedia?.('(display-mode: standalone)')?.matches);
 };
 
 const parseTokenResponse = async response => {
@@ -209,9 +255,12 @@ export class MicrosoftOneDriveWebTokenManager {
         if (!this.window) {
             throw new Error('Microsoft認証はブラウザ画面から実行してください。');
         }
+        const callbackToken = await this.completePendingPageRedirect();
+        if (callbackToken) return callbackToken;
+
         const { verifier, challenge } = await createMicrosoftPkcePair();
         const state = randomBase64Url(32);
-        const redirectUri = `${this.window.location.origin}${this.window.location.pathname}`;
+        const redirectUri = `${this.window.location.origin}${MICROSOFT_CALLBACK_PATH}`;
         const authorizationUrl = buildMicrosoftAuthorizationUrl({
             clientId: this.clientId,
             redirectUri,
@@ -219,6 +268,21 @@ export class MicrosoftOneDriveWebTokenManager {
             codeChallenge: challenge,
             prompt,
         });
+        if (shouldUsePageRedirect(this.window)) {
+            const storage = storageFromWindow(this.window);
+            if (!storage) {
+                throw new Error('Microsoft認証の一時情報をこのブラウザに保存できません。');
+            }
+            storage.setItem(REDIRECT_PENDING_STORAGE_KEY, JSON.stringify({
+                state,
+                verifier,
+                redirectUri,
+                returnPath: `${this.window.location.pathname}${this.window.location.search || ''}`,
+                expiresAt: this.now() + REDIRECT_PENDING_MAX_AGE_MS,
+            }));
+            this.window.location.assign(authorizationUrl);
+            return new Promise(() => {});
+        }
         const popup = this.window.open(
             authorizationUrl,
             'radexam-microsoft-oauth',
@@ -234,6 +298,49 @@ export class MicrosoftOneDriveWebTokenManager {
             grant_type: 'authorization_code',
             redirect_uri: redirectUri,
         });
+        return this.saveTokenResponse(token);
+    }
+
+    async completePendingPageRedirect() {
+        const pending = readPendingRedirect(this.window);
+        if (!pending) return null;
+        const storage = storageFromWindow(this.window);
+        if (Number(pending.expiresAt) <= this.now()) {
+            storage?.removeItem(REDIRECT_PENDING_STORAGE_KEY);
+            throw new Error('Microsoft認証が時間切れになりました。もう一度接続してください。');
+        }
+        let callbackUrl;
+        try {
+            callbackUrl = new URL(this.window.location.href);
+        } catch {
+            return null;
+        }
+        if (!callbackUrl.searchParams.get('code') && !callbackUrl.searchParams.get('error')) {
+            return null;
+        }
+        if (callbackUrl.searchParams.get('state') !== pending.state) {
+            storage?.removeItem(REDIRECT_PENDING_STORAGE_KEY);
+            throw new Error('Microsoft認証のstate確認に失敗しました。');
+        }
+        const oauthError = callbackUrl.searchParams.get('error');
+        if (oauthError) {
+            storage?.removeItem(REDIRECT_PENDING_STORAGE_KEY);
+            throw new Error(
+                callbackUrl.searchParams.get('error_description')
+                || `Microsoft認証がキャンセルされました: ${oauthError}`
+            );
+        }
+        const code = callbackUrl.searchParams.get('code');
+        if (!code) return null;
+        const token = await this.exchangeToken({
+            code,
+            code_verifier: pending.verifier,
+            grant_type: 'authorization_code',
+            redirect_uri: pending.redirectUri,
+        });
+        storage?.removeItem(REDIRECT_PENDING_STORAGE_KEY);
+        this.completedRedirectReturnPath = pending.returnPath || '/data';
+        this.window.history?.replaceState?.({}, '', MICROSOFT_CALLBACK_PATH);
         return this.saveTokenResponse(token);
     }
 }

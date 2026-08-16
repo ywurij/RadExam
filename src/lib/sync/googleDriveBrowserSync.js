@@ -160,12 +160,13 @@ const authorizeSession = async (clientId, { prompt }) => {
 export const connectGoogleDriveSync = async ({ clientId }) => {
     return runExclusive(async () => {
         const session = await authorizeSession(clientId, { prompt: 'consent' });
-        const user = await getSessionUser(session, { refresh: true });
+        const [user, root] = await Promise.all([
+            getSessionUser(session, { refresh: true }),
+            session.provider.ensureActiveSyncSpace(),
+        ]);
         const accountId = user?.permissionId || user?.emailAddress;
         if (!accountId) throw new Error('Google Driveのアカウント情報を確認できませんでした。');
         const accountLabel = user?.emailAddress || user?.displayName || 'Google Drive';
-        const root = await session.provider.ensureActiveSyncSpace();
-
         await connectLocalSyncTracking({
             provider: SYNC_PROVIDERS.GOOGLE_DRIVE,
             accountId,

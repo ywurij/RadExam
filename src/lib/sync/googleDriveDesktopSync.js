@@ -157,12 +157,13 @@ export const connectGoogleDriveDesktopSync = async ({ clientId }) => (
         if (!clientId) throw new Error('デスクトップ版のGoogle OAuthクライアントIDが設定されていません。');
         const session = createSession(clientId);
         await session.bridge.authorize(clientId);
-        const user = await getSessionUser(session, { refresh: true });
+        const [user, root] = await Promise.all([
+            getSessionUser(session, { refresh: true }),
+            session.provider.ensureActiveSyncSpace(),
+        ]);
         const accountId = user?.permissionId || user?.emailAddress;
         if (!accountId) throw new Error('Google Driveのアカウント情報を確認できませんでした。');
         const accountLabel = user?.emailAddress || user?.displayName || 'Google Drive';
-        const root = await session.provider.ensureActiveSyncSpace();
-
         await connectLocalSyncTracking({
             provider: SYNC_PROVIDERS.GOOGLE_DRIVE,
             accountId,

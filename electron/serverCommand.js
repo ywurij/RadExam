@@ -1,6 +1,9 @@
 const path = require('path');
 
 const LOOPBACK_HOST = '127.0.0.1';
+// Chromium の IndexedDB / localStorage はポートを含む origin ごとに分離される。
+// 正式版は常に同じポートを使い、再起動後も同じ端末内データを参照する。
+const PACKAGED_SERVER_PORT = 32147;
 const ANSI_ESCAPE_PATTERN = /\u001b\[[0-?]*[ -/]*[@-~]/g;
 
 function isNextServerReadyOutput(value) {
@@ -60,6 +63,7 @@ function createNextServerEnv({ baseEnv = {}, extraEnv = {}, port, isDev }) {
 
 module.exports = {
   LOOPBACK_HOST,
+  PACKAGED_SERVER_PORT,
   createNextServerEnv,
   createNextServerLaunch,
   isAllowedLoopbackRequest,

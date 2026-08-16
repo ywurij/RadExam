@@ -12,6 +12,7 @@ const http = require('http');
 const fs = require('fs');
 const {
   LOOPBACK_HOST,
+  PACKAGED_SERVER_PORT,
   createNextServerEnv,
   createNextServerLaunch,
   isAllowedLoopbackRequest,
@@ -50,6 +51,7 @@ let microsoftOAuthManager = null;
 let cloudSyncConfig = null;
 let displayZoomFactor = DEFAULT_ZOOM_FACTOR;
 let applicationIsQuitting = false;
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
 
 const SERVER_STARTUP_TIMEOUT_MS = 60_000;
 
@@ -219,7 +221,7 @@ async function startPackagedNextServer() {
       isDev: false,
       config: requiredFiles.config,
       hostname: LOOPBACK_HOST,
-      port: 0,
+      port: PACKAGED_SERVER_PORT,
       allowRetry: false,
     });
   } finally {
@@ -374,8 +376,19 @@ const registerDisplayIpc = () => {
   });
 };
 
+app.on('second-instance', () => {
+  if (!mainWindow) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+});
+
 // Electron の初期化完了時に実行
 app.whenReady().then(async () => {
+  if (!hasSingleInstanceLock) {
+    app.quit();
+    return;
+  }
   installMacApplicationMenu(Menu);
   displayZoomFactor = loadZoomFactor(app.getPath('userData'));
   cloudSyncConfig = loadCloudSyncConfig({
@@ -386,8 +399,8 @@ app.whenReady().then(async () => {
   registerDisplayIpc();
   if (app.isPackaged) {
     try {
-      // 本番版はElectron自身がポート0で待受を開始する。空きポート確認と
-      // 実際の待受の間に第三者プロセスが入り込む余地を作らない。
+      // 本番版は固定ポートで待受し、再起動後も同じ Web Storage origin を使う。
+      // 二重起動を禁止しているため、RadExam 同士のポート競合は発生しない。
       serverPort = await startPackagedNextServer();
       createWindow(serverPort);
     } catch (error) {

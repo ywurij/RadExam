@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { isMobileTarget } from '@/lib/appTarget';
 import { createBackupArchiveBlob } from '@/lib/backupArchive.mjs';
@@ -13,7 +13,6 @@ import {
     checkGoogleDriveUpdates,
     connectGoogleDriveSync,
     disconnectGoogleDriveSync,
-    enableGoogleDriveEncryption,
     getGoogleDriveSyncState,
     resetGoogleDriveSync,
     resolveGoogleDriveSyncConflict,
@@ -25,7 +24,6 @@ import {
     checkGoogleDriveDesktopUpdates,
     connectGoogleDriveDesktopSync,
     disconnectGoogleDriveDesktopSync,
-    enableGoogleDriveDesktopEncryption,
     getGoogleDriveDesktopSyncState,
     resetGoogleDriveDesktopSync,
     resolveGoogleDriveDesktopSyncConflict,
@@ -37,7 +35,6 @@ import {
     checkOneDriveUpdates,
     connectOneDriveSync,
     disconnectOneDriveSync,
-    enableOneDriveEncryption,
     getOneDriveSyncState,
     resetOneDriveSync,
     resolveOneDriveSyncConflict,
@@ -49,7 +46,6 @@ import {
     checkOneDriveDesktopUpdates,
     connectOneDriveDesktopSync,
     disconnectOneDriveDesktopSync,
-    enableOneDriveDesktopEncryption,
     getOneDriveDesktopSyncState,
     resetOneDriveDesktopSync,
     resolveOneDriveDesktopSyncConflict,
@@ -58,6 +54,7 @@ import {
     unlockOneDriveDesktopEncryption,
 } from '@/lib/sync/oneDriveDesktopSync';
 import { SYNC_PROVIDERS } from '@/lib/sync/syncProtocol.mjs';
+import { hasPendingMicrosoftAuthorizationRedirect } from '@/lib/sync/microsoftIdentityWebAuth';
 import styles from './sync.module.scss';
 
 const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || '';
@@ -225,7 +222,7 @@ export default function CloudSyncPage({ embedded = false }) {
     const [progress, setProgress] = useState(null);
     const [progressClock, setProgressClock] = useState(0);
     const [encryptionPassphrase, setEncryptionPassphrase] = useState('');
-    const [encryptionConfirmation, setEncryptionConfirmation] = useState('');
+    const oauthResumeStarted = useRef(false);
     const progressPhase = progress?.phase || '';
     const provider = syncState?.connected
         ? syncState.config.provider
@@ -290,6 +287,36 @@ export default function CloudSyncPage({ embedded = false }) {
     }, [refreshState]);
 
     useEffect(() => {
+        if (
+            !isMobileTarget
+            || oauthResumeStarted.current
+            || !hasPendingMicrosoftAuthorizationRedirect()
+        ) return undefined;
+        oauthResumeStarted.current = true;
+        let cancelled = false;
+        setSelectedProvider(SYNC_PROVIDERS.ONE_DRIVE);
+        setBusyPhase('connecting');
+        setMessage('');
+        setError('');
+        connectOneDriveSync({ clientId: MICROSOFT_CLIENT_ID })
+            .then(async () => {
+                if (cancelled) return;
+                setSyncState(await getOneDriveSyncState());
+                setMessage('OneDriveへの接続が完了しました。取得または送信する操作を選んでください。');
+                router.replace('/data');
+            })
+            .catch(authError => {
+                if (!cancelled) setError(authError.message || 'OneDriveへ接続できませんでした。');
+            })
+            .finally(() => {
+                if (!cancelled) setBusyPhase('');
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [router]);
+
+    useEffect(() => {
         if (!busyPhase || !progressPhase) return undefined;
         const timer = window.setInterval(() => setProgressClock(Date.now()), 1000);
         return () => window.clearInterval(timer);
@@ -333,6 +360,7 @@ export default function CloudSyncPage({ embedded = false }) {
         if (response) {
             setMessage(`${providerName}への接続が完了しました。取得または送信する操作を選んでください。`);
         }
+        return response;
     };
 
     const directionalAction = direction => {
@@ -379,65 +407,27 @@ export default function CloudSyncPage({ embedded = false }) {
         if (response) setMessage(`この端末の変更を送信しました。送信 ${response.result.sentChanges || 0}件。`);
     };
 
-    const encryptionAction = mode => {
+    const encryptionAction = () => {
         if (isOneDrive && isMobileTarget) {
-            return mode === 'enable' ? enableOneDriveEncryption : unlockOneDriveEncryption;
+            return unlockOneDriveEncryption;
         }
         if (isOneDrive) {
-            return mode === 'enable' ? enableOneDriveDesktopEncryption : unlockOneDriveDesktopEncryption;
+            return unlockOneDriveDesktopEncryption;
         }
         if (isMobileTarget) {
-            return mode === 'enable' ? enableGoogleDriveEncryption : unlockGoogleDriveEncryption;
+            return unlockGoogleDriveEncryption;
         }
-        return mode === 'enable' ? enableGoogleDriveDesktopEncryption : unlockGoogleDriveDesktopEncryption;
+        return unlockGoogleDriveDesktopEncryption;
     };
 
     const handleUnlockEncryption = async () => {
         const response = await runAction(
-            () => encryptionAction('unlock')({ clientId, passphrase: encryptionPassphrase }),
+            () => encryptionAction()({ clientId, passphrase: encryptionPassphrase }),
             'unlocking-encryption'
         );
         if (response) {
             setEncryptionPassphrase('');
             setMessage('クラウド暗号化を解除しました。このアプリを終了するまで同期できます。');
-        }
-    };
-
-    const handleEnableEncryption = async () => {
-        if (encryptionPassphrase !== encryptionConfirmation) {
-            setError('同期パスフレーズの確認入力が一致しません。');
-            return;
-        }
-        if (encryptionPassphrase.length < 12) {
-            setError('同期パスフレーズは12文字以上で入力してください。');
-            return;
-        }
-        if (!window.confirm(
-            `${providerName}上の現在の同期データを削除し、暗号化した新しい同期領域へ切り替えます。\n\n`
-            + '別端末では同じ同期パスフレーズが必要です。パスフレーズを紛失するとクラウドデータは復元できません。続けますか？'
-        )) return;
-        setMessage('');
-        setError('');
-        try {
-            await saveEmergencyBackup('radexam-before-encryption-enable');
-            const response = await runAction(
-                () => encryptionAction('enable')({ clientId, passphrase: encryptionPassphrase }),
-                'enabling-encryption'
-            );
-            if (!response) return;
-            setEncryptionPassphrase('');
-            setEncryptionConfirmation('');
-            setMessage('暗号化を有効にしました。端末データを暗号化してクラウドへ初回送信します。');
-            await new Promise(resolve => window.requestAnimationFrame(resolve));
-            const syncResponse = await runAction(
-                () => directionalAction('push')({ clientId }),
-                'pushing'
-            );
-            if (syncResponse) setMessage(`暗号化した初回同期が完了しました。${describeSyncResult(syncResponse.result)}`);
-        } catch (encryptionError) {
-            console.error('Failed to enable cloud encryption:', encryptionError);
-            setError(encryptionError.message || 'クラウド暗号化を有効にできませんでした。');
-            setBusyPhase('');
         }
     };
 
@@ -712,9 +702,6 @@ export default function CloudSyncPage({ embedded = false }) {
                             <div><dt>データ状態</dt><dd>{describeDataStatus(syncState)}</dd></div>
                             <div><dt>未送信（残り）</dt><dd>{syncState.pendingCount}件</dd></div>
                             <div><dt>競合</dt><dd>{syncState.conflictCount}件</dd></div>
-                            <div><dt>クラウド暗号化</dt><dd>{cloudEncryptionEnabled
-                                ? cloudEncryptionUnlocked ? '有効・解除済み' : '有効・入力待ち'
-                                : '未設定'}</dd></div>
                         </dl>
                         <p className={styles.statusHelp}>
                             起動時・復帰時には更新の有無だけを確認します。
@@ -795,34 +782,6 @@ export default function CloudSyncPage({ embedded = false }) {
                         />
                         <button type="button" className={styles.primaryButton} onClick={handleUnlockEncryption} disabled={busy || encryptionPassphrase.length < 12}>
                             暗号化を解除
-                        </button>
-                    </div>
-                )}
-                {connected && !cloudEncryptionEnabled && (
-                    <div className={styles.encryptionArea}>
-                        <strong>クラウド上のデータを端末間暗号化する</strong>
-                        <p>
-                            問題文、解説、進捗、画像、PDFを送信前に暗号化します。
-                            同じパスフレーズを別端末にも入力します。紛失時は復元できません。
-                        </p>
-                        <input
-                            type="password"
-                            autoComplete="new-password"
-                            value={encryptionPassphrase}
-                            onChange={event => setEncryptionPassphrase(event.target.value)}
-                            placeholder="新しい同期パスフレーズ（12文字以上）"
-                            disabled={busy}
-                        />
-                        <input
-                            type="password"
-                            autoComplete="new-password"
-                            value={encryptionConfirmation}
-                            onChange={event => setEncryptionConfirmation(event.target.value)}
-                            placeholder="同期パスフレーズを再入力"
-                            disabled={busy}
-                        />
-                        <button type="button" className={styles.resetButton} onClick={handleEnableEncryption} disabled={busy || encryptionPassphrase.length < 12}>
-                            暗号化を有効にして同期を作り直す
                         </button>
                     </div>
                 )}
@@ -987,7 +946,7 @@ export default function CloudSyncPage({ embedded = false }) {
 
             <aside className={styles.note}>
                 <strong>手動バックアップも引き続き利用できます</strong>
-                <p>データ管理では、緊急復旧やクラウドを使わないデータ移動用に、パスワード付き.radexamファイルを作成できます。クラウドのリセット前に自動保存される緊急バックアップは暗号化されないため、安全な場所へ移動してください。</p>
+                <p>データ管理では、緊急復旧やクラウドを使わないデータ移動用に.radexamファイルを作成できます。クラウドのリセット前にも緊急バックアップを保存します。</p>
             </aside>
         </Root>
     );

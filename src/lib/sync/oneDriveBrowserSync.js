@@ -176,9 +176,11 @@ const verifyAccount = (user, state) => {
 export const connectOneDriveSync = async ({ clientId }) => (
     runExclusive(async () => {
         const session = await authorizeSession(clientId, { interactive: true });
-        const user = await getSessionUser(session, { refresh: true });
+        const [user, root] = await Promise.all([
+            getSessionUser(session, { refresh: true }),
+            session.provider.ensureActiveSyncSpace(),
+        ]);
         const { accountId, accountLabel } = verifyAccount(user);
-        const root = await session.provider.ensureActiveSyncSpace();
         await connectLocalSyncTracking({
             provider: SYNC_PROVIDERS.ONE_DRIVE,
             accountId,

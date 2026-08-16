@@ -5,6 +5,7 @@ import {
     MicrosoftOneDriveWebTokenManager,
     buildMicrosoftAuthorizationUrl,
     createMicrosoftPkcePair,
+    hasPendingMicrosoftAuthorizationRedirect,
 } from '../src/lib/sync/microsoftIdentityWebAuth.js';
 
 test('builds a Microsoft SPA authorization request with PKCE and app-folder scope', async () => {
@@ -61,4 +62,55 @@ test('refreshes a browser Microsoft token without persisting it', async () => {
     assert.equal(requests[0].url, 'https://login.microsoftonline.com/consumers/oauth2/v2.0/token');
     assert.equal(requests[0].options.body.get('grant_type'), 'refresh_token');
     assert.equal(requests[0].options.body.get('client_secret'), null);
+});
+
+test('completes a mobile page redirect after Microsoft returns to the app', async () => {
+    const stored = new Map();
+    const storage = {
+        getItem: key => stored.get(key) || null,
+        setItem: (key, value) => stored.set(key, value),
+        removeItem: key => stored.delete(key),
+    };
+    storage.setItem('radexam_microsoft_oauth_pending', JSON.stringify({
+        state: 'expected-state',
+        verifier: 'pkce-verifier',
+        redirectUri: 'https://rad-exam.vercel.app/sync',
+        returnPath: '/data',
+        expiresAt: 2_600_000,
+    }));
+    let replacedPath = '';
+    const windowRef = {
+        localStorage: storage,
+        location: {
+            href: 'https://rad-exam.vercel.app/sync?code=returned-code&state=expected-state',
+        },
+        history: {
+            replaceState: (_state, _title, path) => { replacedPath = path; },
+        },
+    };
+    const requests = [];
+    const manager = new MicrosoftOneDriveWebTokenManager({
+        clientId: '11111111-2222-3333-4444-555555555555',
+        windowRef,
+        now: () => 2_000_000,
+        fetchImpl: async (url, options) => {
+            requests.push({ url: String(url), options });
+            return new Response(JSON.stringify({
+                access_token: 'mobile-access-token',
+                refresh_token: 'mobile-refresh-token',
+                expires_in: 3600,
+            }), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+            });
+        },
+    });
+
+    assert.equal(hasPendingMicrosoftAuthorizationRedirect(windowRef, () => 2_000_000), true);
+    assert.equal(await manager.requestAccessToken(), 'mobile-access-token');
+    assert.equal(requests[0].options.body.get('code'), 'returned-code');
+    assert.equal(requests[0].options.body.get('code_verifier'), 'pkce-verifier');
+    assert.equal(requests[0].options.body.get('redirect_uri'), 'https://rad-exam.vercel.app/sync');
+    assert.equal(storage.getItem('radexam_microsoft_oauth_pending'), null);
+    assert.equal(replacedPath, '/sync');
 });

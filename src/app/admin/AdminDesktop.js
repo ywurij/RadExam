@@ -12,7 +12,6 @@ import { initializeLocalExams, getExamTypes } from '@/lib/data';
 import { saveLocalExam, deleteLocalExam, exportAllLocalData, importLocalData, getLocalExam, saveExamPdf, getExamPdfs } from '@/lib/localDb';
 import {
     createBackupArchiveBlob,
-    createEncryptedBackupArchiveBlob,
     readBackupFile,
 } from '@/lib/backupArchive.mjs';
 import {
@@ -2929,10 +2928,6 @@ export default function AdminPage() {
         message: '未確認'
     });
     const [embeddedVlmManager, setEmbeddedVlmManager] = useState(null);
-    const [encryptManualBackup, setEncryptManualBackup] = useState(true);
-    const [backupExportPassphrase, setBackupExportPassphrase] = useState('');
-    const [backupExportPassphraseConfirm, setBackupExportPassphraseConfirm] = useState('');
-    const [backupImportPassphrase, setBackupImportPassphrase] = useState('');
 
     const loadLocalExams = async () => {
         await initializeLocalExams();
@@ -4962,17 +4957,7 @@ export default function AdminPage() {
                 alert("バックアップするデータがありません。");
                 return;
             }
-            if (encryptManualBackup) {
-                if (backupExportPassphrase !== backupExportPassphraseConfirm) {
-                    throw new Error('バックアップパスワードが一致しません。');
-                }
-                if (backupExportPassphrase.normalize('NFKC').length < 12) {
-                    throw new Error('バックアップパスワードは12文字以上で入力してください。');
-                }
-            }
-            const blob = encryptManualBackup
-                ? await createEncryptedBackupArchiveBlob(data, backupExportPassphrase)
-                : await createBackupArchiveBlob(data);
+            const blob = await createBackupArchiveBlob(data);
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
@@ -4981,8 +4966,6 @@ export default function AdminPage() {
             a.click();
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
-            setBackupExportPassphrase('');
-            setBackupExportPassphraseConfirm('');
         } catch (e) {
             alert(`バックアップの作成に失敗しました: ${e.message}`);
         }
@@ -4999,12 +4982,19 @@ export default function AdminPage() {
         }
 
         try {
-            const json = await readBackupFile(file, { passphrase: backupImportPassphrase });
+            let json;
+            try {
+                json = await readBackupFile(file);
+            } catch (readError) {
+                if (readError.code !== 'BACKUP_PASSPHRASE_REQUIRED') throw readError;
+                const legacyPassphrase = window.prompt('このファイルは暗号化されています。作成時のパスワードを入力してください。');
+                if (!legacyPassphrase) throw new Error('バックアップの読み込みを中止しました。');
+                json = await readBackupFile(file, { passphrase: legacyPassphrase });
+            }
             await importLocalData(json);
             await initializeLocalExams(true);
             loadLocalExams();
             alert("データを復元しました。画面を再読み込みします。");
-            setBackupImportPassphrase('');
             window.location.reload();
         } catch (e) {
             alert(`復元に失敗しました。正しいバックアップファイルか確認してください: ${e.message}`);
@@ -5899,7 +5889,7 @@ export default function AdminPage() {
                                         fontSize: '0.9rem'
                                     }}
                                 >
-                                    📤 {encryptManualBackup ? 'パスワード付きでエクスポート' : '暗号化せずエクスポート'}
+                                    📤 バックアップをエクスポート
                                 </button>
                                 <label style={{
                                     padding: '0.6rem 1.2rem',
@@ -5941,62 +5931,6 @@ export default function AdminPage() {
                             </div>
                         </div>
 
-                        <div style={{
-                            display: 'grid',
-                            gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
-                            gap: '1rem',
-                            marginTop: '1rem',
-                            padding: '1rem',
-                            border: '1px solid var(--border-color)',
-                            borderRadius: '0.5rem',
-                            background: 'var(--surface-soft)'
-                        }}>
-                            <div>
-                                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 700, marginBottom: '0.75rem' }}>
-                                    <input
-                                        type="checkbox"
-                                        checked={encryptManualBackup}
-                                        onChange={event => setEncryptManualBackup(event.target.checked)}
-                                    />
-                                    パスワードで暗号化する（推奨）
-                                </label>
-                                {encryptManualBackup ? (
-                                    <div style={{ display: 'grid', gap: '0.65rem' }}>
-                                        <input
-                                            type="password"
-                                            value={backupExportPassphrase}
-                                            onChange={event => setBackupExportPassphrase(event.target.value)}
-                                            autoComplete="new-password"
-                                            minLength={12}
-                                            placeholder="書き出し用パスワード（12文字以上）"
-                                            style={{ padding: '0.65rem', border: '1px solid var(--border-color)', borderRadius: '0.4rem', background: 'var(--surface)', color: 'var(--text-primary)' }}
-                                        />
-                                        <input
-                                            type="password"
-                                            value={backupExportPassphraseConfirm}
-                                            onChange={event => setBackupExportPassphraseConfirm(event.target.value)}
-                                            autoComplete="new-password"
-                                            minLength={12}
-                                            placeholder="パスワードを再入力"
-                                            style={{ padding: '0.65rem', border: '1px solid var(--border-color)', borderRadius: '0.4rem', background: 'var(--surface)', color: 'var(--text-primary)' }}
-                                        />
-                                    </div>
-                                ) : (
-                                    <div style={{ color: 'var(--warning-text)', fontSize: '0.82rem' }}>暗号化しないファイルには問題・履歴・画像・PDFがそのまま保存されます。</div>
-                                )}
-                            </div>
-                            <label style={{ display: 'grid', alignContent: 'start', gap: '0.45rem', fontWeight: 700 }}>
-                                暗号化バックアップを復元する場合
-                                <input
-                                    type="password"
-                                    value={backupImportPassphrase}
-                                    onChange={event => setBackupImportPassphrase(event.target.value)}
-                                    autoComplete="current-password"
-                                    placeholder="読み込み用パスワード"
-                                    style={{ padding: '0.65rem', border: '1px solid var(--border-color)', borderRadius: '0.4rem', background: 'var(--surface)', color: 'var(--text-primary)' }}
-                                />
-                            </label>
-                        </div>
                     </div>
 
                     {/* Custom Exam List */}
