@@ -15,7 +15,6 @@ export const MICROSOFT_ONEDRIVE_SCOPES = Object.freeze([
 ]);
 
 const TOKEN_EXPIRY_MARGIN_MS = 60_000;
-const AUTHORIZATION_TIMEOUT_MS = 5 * 60_000;
 const REDIRECT_PENDING_STORAGE_KEY = 'radexam_microsoft_oauth_pending';
 const REDIRECT_PENDING_MAX_AGE_MS = 10 * 60_000;
 const MICROSOFT_CALLBACK_PATH = '/sync';
@@ -109,12 +108,6 @@ export const hasPendingMicrosoftAuthorizationRedirect = (
     }
 };
 
-const shouldUsePageRedirect = windowRef => {
-    const userAgent = String(windowRef?.navigator?.userAgent || '');
-    return /Android|iPhone|iPad|iPod|Mobile/i.test(userAgent)
-        || Boolean(windowRef?.matchMedia?.('(display-mode: standalone)')?.matches);
-};
-
 const parseTokenResponse = async response => {
     const body = await response.json().catch(() => ({}));
     if (!response.ok) {
@@ -133,8 +126,6 @@ export class MicrosoftOneDriveWebTokenManager {
         windowRef = globalThis.window,
         fetchImpl = (...args) => globalThis.fetch(...args),
         now = () => Date.now(),
-        pollIntervalMs = 200,
-        authorizationTimeoutMs = AUTHORIZATION_TIMEOUT_MS,
         requestTimeoutMs = DEFAULT_SYNC_REQUEST_TIMEOUT_MS,
     }) {
         if (!clientId) throw new Error('Microsoft OAuthのクライアントIDが必要です。');
@@ -142,8 +133,6 @@ export class MicrosoftOneDriveWebTokenManager {
         this.window = windowRef;
         this.fetch = (...args) => fetchImpl(...args);
         this.now = now;
-        this.pollIntervalMs = pollIntervalMs;
-        this.authorizationTimeoutMs = authorizationTimeoutMs;
         this.requestTimeoutMs = requestTimeoutMs;
         this.tokens = null;
         this.completedPageRedirect = false;
@@ -206,53 +195,6 @@ export class MicrosoftOneDriveWebTokenManager {
         }
     }
 
-    waitForAuthorizationCode(popup, { redirectUri, state }) {
-        return new Promise((resolve, reject) => {
-            const startedAt = this.now();
-            const timer = this.window.setInterval(() => {
-                if (popup.closed) {
-                    this.window.clearInterval(timer);
-                    reject(new Error('Microsoft認証画面が閉じられました。'));
-                    return;
-                }
-                if (this.now() - startedAt > this.authorizationTimeoutMs) {
-                    this.window.clearInterval(timer);
-                    popup.close();
-                    reject(new Error('Microsoft認証が時間切れになりました。'));
-                    return;
-                }
-                let location;
-                try {
-                    location = popup.location.href;
-                } catch {
-                    return;
-                }
-                if (!location?.startsWith(redirectUri)) return;
-                this.window.clearInterval(timer);
-                const callbackUrl = new URL(location);
-                popup.close();
-                if (callbackUrl.searchParams.get('state') !== state) {
-                    reject(new Error('Microsoft認証のstate確認に失敗しました。'));
-                    return;
-                }
-                const oauthError = callbackUrl.searchParams.get('error');
-                if (oauthError) {
-                    reject(new Error(
-                        callbackUrl.searchParams.get('error_description')
-                        || `Microsoft認証がキャンセルされました: ${oauthError}`
-                    ));
-                    return;
-                }
-                const code = callbackUrl.searchParams.get('code');
-                if (!code) {
-                    reject(new Error('Microsoft認証コードが返されませんでした。'));
-                    return;
-                }
-                resolve(code);
-            }, this.pollIntervalMs);
-        });
-    }
-
     async requestAccessToken({ prompt = 'select_account' } = {}) {
         if (!this.window) {
             throw new Error('Microsoft認証はブラウザ画面から実行してください。');
@@ -270,37 +212,23 @@ export class MicrosoftOneDriveWebTokenManager {
             codeChallenge: challenge,
             prompt,
         });
-        if (shouldUsePageRedirect(this.window)) {
-            const storage = storageFromWindow(this.window);
-            if (!storage) {
-                throw new Error('Microsoft認証の一時情報をこのブラウザに保存できません。');
-            }
-            storage.setItem(REDIRECT_PENDING_STORAGE_KEY, JSON.stringify({
-                state,
-                verifier,
-                redirectUri,
-                returnPath: `${this.window.location.pathname}${this.window.location.search || ''}`,
-                expiresAt: this.now() + REDIRECT_PENDING_MAX_AGE_MS,
-            }));
-            this.window.location.assign(authorizationUrl);
-            return new Promise(() => {});
+        const storage = storageFromWindow(this.window);
+        if (!storage) {
+            throw new Error('Microsoft認証の一時情報をこのブラウザに保存できません。');
         }
-        const popup = this.window.open(
-            authorizationUrl,
-            'radexam-microsoft-oauth',
-            'popup=yes,width=520,height=720'
-        );
-        if (!popup) {
-            throw new Error('Microsoft認証画面を開けませんでした。ポップアップを許可してください。');
-        }
-        const code = await this.waitForAuthorizationCode(popup, { redirectUri, state });
-        const token = await this.exchangeToken({
-            code,
-            code_verifier: verifier,
-            grant_type: 'authorization_code',
-            redirect_uri: redirectUri,
-        });
-        return this.saveTokenResponse(token);
+        // Microsoftの認証ページは環境によってCross-Origin-Opener-Policyを適用し、
+        // 認証後にpopupと元ページのWindowProxyを切り離すことがある。その場合、
+        // callback先のRadExamがpopup内に残って接続処理を再開できないため、Web/PWA版は
+        // 端末にかかわらず同一ページのリダイレクトに統一する。
+        storage.setItem(REDIRECT_PENDING_STORAGE_KEY, JSON.stringify({
+            state,
+            verifier,
+            redirectUri,
+            returnPath: `${this.window.location.pathname}${this.window.location.search || ''}`,
+            expiresAt: this.now() + REDIRECT_PENDING_MAX_AGE_MS,
+        }));
+        this.window.location.assign(authorizationUrl);
+        return new Promise(() => {});
     }
 
     async completePendingPageRedirect() {

@@ -115,3 +115,43 @@ test('completes a mobile page redirect after Microsoft returns to the app', asyn
     assert.equal(replacedPath, '/sync');
     assert.equal(manager.completedPageRedirect, true);
 });
+
+test('uses a same-page redirect instead of a popup in desktop browsers', async () => {
+    const stored = new Map();
+    const storage = {
+        getItem: key => stored.get(key) || null,
+        setItem: (key, value) => stored.set(key, value),
+        removeItem: key => stored.delete(key),
+    };
+    let assignedUrl = '';
+    let popupOpened = false;
+    const windowRef = {
+        localStorage: storage,
+        navigator: { userAgent: 'Desktop Browser' },
+        location: {
+            origin: 'https://rad-exam.vercel.app',
+            pathname: '/sync',
+            search: '',
+            href: 'https://rad-exam.vercel.app/sync',
+            assign: url => { assignedUrl = url; },
+        },
+        open: () => {
+            popupOpened = true;
+            return null;
+        },
+    };
+    const manager = new MicrosoftOneDriveWebTokenManager({
+        clientId: '11111111-2222-3333-4444-555555555555',
+        windowRef,
+        now: () => 2_000_000,
+    });
+
+    manager.requestAccessToken();
+    await new Promise(resolve => setTimeout(resolve, 20));
+
+    assert.equal(popupOpened, false);
+    assert.match(assignedUrl, /^https:\/\/login\.microsoftonline\.com\//);
+    const pending = JSON.parse(storage.getItem('radexam_microsoft_oauth_pending'));
+    assert.equal(pending.redirectUri, 'https://rad-exam.vercel.app/sync');
+    assert.equal(pending.returnPath, '/sync');
+});
