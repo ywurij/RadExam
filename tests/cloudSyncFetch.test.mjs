@@ -35,6 +35,14 @@ test('Mac/PC版のクラウド通信先をGoogle DriveとMicrosoftに限定す�
         assertAllowedCloudUrl('https://tenant-my.sharepoint.com/upload/session-id'),
         'https://tenant-my.sharepoint.com/upload/session-id'
     );
+    assert.equal(
+        assertAllowedCloudUrl('https://my.microsoftpersonalcontent.com/personal/upload/session-id'),
+        'https://my.microsoftpersonalcontent.com/personal/upload/session-id'
+    );
+    assert.throws(
+        () => assertAllowedCloudUrl('https://microsoftpersonalcontent.com.example.com/upload'),
+        /許可されていない/
+    );
     assert.throws(
         () => assertAllowedCloudUrl('https://storage.live.com.example.com/collect'),
         /許可されていない/

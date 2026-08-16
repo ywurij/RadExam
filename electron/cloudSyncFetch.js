@@ -23,6 +23,9 @@ const MICROSOFT_STORAGE_DOMAINS = [
   'onedrive.live.com',
   'storage.live.com',
   'livefilestore.com',
+  // 個人向けOneDriveの新しい保存基盤。Microsoft Graphが返す一時
+  // アップロードURLとダウンロードURLの両方で使用される。
+  'microsoftpersonalcontent.com',
   'sharepoint.com',
   'sharepoint-df.com',
 ];
@@ -54,7 +57,9 @@ const assertAllowedCloudUrl = rawUrl => {
     && url.pathname.startsWith('/v1.0/')
   );
   if (!googleApi && !microsoftApi && !isMicrosoftStorageHost(url.hostname)) {
-    throw new Error('許可されていないクラウド通信先です。');
+    // 一時URLには認証情報が含まれるためURL全体は表示せず、診断に必要な
+    // ホスト名だけを返す。
+    throw new Error(`許可されていないクラウド通信先です（ホスト: ${url.hostname}）。`);
   }
   return url.toString();
 };
