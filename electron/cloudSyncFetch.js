@@ -11,10 +11,24 @@ const allowedRequestHeaders = new Set([
   'range',
 ]);
 
+const isHostOrSubdomain = (hostname, domain) => (
+  hostname === domain || hostname.endsWith(`.${domain}`)
+);
+
+// OneDriveのcreateUploadSessionはGraphとは別の、Microsoft管理下の一時URLを返す。
+// 個人向けOneDriveでは1drv.comのほか、地域や保存先によってLive Storage系も使われる。
+const MICROSOFT_STORAGE_DOMAINS = [
+  '1drv.com',
+  'onedrive.com',
+  'onedrive.live.com',
+  'storage.live.com',
+  'livefilestore.com',
+  'sharepoint.com',
+  'sharepoint-df.com',
+];
+
 const isMicrosoftStorageHost = hostname => (
-  hostname.endsWith('.1drv.com')
-  || hostname.endsWith('.sharepoint.com')
-  || hostname.endsWith('.sharepoint-df.com')
+  MICROSOFT_STORAGE_DOMAINS.some(domain => isHostOrSubdomain(hostname, domain))
 );
 
 const assertAllowedCloudUrl = rawUrl => {

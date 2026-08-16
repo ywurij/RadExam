@@ -23,6 +23,22 @@ test('Mac/PC版のクラウド通信先をGoogle DriveとMicrosoftに限定す�
         assertAllowedCloudUrl('https://public.sn.files.1drv.com/download/example'),
         'https://public.sn.files.1drv.com/download/example'
     );
+    assert.equal(
+        assertAllowedCloudUrl('https://storage.live.com/upload/session-id'),
+        'https://storage.live.com/upload/session-id'
+    );
+    assert.equal(
+        assertAllowedCloudUrl('https://region.storage.live.com/upload/session-id'),
+        'https://region.storage.live.com/upload/session-id'
+    );
+    assert.equal(
+        assertAllowedCloudUrl('https://tenant-my.sharepoint.com/upload/session-id'),
+        'https://tenant-my.sharepoint.com/upload/session-id'
+    );
+    assert.throws(
+        () => assertAllowedCloudUrl('https://storage.live.com.example.com/collect'),
+        /許可されていない/
+    );
     assert.throws(
         () => assertAllowedCloudUrl('https://example.com/collect'),
         /許可されていない/

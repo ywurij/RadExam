@@ -167,6 +167,18 @@ const nextExpectedOffset = body => {
     return match ? Number(match[1]) : 0;
 };
 
+const uploadInterruptionMessage = cause => {
+    const detail = String(cause?.message || '')
+        .replace(/^Error invoking remote method '[^']+':\s*Error:\s*/u, '')
+        // uploadUrl自体が認証情報を含むため、下位エラーにURLがあっても画面へ出さない。
+        .replace(/https:\/\/\S+/gu, 'OneDriveの一時アップロード先')
+        .trim()
+        .slice(0, 240);
+    return detail
+        ? `OneDriveへのアップロードが中断されました（${detail}）。再試行すると続きから送信します。`
+        : 'OneDriveへのアップロードが中断されました。再試行すると続きから送信します。';
+};
+
 export class OneDriveAppFolderClient {
     constructor({
         getAccessToken,
@@ -266,7 +278,7 @@ export class OneDriveAppFolderClient {
                     continue;
                 }
                 const error = new OneDriveSyncError(
-                    'OneDriveへのアップロードが中断されました。再試行すると続きから送信します。',
+                    uploadInterruptionMessage(cause),
                     { code: 'upload-interrupted', retryable: true }
                 );
                 error.cause = cause;
@@ -509,14 +521,48 @@ export class OneDriveAppFolderClient {
         });
         while (offset < data.size) {
             const endExclusive = Math.min(offset + this.resumableChunkSize, data.size);
-            const response = await this.uploadRequest(uploadUrl, {
-                method: 'PUT',
-                headers: {
-                    'Content-Length': String(endExclusive - offset),
-                    'Content-Range': `bytes ${offset}-${endExclusive - 1}/${data.size}`,
-                },
-                body: data.slice(offset, endExclusive),
-            }, { acceptedStatuses: [202] });
+            let response;
+            try {
+                response = await this.uploadRequest(uploadUrl, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Length': String(endExclusive - offset),
+                        'Content-Range': `bytes ${offset}-${endExclusive - 1}/${data.size}`,
+                    },
+                    body: data.slice(offset, endExclusive),
+                }, { acceptedStatuses: [202] });
+            } catch (error) {
+                // PUTの応答だけが失われた場合、同じ範囲を送り直す前にOneDriveが
+                // 受信済みの位置を問い合わせる。416も「既に受信済み」で起き得る。
+                if (!error?.retryable && error?.status !== 416) throw error;
+                let statusResponse;
+                try {
+                    statusResponse = await this.uploadRequest(uploadUrl, {}, {
+                        acceptedStatuses: [404],
+                    });
+                } catch {
+                    throw error;
+                }
+                if (statusResponse.status === 404) throw error;
+                const status = await statusResponse.json();
+                const resumedOffset = nextExpectedOffset(status);
+                if (resumedOffset <= offset) throw error;
+                offset = resumedOffset;
+                await this.uploadStateStore?.set?.(stateKey, {
+                    uploadUrl,
+                    path,
+                    size: data.size,
+                    uploadedBytes: offset,
+                    expirationDateTime: status.expirationDateTime,
+                });
+                this.onUploadProgress?.({
+                    path,
+                    progressPhase,
+                    uploadedBytes: offset,
+                    totalBytes: data.size,
+                });
+                continue;
+            }
             if (response.status !== 202) {
                 await this.uploadStateStore?.remove?.(stateKey);
                 this.onUploadProgress?.({

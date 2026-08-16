@@ -227,6 +227,70 @@ test('turns an expired upload session into a new resumable session', async () =>
     assert.ok(requests.some(request => request.url === 'https://upload.example/restarted'));
 });
 
+test('resumes from the server offset when an uploaded fragment response is lost', async () => {
+    const chunkSize = 5 * 320 * 1024;
+    const blob = new Blob([new Uint8Array(chunkSize * 3 + 1)]);
+    const ranges = [];
+    let firstFragmentResponseLost = false;
+    const client = new OneDriveAppFolderClient({
+        getAccessToken: async () => 'access-token',
+        maxRetries: 0,
+        resumableChunkSize: chunkSize,
+        uploadStateStore: {
+            async get() { return null; },
+            async set() {},
+            async remove() {},
+        },
+        fetchImpl: async (url, options = {}) => {
+            if (String(url).endsWith('/special/approot')) return jsonResponse(appRoot);
+            if (String(url).includes('/special/approot:/snapshots')) {
+                return jsonResponse({ error: { code: 'itemNotFound' } }, { status: 404 });
+            }
+            if (String(url).endsWith('/items/app-root/children')) {
+                return jsonResponse({
+                    id: 'snapshots-folder',
+                    name: 'snapshots',
+                    folder: { childCount: 0 },
+                }, { status: 201 });
+            }
+            if (String(url).endsWith('/createUploadSession')) {
+                return jsonResponse({ uploadUrl: 'https://storage.live.com/upload/session' });
+            }
+            if (options.method === 'PUT') {
+                ranges.push(options.headers['Content-Range']);
+                if (!firstFragmentResponseLost) {
+                    firstFragmentResponseLost = true;
+                    throw new TypeError('fetch failed');
+                }
+                if (ranges.length <= 3) {
+                    return jsonResponse({ nextExpectedRanges: [`${chunkSize * ranges.length}-`] }, {
+                        status: 202,
+                    });
+                }
+                return jsonResponse({ id: 'snapshot-file', eTag: '"snapshot-etag"' }, {
+                    status: 201,
+                });
+            }
+            return jsonResponse({
+                nextExpectedRanges: [`${chunkSize}-`],
+                expirationDateTime: '2026-08-17T00:00:00.000Z',
+            });
+        },
+    });
+
+    const result = await client.writeBlob('snapshots/initial.radexam', blob, {
+        existingFile: null,
+    });
+
+    assert.equal(result.id, 'snapshot-file');
+    assert.deepEqual(ranges, [
+        `bytes 0-${chunkSize - 1}/${blob.size}`,
+        `bytes ${chunkSize}-${chunkSize * 2 - 1}/${blob.size}`,
+        `bytes ${chunkSize * 2}-${chunkSize * 3 - 1}/${blob.size}`,
+        `bytes ${chunkSize * 3}-${blob.size - 1}/${blob.size}`,
+    ]);
+});
+
 test('normalizes a OneDrive ETag race as a manifest conflict', async () => {
     const client = {
         async findFile() {
