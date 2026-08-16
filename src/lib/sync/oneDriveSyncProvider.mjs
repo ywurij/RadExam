@@ -224,7 +224,10 @@ export class OneDriveAppFolderClient {
         this.folderCache = new Map();
     }
 
-    async request(url, options = {}, { acceptedStatuses = [] } = {}) {
+    async request(url, options = {}, {
+        acceptedStatuses = [],
+        networkLabel = 'OneDrive',
+    } = {}) {
         for (let attempt = 0; attempt <= this.maxRetries; attempt += 1) {
             const accessToken = await this.getAccessToken();
             if (!accessToken) {
@@ -253,7 +256,7 @@ export class OneDriveAppFolderClient {
                     continue;
                 }
                 const error = new OneDriveSyncError(
-                    'OneDriveと通信できませんでした。ネットワーク接続を確認して再試行してください。',
+                    `${networkLabel}と通信できませんでした。ネットワーク接続を確認して再試行してください。`,
                     { code: 'network-error', retryable: true }
                 );
                 error.cause = cause;
@@ -305,7 +308,11 @@ export class OneDriveAppFolderClient {
 
     async getAppRoot() {
         if (this.appRoot) return this.appRoot;
-        const response = await this.request(`${GRAPH_BASE}/me/drive/special/approot`);
+        const response = await this.request(
+            `${GRAPH_BASE}/me/drive/special/approot`,
+            {},
+            { networkLabel: 'OneDriveの保存領域' }
+        );
         this.appRoot = await response.json();
         this.folderCache.set('', this.appRoot);
         return this.appRoot;
@@ -315,7 +322,11 @@ export class OneDriveAppFolderClient {
         const query = new URLSearchParams({
             '$select': 'id,displayName,mail,userPrincipalName',
         });
-        const response = await this.request(`${GRAPH_BASE}/me?${query}`);
+        const response = await this.request(
+            `${GRAPH_BASE}/me?${query}`,
+            {},
+            { networkLabel: 'Microsoftアカウント情報' }
+        );
         return response.json();
     }
 

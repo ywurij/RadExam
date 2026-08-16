@@ -113,4 +113,5 @@ test('completes a mobile page redirect after Microsoft returns to the app', asyn
     assert.equal(requests[0].options.body.get('redirect_uri'), 'https://rad-exam.vercel.app/sync');
     assert.equal(storage.getItem('radexam_microsoft_oauth_pending'), null);
     assert.equal(replacedPath, '/sync');
+    assert.equal(manager.completedPageRedirect, true);
 });

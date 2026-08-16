@@ -154,6 +154,9 @@ const authorizeSession = async (clientId, { interactive }) => {
             throw error;
         }
         token = await session.tokenManager.requestAccessToken();
+        // AndroidのPWAではMicrosoftから同一ページへ戻った直後に複数のGraph通信を
+        // 同時開始すると、ブラウザがどちらもネットワークエラーにする場合がある。
+        await session.tokenManager.waitForPageRedirectToSettle();
         session.user = null;
     }
     return session;
@@ -176,11 +179,11 @@ const verifyAccount = (user, state) => {
 export const connectOneDriveSync = async ({ clientId }) => (
     runExclusive(async () => {
         const session = await authorizeSession(clientId, { interactive: true });
-        const [user, root] = await Promise.all([
-            getSessionUser(session, { refresh: true }),
-            session.provider.ensureActiveSyncSpace(),
-        ]);
+        // モバイルブラウザでは認証復帰直後のGraphアクセスを直列化する。
+        // デスクトップ版はIPC経由なので、従来どおり並列確認を利用できる。
+        const user = await getSessionUser(session, { refresh: true });
         const { accountId, accountLabel } = verifyAccount(user);
+        const root = await session.provider.ensureActiveSyncSpace();
         await connectLocalSyncTracking({
             provider: SYNC_PROVIDERS.ONE_DRIVE,
             accountId,

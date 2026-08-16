@@ -19,6 +19,7 @@ const AUTHORIZATION_TIMEOUT_MS = 5 * 60_000;
 const REDIRECT_PENDING_STORAGE_KEY = 'radexam_microsoft_oauth_pending';
 const REDIRECT_PENDING_MAX_AGE_MS = 10 * 60_000;
 const MICROSOFT_CALLBACK_PATH = '/sync';
+const PAGE_REDIRECT_SETTLE_MS = 300;
 
 const base64Url = bytes => {
     let binary = '';
@@ -145,6 +146,7 @@ export class MicrosoftOneDriveWebTokenManager {
         this.authorizationTimeoutMs = authorizationTimeoutMs;
         this.requestTimeoutMs = requestTimeoutMs;
         this.tokens = null;
+        this.completedPageRedirect = false;
     }
 
     hasValidToken() {
@@ -340,7 +342,15 @@ export class MicrosoftOneDriveWebTokenManager {
         });
         storage?.removeItem(REDIRECT_PENDING_STORAGE_KEY);
         this.completedRedirectReturnPath = pending.returnPath || '/data';
+        this.completedPageRedirect = true;
         this.window.history?.replaceState?.({}, '', MICROSOFT_CALLBACK_PATH);
         return this.saveTokenResponse(token);
+    }
+
+    async waitForPageRedirectToSettle() {
+        if (!this.completedPageRedirect) return;
+        this.completedPageRedirect = false;
+        const schedule = this.window?.setTimeout?.bind(this.window) || globalThis.setTimeout;
+        await new Promise(resolve => schedule(resolve, PAGE_REDIRECT_SETTLE_MS));
     }
 }
