@@ -112,4 +112,8 @@ Next.js、React、Electron、localForage / IndexedDB、Tiptap、KaTeXを使用�
 
 ## 利用条件
 
-ソースコードのライセンス条件は現在整備中です。利用・再配布条件は各Releaseの案内に従ってください。
+RadExamのソースコードは[MIT License](LICENSE)で公開しています。依存パッケージや第三者が権利を持つ素材には、それぞれのライセンスが適用されます。利用者がアプリへ登録する試験問題、PDF、画像等の権利がMIT Licenseへ移ることはありません。
+
+- [プライバシーポリシー](https://rad-exam.vercel.app/privacy)
+- [利用規約](https://rad-exam.vercel.app/terms)
+- [お問い合わせ](https://rad-exam.vercel.app/contact)

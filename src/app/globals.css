@@ -88,6 +88,37 @@ a {
   text-decoration: none;
 }
 
+.appLegalFooter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem 1rem;
+  width: min(100%, var(--page-max-width-wide));
+  margin: 0 auto;
+  padding: 1.25rem max(1rem, env(safe-area-inset-right)) max(1.25rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
+  border-top: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+}
+
+.legalLinks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem 1rem;
+}
+
+.legalLinks a {
+  color: var(--accent);
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
+}
+
+.legalLinksCompact {
+  justify-content: center;
+}
+
 .themeSettings {
   display: flex;
   align-items: center;

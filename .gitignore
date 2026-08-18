@@ -47,6 +47,7 @@ next-env.d.ts
 /scratch
 /pdf/
 /tmp/
+/public/uploads/
 
 # local VLM runtime/model assets (downloaded or added during packaging)
 /resources/vlm/models/

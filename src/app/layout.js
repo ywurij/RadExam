@@ -1,5 +1,6 @@
 import "./globals.css";
 import CloudSyncLifecycle from "@/components/CloudSyncLifecycle";
+import LegalLinks from "@/components/LegalLinks";
 
 const isMobile = process.env.NEXT_PUBLIC_APP_TARGET === "mobile";
 
@@ -32,6 +33,10 @@ export default function RootLayout({ children }) {
         <script dangerouslySetInnerHTML={{ __html: themeInitialization }} />
         <CloudSyncLifecycle />
         {children}
+        <footer className="appLegalFooter">
+          <LegalLinks compact />
+          <span>© 2026 RadExam</span>
+        </footer>
       </body>
     </html>
   );
