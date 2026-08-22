@@ -4,32 +4,90 @@ import test from 'node:test';
 import {
     assignNearestUniqueLabels,
     buildPairedOptionText,
+    buildPositionedInlineHtml,
+    buildQuestionFigureCompositeBounds,
     buildSourceGridLayouts,
     compareImageReadingOrder,
     extractQuestionTable,
     extractOptionColumnHeaders,
+    extractPairedOptionHeading,
     findNearestPrecedingQuestion,
     groupNearbyLegendItems,
+    groupPdfTextItemsIntoLines,
     hasNearbyOptionPrefix,
+    hasQuestionFigureSupportingText,
     hasSingleNearbyLegendGroup,
     hasExplicitFigureCue,
     isPairedOptionHeader,
+    isPairedOptionHeadingLine,
     isRepeatedOptionOrFigureLabel,
     isLikelyOptionContinuationLine,
     isLikelyLegendContinuationText,
     isStandaloneImageLegendText,
     isUsableFallbackFigureCrop,
+    inferPairedOptionLayout,
     joinOptionContinuation,
     mergeHorizontalImagePairsBySharedLegend,
     mergeVerticallyAdjacentImageRects,
     mergeTwoByTwoImageGridRects,
+    parsePdfQuestionStart,
     repairLegacySequentialComparisonOptions,
     removeContainedImageRects,
     restoreTruncatedOptionText,
     shouldConsumeOptionColumnHeaders,
+    shouldUseRadiationLayoutHeuristics,
     splitOptionItemsByColumns,
     spreadPositionedLegendLabels,
 } from '../src/lib/pdfImportText.js';
+
+const defaultQuestionPattern = /^\s*(?:(?:問|問題|No\.?)\s*(\d{1,3})|(\d{1,3})\s*[\.．:：\)）])/i;
+
+test('scopes the new mixed-layout heuristics to radiation oncology imports', () => {
+    assert.equal(shouldUseRadiationLayoutHeuristics('radiation'), true);
+    assert.equal(shouldUseRadiationLayoutHeuristics('default'), false);
+    assert.equal(shouldUseRadiationLayoutHeuristics('ivr'), false);
+    assert.equal(shouldUseRadiationLayoutHeuristics('nuclear'), false);
+});
+
+test('parses full-width radiation oncology question numbers without changing question text', () => {
+    assert.deepEqual(
+        parsePdfQuestionStart('１   IGRT で誤っているのはどれか。', defaultQuestionPattern),
+        { qNum: 1, questionText: 'IGRT で誤っているのはどれか。' },
+    );
+    assert.deepEqual(
+        parsePdfQuestionStart('１０   非相同末端結合で正しいのはどれか。', defaultQuestionPattern),
+        { qNum: 10, questionText: '非相同末端結合で正しいのはどれか。' },
+    );
+    assert.deepEqual(
+        parsePdfQuestionStart('28   人を対象とする生命科学・医学系研究に関して誤っているのはどれか。', defaultQuestionPattern),
+        { qNum: 28, questionText: '人を対象とする生命科学・医学系研究に関して誤っているのはどれか。' },
+    );
+    assert.equal(parsePdfQuestionStart('80PTV70', defaultQuestionPattern), null);
+});
+
+test('keeps smaller body text in reading order when a PDF has oversized question numbers', () => {
+    const lines = groupPdfTextItemsIntoLines([
+        { text: '２', x: 50, y: 600, height: 15.62 },
+        { text: '次の問題', x: 75, y: 600, height: 9.92 },
+        { text: 'a', x: 75, y: 575, height: 7.8 },
+        { text: '選択肢A', x: 95, y: 575, height: 9.92 },
+        { text: '１', x: 50, y: 700, height: 15.62 },
+        { text: 'IGRTで誤っているのはどれか。', x: 75, y: 700, height: 9.92 },
+        { text: 'a', x: 75, y: 675, height: 7.8 },
+        { text: '選択肢A', x: 110, y: 675, height: 9.92 },
+        { text: '223', x: 95, y: 681, height: 4.96 },
+    ]);
+
+    assert.deepEqual(
+        lines.map(line => line.map(item => item.text)),
+        [
+            ['１', 'IGRTで誤っているのはどれか。'],
+            ['a', '223', '選択肢A'],
+            ['２', '次の問題'],
+            ['a', '選択肢A'],
+        ],
+    );
+});
 
 test('assigns stacked image legends one-to-one by spatial distance', () => {
     const assignments = assignNearestUniqueLabels([
@@ -459,6 +517,148 @@ test('recognizes paired option headers and preserves both option columns', () =>
         item('カソード', 264, 45),
     ]);
     assert.equal(option, 'アノード ― カソード');
+});
+
+test('recognizes semantic two-column headings without treating A and B as answer choices', () => {
+    assert.deepEqual(extractPairedOptionHeading([
+        { text: '遺伝子', x: 112, width: 30 },
+        { text: '応答', x: 238, width: 20 },
+    ]), { headers: ['遺伝子', '応答'] });
+    assert.equal(isPairedOptionHeadingLine([
+        { text: '遺伝子', x: 112, width: 30 },
+        { text: '応答', x: 238, width: 20 },
+    ]), true);
+    assert.equal(isPairedOptionHeadingLine([
+        { text: 'A', x: 112, width: 8 },
+        { text: '項目', x: 122, width: 20 },
+        { text: 'B', x: 238, width: 8 },
+        { text: '項目', x: 248, width: 20 },
+    ]), true);
+    assert.equal(isPairedOptionHeadingLine([
+        { text: '放射線測定器', x: 112, width: 80 },
+        { text: '線種', x: 300, width: 20 },
+    ]), true);
+    assert.equal(isPairedOptionHeadingLine([
+        { text: '正しいのはどれか。', x: 112, width: 120 },
+        { text: '1つ選べ。', x: 250, width: 50 },
+    ]), false);
+    assert.deepEqual(extractPairedOptionHeading([
+        { text: '年齢/WHOのグレード', x: 112, width: 102 },
+        { text: '術後の方針', x: 241, width: 50 },
+    ]), { headers: ['年齢/WHOのグレード', '術後の方針'] });
+    assert.deepEqual(extractPairedOptionHeading([
+        { text: '臨床病期', x: 112, width: 40 },
+        { text: 'リンパ節レベル', x: 213, width: 70 },
+    ]), { headers: ['臨床病期', 'リンパ節レベル'] });
+    assert.equal(extractPairedOptionHeading([
+        { text: 'a', x: 94, width: 5 },
+        { text: '治療中の呼吸性移動', x: 112, width: 89 },
+        { text: 'CTVマージン', x: 320, width: 62 },
+    ]), null);
+});
+
+test('keeps both sides of semantic paired options separated', () => {
+    assert.equal(buildPairedOptionText([
+        { text: 'a', x: 94, width: 5 },
+        { text: 'BAX', x: 112, width: 20 },
+        { text: 'アポトーシス誘導', x: 238, width: 79 },
+    ]), 'BAX ― アポトーシス誘導');
+    assert.equal(buildPairedOptionText([
+        { text: 'a', x: 94, width: 5 },
+        { text: '2', x: 112, width: 5 },
+        { text: '歳', x: 119, width: 10 },
+        { text: '5', x: 238, width: 5 },
+        { text: '歳', x: 245, width: 10 },
+    ]), '2歳 ― 5歳');
+    assert.equal(buildPairedOptionText([
+        { text: 'a', x: 94, width: 5 },
+        { text: 'BAX', x: 112, width: 20 },
+        { text: 'アポトーシス誘導', x: 238, width: 79 },
+    ], { italicizeLeft: true }), '<em>BAX</em> ― アポトーシス誘導');
+    assert.equal(buildPairedOptionText([
+        { text: 'a', x: 94, width: 5 },
+        { text: '89', x: 112, y: 104, width: 5, height: 5 },
+        { text: 'Sr', x: 117, y: 100, width: 10, height: 10 },
+        { text: '50.5日', x: 241, y: 100, width: 29, height: 10 },
+    ], { minimumGap: 48, positionedRichText: true }), '<span class="pdf-script-group"><sup>89</sup>\u2060Sr</span> ― 50.5日');
+    assert.equal(buildPairedOptionText([
+        { text: 'a', x: 94, width: 5 },
+        { text: '通常の選択肢', x: 112, width: 70 },
+        { text: 'です。', x: 190, width: 25 },
+    ], { minimumGap: 48 }), '');
+});
+
+test('restores Latin word spaces while preserving isotope superscripts in paired options', () => {
+    assert.equal(buildPositionedInlineHtml([
+        { text: 'Deep', x: 111, y: 100, width: 23, height: 10 },
+        { text: 'inspiratory', x: 138, y: 100, width: 49, height: 10 },
+        { text: 'Breath', x: 190, y: 100, width: 30, height: 10 },
+        { text: 'Hold', x: 224, y: 100, width: 21, height: 10 },
+    ]), 'Deep inspiratory Breath Hold');
+    assert.equal(buildPositionedInlineHtml([
+        { text: '131', x: 111, y: 104, width: 7, height: 5 },
+        { text: 'I', x: 118, y: 100, width: 4, height: 10 },
+    ]), '<span class="pdf-script-group"><sup>131</sup>\u2060I</span>');
+});
+
+test('keeps a leading superscript attached to its base when a paired cell wraps', () => {
+    assert.equal(buildPairedOptionText([
+        { text: 'b', x: 94, y: 100, width: 5, height: 10 },
+        { text: '90', x: 112, y: 104, width: 5, height: 5 },
+        { text: 'Y', x: 117, y: 100, width: 8, height: 10 },
+        { text: '（イットリウム標識抗CD20抗体）', x: 125, y: 100, width: 158, height: 10 },
+        { text: '経口投与', x: 350, y: 100, width: 40, height: 10 },
+    ], { positionedRichText: true }), '<span class="pdf-script-group"><sup>90</sup>\u2060Y</span>（イットリウム標識抗CD20抗体） ― 経口投与');
+});
+
+test('infers a paired layout from aligned right-column starts across option rows', () => {
+    const row = (key, left, leftWidth) => [
+        { text: key, x: 94, width: 5 },
+        { text: left, x: 112, width: leftWidth },
+        { text: '右列', x: 275, width: 40 },
+    ];
+    assert.equal(inferPairedOptionLayout([
+        row('a', '未熟奇形腫', 125),
+        row('b', '精上皮腫', 115),
+        row('c', '精上皮腫', 115),
+        row('d', '絨毛癌', 105),
+        row('e', '卵黄囊腫瘍', 125),
+    ]), true);
+    assert.equal(inferPairedOptionLayout([
+        [{ text: 'a', x: 94, width: 5 }, { text: '通常の選択肢です。', x: 112, width: 100 }],
+        [{ text: 'b', x: 94, width: 5 }, { text: '単一列です。', x: 112, width: 70 }],
+        [{ text: 'c', x: 94, width: 5 }, { text: '列ではありません。', x: 112, width: 90 }],
+    ]), false);
+});
+
+test('expands any mixed PDF figure crop to include nearby axis labels and table text', () => {
+    const input = {
+        imageRects: [
+            { x: 200, y: 300, w: 160, h: 120 },
+            { x: 370, y: 300, w: 160, h: 120 },
+        ],
+        textItems: [
+            { text: '細胞生存率', x: 175, y: 330, width: 15, height: 70 },
+            { text: 'D98%', x: 390, y: 270, width: 35, height: 10 },
+            { text: '次の問題', x: 90, y: 180, width: 80, height: 10 },
+        ],
+        sectionTopY: 500,
+        sectionBottomY: 220,
+        pageWidth: 600,
+        pageHeight: 800,
+        padding: 5,
+    };
+    assert.equal(hasQuestionFigureSupportingText(input), true);
+    assert.deepEqual(buildQuestionFigureCompositeBounds(input), { x: 170, y: 265, w: 365, h: 160 });
+    assert.equal(hasQuestionFigureSupportingText({
+        imageRects: [{ x: 200, y: 300, w: 160, h: 120 }],
+        textItems: [
+            { text: '画像内ラベル', x: 220, y: 330, width: 60, height: 10 },
+            { text: '離れた設問', x: 80, y: 600, width: 80, height: 10 },
+        ],
+        sectionTopY: 700,
+        sectionBottomY: 200,
+    }), false);
 });
 
 test('assigns a page image to the nearest question above it', () => {

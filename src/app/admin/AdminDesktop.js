@@ -24,18 +24,22 @@ import {
     resolveNuclearDisplayLegend
 } from '@/lib/nuclearFigureGeometry.mjs';
 import { buildNuclearSourcePageAssignments } from '@/lib/nuclearSourcePages.mjs';
-import { getExamImportDefaults } from '@/lib/examImportDefaults.mjs';
+import { EXAM_IMPORT_CATEGORY_OPTIONS, getExamImportDefaults } from '@/lib/examImportDefaults.mjs';
 import { configurePdfJsWorker } from '@/lib/pdfJsWorker.mjs';
 import {
     assignNearestUniqueLabels,
+    buildQuestionFigureCompositeBounds,
     buildSourceGridLayouts,
     buildPairedOptionText,
     compareImageReadingOrder,
     extractQuestionTable,
     extractOptionColumnHeaders,
+    extractPairedOptionHeading,
     findNearestPrecedingQuestion,
     groupNearbyLegendItems,
+    groupPdfTextItemsIntoLines,
     hasNearbyOptionPrefix,
+    hasQuestionFigureSupportingText,
     hasSingleNearbyLegendGroup,
     hasExplicitFigureCue,
     isPairedOptionHeader,
@@ -44,13 +48,16 @@ import {
     isLikelyLegendContinuationText,
     isStandaloneImageLegendText,
     isUsableFallbackFigureCrop,
+    inferPairedOptionLayout,
     joinOptionContinuation,
     mergeHorizontalImagePairsBySharedLegend,
     mergeVerticallyAdjacentImageRects,
     mergeTwoByTwoImageGridRects,
+    parsePdfQuestionStart,
     removeContainedImageRects,
     restoreTruncatedOptionText,
     shouldConsumeOptionColumnHeaders,
+    shouldUseRadiationLayoutHeuristics,
     splitOptionItemsByColumns,
     spreadPositionedLegendLabels,
 } from '@/lib/pdfImportText';
@@ -2371,7 +2378,7 @@ const getPdfParserProfile = (examCategory) => {
     }
 
     return {
-        name: 'default',
+        name: examCategory === '5' ? 'radiation' : 'default',
         questionPattern: /^\s*(?:(?:問|問題|No\.?)\s*(\d{1,3})|(\d{1,3})\s*[\.．:：\)）])/i,
         optionPattern: /^[a-eA-Eａ-ｅＡ-Ｅ][\.．\s\)\)）]/,
         minQuestionLineLength: 5,
@@ -2380,6 +2387,52 @@ const getPdfParserProfile = (examCategory) => {
         footerMinY: 60,
         imageAssignmentStrategy: 'nearest-preceding-question'
     };
+};
+
+const groupLegacyPdfTextItemsIntoLines = (textItems = []) => {
+    const heights = textItems.map(item => item.height || 0).filter(height => height > 0);
+    const maximumHeight = heights.length > 0 ? Math.max(...heights) : 10;
+    const baselineCandidates = textItems.filter(item => {
+        const height = item.height || 0;
+        return height > 0 && height / maximumHeight >= 0.8;
+    });
+    const baselines = [];
+    const addBaselineItems = items => {
+        [...items].sort((first, second) => second.y - first.y).forEach(item => {
+            const closeBaseline = baselines.find(baseline => Math.abs(baseline.y - item.y) < (baselines.length ? 4 : 5));
+            if (closeBaseline) {
+                closeBaseline.items.push(item);
+                closeBaseline.y = closeBaseline.items.reduce((sum, current) => sum + current.y, 0) / closeBaseline.items.length;
+            } else {
+                baselines.push({ y: item.y, items: [item] });
+            }
+        });
+    };
+    addBaselineItems(baselineCandidates.length > 0 ? baselineCandidates : textItems);
+    baselines.sort((first, second) => second.y - first.y);
+
+    const lineGroups = baselines.map(baseline => ({ baselineY: baseline.y, items: [] }));
+    textItems.forEach(item => {
+        let bestGroup = null;
+        let minimumDifference = Infinity;
+        lineGroups.forEach(group => {
+            const difference = Math.abs(group.baselineY - item.y);
+            if (difference < minimumDifference) {
+                minimumDifference = difference;
+                bestGroup = group;
+            }
+        });
+        const threshold = Math.max(5, maximumHeight * 0.6);
+        if (bestGroup && minimumDifference < threshold) {
+            bestGroup.items.push(item);
+        } else {
+            lineGroups.push({ baselineY: item.y, items: [item] });
+        }
+    });
+
+    return lineGroups
+        .filter(group => group.items.length > 0)
+        .map(group => group.items.sort((first, second) => first.x - second.x));
 };
 
 const buildTextLineEntriesFromItems = (textItems) => {
@@ -2550,75 +2603,11 @@ const getFilledOptionCount = (options) => {
     return Object.values(normalized).filter(value => String(value || '').trim().length > 0).length;
 };
 
-const GLUED_QUESTION_UNIT_PREFIX = /^(?:mSv|Sv|Gy|mGy|cGy|mm|cm|mL|kg|%|歳|年|か月|ヶ月|月|日|週|時間|min|hr)\b/i;
-const PLAIN_NUMBER_QUESTION_DISQUALIFIER = /^(?:[a-eA-Eａ-ｅＡ-Ｅ][\.．\s\)）]|mSv|Sv|Gy|mGy|cGy|mm|cm|mL|kg|%|歳|年|か月|ヶ月|月|日|週|時間|min|hr)\b/i;
-const PLAIN_NUMBER_QUESTION_HINT = /(?:次の|以下|最も|正しい|誤って|適切|どれか|選べ|患者|症例|図|画像|所見|疾患|診断|治療|検査|読影|について|に関して|Which|What|Choose|Select|Regarding|About)/i;
-const SELECTION_COUNT_LINE_PATTERN = /^[0-9０-９]+\s*つ選べ(?:。)?$/;
-const QUESTION_RANGE_HEADER_PATTERN = /^問\s*[0-9０-９]{1,3}\s*[～~〜-]\s*[0-9０-９]{1,3}\s*(?:が|は)/;
-const LEADING_COUNTER_CONTINUATION_PATTERN = /^(?:つ(?:選べ)?|本|個|枚|回|例|人|台|枝|歳|年|か月|ヶ月|月|日|週|時間|min|hr)(?:$|\s|の|を|は|で|に)/i;
 const IVR_SECTION_TRANSITION_PATTERN = /(?:共通問題は以上です|次ページ以降も解答してください|IVR専門医試験受験者)/;
-
-const parseQuestionStartText = (lineText, questionPattern) => {
-    const normalizedLineText = String(lineText || '').replace(/\s+/g, ' ').trim();
-    if (!normalizedLineText) {
-        return null;
-    }
-
-    if (SELECTION_COUNT_LINE_PATTERN.test(normalizedLineText) || QUESTION_RANGE_HEADER_PATTERN.test(normalizedLineText)) {
-        return null;
-    }
-
-    const standardMatch = lineText.match(questionPattern);
-    if (standardMatch) {
-        const qNum = parseInt(standardMatch[1] || standardMatch[2], 10);
-        const questionText = lineText.substring(standardMatch[0].length).trim();
-        if (!questionText || /^[～~〜-]/.test(questionText)) {
-            return null;
-        }
-        return {
-            qNum,
-            questionText,
-        };
-    }
-
-    const gluedMatch = lineText.match(/^\s*(\d{1,3})(?=[A-Za-z(（［【])/);
-    if (gluedMatch) {
-        const trailingText = lineText.substring(gluedMatch[0].length).trim();
-        if (GLUED_QUESTION_UNIT_PREFIX.test(trailingText)) {
-            return null;
-        }
-        return {
-            qNum: parseInt(gluedMatch[1], 10),
-            questionText: trailingText,
-        };
-    }
-
-    const spacedMatch = lineText.match(/^\s*(\d{1,3})\s+(.+)$/);
-    if (spacedMatch) {
-        const trailingText = spacedMatch[2].trim();
-        if (
-            !trailingText
-            || PLAIN_NUMBER_QUESTION_DISQUALIFIER.test(trailingText)
-            || SELECTION_COUNT_LINE_PATTERN.test(normalizedLineText)
-            || LEADING_COUNTER_CONTINUATION_PATTERN.test(trailingText)
-        ) {
-            return null;
-        }
-        if (!PLAIN_NUMBER_QUESTION_HINT.test(trailingText) && trailingText.length < 12) {
-            return null;
-        }
-        return {
-            qNum: parseInt(spacedMatch[1], 10),
-            questionText: trailingText,
-        };
-    }
-
-    return null;
-};
 
 const detectFirstQuestionPage = (lines, parserProfile) => {
     const questionLineIndex = lines.findIndex(line => {
-        const parsed = parseQuestionStartText(line.text, parserProfile.questionPattern);
+        const parsed = parsePdfQuestionStart(line.text, parserProfile.questionPattern);
         if (!parsed) return false;
         return parsed.qNum === 1 && line.text.length >= parserProfile.minQuestionLineLength;
     });
@@ -2909,7 +2898,7 @@ export default function AdminPage() {
     const [examName, setExamName] = useState(initialExamDefaults.name);
     const [previewImageModal, setPreviewImageModal] = useState(null);
     const [importMode, setImportMode] = useState('new'); // 'new' or 'existing'
-    const [examCategory, setExamCategory] = useState('1'); // '1': 放射線科, '2': 放射線診断, '3': 核医学, '4': IVR
+    const [examCategory, setExamCategory] = useState('1'); // '1': 放射線科, '2': 放射線診断, '3': 核医学, '4': IVR, '5': 放射線治療
     const [activeTab, setActiveTab] = useState('import'); // 'import', 'cloud', 'manage'
     const [editingExamId, setEditingExamId] = useState('');
     const [editingExamName, setEditingExamName] = useState('');
@@ -3361,6 +3350,7 @@ export default function AdminPage() {
             });
 
             const parserProfile = getPdfParserProfile(examCategory);
+            const usesRadiationLayoutHeuristics = shouldUseRadiationLayoutHeuristics(parserProfile.name);
             let nuclearVlmReady = false;
             let nuclearVlmPageCount = 0;
             let nuclearVlmFailureCount = 0;
@@ -3529,7 +3519,7 @@ export default function AdminPage() {
                 }
             };
 
-            const parseQuestionStart = (lineText) => parseQuestionStartText(lineText, questionPattern);
+            const parseQuestionStart = (lineText) => parsePdfQuestionStart(lineText, questionPattern);
 
             const buildLineText = (line) => {
                 if (line.length === 0) return '';
@@ -3569,20 +3559,44 @@ export default function AdminPage() {
             const populateQuestionOptionsAndText = (questionList) => {
                 questionList.forEach(q => {
                     let optionsStarted = false;
+                    let pairedOptionColumns = usesRadiationLayoutHeuristics
+                        && inferPairedOptionLayout(q.usedLines);
+                    let pairedOptionHeaders = [];
                     let lastOptionKey = '';
                     let lastOptionLine = null;
                     const cleanQuestionLines = [];
                     q.options = {};
                     q.finalUsedLines = [];
+                    if (pairedOptionColumns) {
+                        q.optionLayout = { type: 'paired', headers: [] };
+                    }
 
                     q.rawTextLines.forEach((lineStr, idx) => {
                         const originalLine = q.usedLines[idx];
                         const trimmed = String(lineStr || '').trim();
                         if (!trimmed) return;
 
+                        const pairedHeading = usesRadiationLayoutHeuristics && !optionsStarted
+                            ? extractPairedOptionHeading(originalLine)
+                            : null;
+                        if (pairedHeading) {
+                            pairedOptionColumns = true;
+                            pairedOptionHeaders = pairedHeading.headers;
+                            q.optionLayout = { type: 'paired', headers: pairedOptionHeaders };
+                            if (originalLine) q.finalUsedLines.push(originalLine);
+                            return;
+                        }
+
                         const detectedHeaders = extractOptionColumnHeaders(originalLine);
                         if (detectedHeaders.length >= 2) {
                             if (shouldConsumeOptionColumnHeaders(detectedHeaders, optionsStarted) && originalLine) {
+                                if (usesRadiationLayoutHeuristics) {
+                                    pairedOptionColumns = detectedHeaders.length === 2;
+                                    pairedOptionHeaders = detectedHeaders.map(header => header.label);
+                                }
+                                if (usesRadiationLayoutHeuristics && pairedOptionColumns) {
+                                    q.optionLayout = { type: 'paired', headers: pairedOptionHeaders };
+                                }
                                 q.finalUsedLines.push(originalLine);
                             }
                             return;
@@ -3595,7 +3609,21 @@ export default function AdminPage() {
                             if (isRepeatedOptionOrFigureLabel(optKey, q.options, optionsStarted)) {
                                 return;
                             }
-                            const optText = trimmed.substring(match[0].length).trim();
+                            let pairedText = pairedOptionColumns ? buildPairedOptionText(originalLine, {
+                                italicizeLeft: /遺伝子/.test(pairedOptionHeaders[0] || ''),
+                                positionedRichText: usesRadiationLayoutHeuristics,
+                            }) : usesRadiationLayoutHeuristics
+                                ? buildPairedOptionText(originalLine, {
+                                    minimumGap: 48,
+                                    positionedRichText: true,
+                                })
+                                : '';
+                            if (usesRadiationLayoutHeuristics && !pairedOptionColumns && pairedText) {
+                                pairedOptionColumns = true;
+                                pairedOptionHeaders = [];
+                                q.optionLayout = { type: 'paired', headers: [] };
+                            }
+                            const optText = pairedText || trimmed.substring(match[0].length).trim();
                             q.options[optKey] = optText;
                             lastOptionKey = optKey;
                             lastOptionLine = originalLine;
@@ -3688,82 +3716,9 @@ export default function AdminPage() {
             let ivrSectionTransitionPending = false;
 
             rawPagesTextData.forEach((page) => {
-                // 1. 各テキストアイテムから、標準サイズに近い文字（ベースライン候補）のY座標を集める
-                const heights = page.textItems.map(item => item.height || 0).filter(h => h > 0);
-                const maxPercentileHeight = heights.length > 0 ? Math.max(...heights) : 10;
-
-                const baselineCandidates = page.textItems.filter(item => {
-                    const h = item.height || 0;
-                    return h > 0 && (h / maxPercentileHeight >= 0.8);
-                });
-
-                const baselines = [];
-                const sortedCandidates = [...baselineCandidates].sort((a, b) => b.y - a.y);
-
-                sortedCandidates.forEach(item => {
-                    const closeBaseline = baselines.find(b => Math.abs(b.y - item.y) < 4);
-                    if (closeBaseline) {
-                        closeBaseline.items.push(item);
-                        closeBaseline.y = closeBaseline.items.reduce((sum, it) => sum + it.y, 0) / closeBaseline.items.length;
-                    } else {
-                        baselines.push({
-                            y: item.y,
-                            items: [item]
-                        });
-                    }
-                });
-
-                if (baselines.length === 0 && page.textItems.length > 0) {
-                    const sortedAll = [...page.textItems].sort((a, b) => b.y - a.y);
-                    sortedAll.forEach(item => {
-                        const closeBaseline = baselines.find(b => Math.abs(b.y - item.y) < 5);
-                        if (closeBaseline) {
-                            closeBaseline.items.push(item);
-                            closeBaseline.y = closeBaseline.items.reduce((sum, it) => sum + it.y, 0) / closeBaseline.items.length;
-                        } else {
-                            baselines.push({
-                                y: item.y,
-                                items: [item]
-                            });
-                        }
-                    });
-                }
-
-                baselines.sort((a, b) => b.y - a.y);
-
-                const lineGroups = baselines.map(b => ({
-                    baselineY: b.y,
-                    items: []
-                }));
-
-                page.textItems.forEach(item => {
-                    let bestGroup = null;
-                    let minDiff = Infinity;
-
-                    lineGroups.forEach(group => {
-                        const diff = Math.abs(group.baselineY - item.y);
-                        if (diff < minDiff) {
-                            minDiff = diff;
-                            bestGroup = group;
-                        }
-                    });
-
-                    // 許容範囲（標準文字の高さの 60% 程度）
-                    const threshold = Math.max(5, maxPercentileHeight * 0.6);
-                    if (bestGroup && minDiff < threshold) {
-                        bestGroup.items.push(item);
-                    } else {
-                        // 離れているものは別行として独立させる（強制マージ廃止）
-                        lineGroups.push({
-                            baselineY: item.y,
-                            items: [item]
-                        });
-                    }
-                });
-
-                const lines = lineGroups
-                    .filter(g => g.items.length > 0)
-                    .map(g => g.items.sort((a, b) => a.x - b.x));
+                const lines = usesRadiationLayoutHeuristics
+                    ? groupPdfTextItemsIntoLines(page.textItems)
+                    : groupLegacyPdfTextItemsIntoLines(page.textItems);
 
                  lines.forEach(line => {
                      const lineText = buildLineText(line).trim();
@@ -4520,6 +4475,7 @@ export default function AdminPage() {
                  let optionsStarted = false;
                  let pairedOptionColumns = false;
                  let optionColumnHeaders = [];
+                 let pairedOptionHeaders = [];
                  let lastOptionKey = '';
                  let lastOptionLine = null;
                  const cleanQuestionLines = [];
@@ -4546,6 +4502,13 @@ export default function AdminPage() {
                      return { items: sanitizedLineItems, text: lineText };
                  }).filter(Boolean);
 
+                 if (usesRadiationLayoutHeuristics && inferPairedOptionLayout(
+                     sanitizedEntries.map(entry => entry.items),
+                 )) {
+                     pairedOptionColumns = true;
+                     q.optionLayout = { type: 'paired', headers: [] };
+                 }
+
                  const firstOptionIndex = sanitizedEntries.findIndex(entry => optionPattern.test(entry.text));
                  const questionEntries = firstOptionIndex >= 0
                      ? sanitizedEntries.slice(0, firstOptionIndex)
@@ -4561,13 +4524,32 @@ export default function AdminPage() {
                          if (shouldConsumeOptionColumnHeaders(detectedHeaders, optionsStarted)) {
                              optionColumnHeaders = detectedHeaders;
                              pairedOptionColumns = detectedHeaders.length === 2;
+                             pairedOptionHeaders = detectedHeaders.map(header => header.label);
+                             if (usesRadiationLayoutHeuristics && pairedOptionColumns) {
+                                 q.optionLayout = { type: 'paired', headers: pairedOptionHeaders };
+                             }
                              rebuiltUsedLines.push(sanitizedLineItems);
                          }
                          return;
                      }
 
+                     const pairedHeading = usesRadiationLayoutHeuristics && !optionsStarted
+                         ? extractPairedOptionHeading(sanitizedLineItems)
+                         : null;
+                     if (pairedHeading) {
+                         pairedOptionColumns = true;
+                         pairedOptionHeaders = pairedHeading.headers;
+                         q.optionLayout = { type: 'paired', headers: pairedOptionHeaders };
+                         rebuiltUsedLines.push(sanitizedLineItems);
+                         return;
+                     }
+
                      if (!optionsStarted && isPairedOptionHeader(lineText)) {
                          pairedOptionColumns = true;
+                         pairedOptionHeaders = ['A', 'B'];
+                         if (usesRadiationLayoutHeuristics) {
+                             q.optionLayout = { type: 'paired', headers: pairedOptionHeaders };
+                         }
                          rebuiltUsedLines.push(sanitizedLineItems);
                          return;
                      }
@@ -4588,7 +4570,20 @@ export default function AdminPage() {
                          const columnText = columnGroups.length >= 3
                              ? columnGroups.map(group => buildLineText(group).trim()).filter(Boolean).join(' ')
                              : '';
-                         const pairedText = pairedOptionColumns ? buildPairedOptionText(sanitizedLineItems) : '';
+                         let pairedText = pairedOptionColumns ? buildPairedOptionText(sanitizedLineItems, {
+                             italicizeLeft: /遺伝子/.test(pairedOptionHeaders[0] || ''),
+                             positionedRichText: usesRadiationLayoutHeuristics,
+                         }) : usesRadiationLayoutHeuristics
+                             ? buildPairedOptionText(sanitizedLineItems, {
+                                 minimumGap: 48,
+                                 positionedRichText: true,
+                             })
+                             : '';
+                         if (usesRadiationLayoutHeuristics && !pairedOptionColumns && pairedText) {
+                             pairedOptionColumns = true;
+                             pairedOptionHeaders = [];
+                             q.optionLayout = { type: 'paired', headers: [] };
+                         }
                          const optText = pairedText || columnText || stripFooterSuffix(lineText.substring(match[0].length).trim());
                          rebuiltOptions[optKey] = optText;
                          lastOptionKey = optKey;
@@ -4693,6 +4688,102 @@ export default function AdminPage() {
 
              // 2.5.5 ベクタ図形など画像オブジェクトとして検出できない図へのフォールバック
              const renderedPageCache = new Map();
+
+             // 埋め込み画像の外側に軸名・目盛・表などのPDFテキストがある場合は、
+             // 試験種別ではなくページ構造を基準に、設問区画内の画像群と付随要素を
+             // 一緒に再レンダリングする。画像内だけで完結する通常画像は従来どおり保持する。
+             if (usesRadiationLayoutHeuristics) {
+                 const finalizedQuestionTextKeys = new Set();
+                 parsedQuestionsList.forEach(question => {
+                     (question.finalUsedLines || []).flat().forEach(item => {
+                         finalizedQuestionTextKeys.add(buildTextItemKey(item));
+                     });
+                 });
+                 for (const [pageNumStr, pageQuestions] of Object.entries(questionsByPage)) {
+                     const pageNum = parseInt(pageNumStr, 10);
+                     const sortedPageQuestions = [...pageQuestions].sort((a, b) => b.anchorY - a.anchorY);
+                     const pageData = rawPagesTextData.find(candidate => candidate.pageNum === pageNum);
+                     const unassignedPageText = (pageData?.textItems || []).filter(item => (
+                         !finalizedQuestionTextKeys.has(buildTextItemKey(item))
+                         && item.y >= parserProfile.footerMinY
+                     ));
+                     const compositeTargets = sortedPageQuestions.map((q, questionIndex) => {
+                         const nextQuestion = sortedPageQuestions[questionIndex + 1] || null;
+                         const pageImageRects = q.pageImages.filter(image => (
+                             image.page === pageNum && image.w > 0 && image.h > 0
+                         ));
+                         const sectionTopY = q.anchorY + 8;
+                         const sectionBottomY = nextQuestion
+                             ? nextQuestion.anchorY + 8
+                             : parserProfile.footerMinY + 18;
+                         if (!hasQuestionFigureSupportingText({
+                             imageRects: pageImageRects,
+                             textItems: unassignedPageText,
+                             sectionTopY,
+                             sectionBottomY,
+                         })) return null;
+                         const bounds = buildQuestionFigureCompositeBounds({
+                             imageRects: pageImageRects,
+                             textItems: unassignedPageText,
+                             sectionTopY,
+                             sectionBottomY,
+                             pageWidth: pageData?.width || Infinity,
+                             pageHeight: pageData?.height || Infinity,
+                             padding: 16,
+                         });
+                         return bounds ? { q, bounds } : null;
+                     }).filter(Boolean);
+                     if (compositeTargets.length === 0) continue;
+
+                     const page = await pdf.getPage(pageNum);
+                     const scale = PDF_IMAGE_RENDER_SCALE;
+                     const viewport = page.getViewport({ scale });
+                     const pageCanvas = document.createElement('canvas');
+                     pageCanvas.width = viewport.width;
+                     pageCanvas.height = viewport.height;
+                     const canvasCtx = getSrgbCanvasContext(pageCanvas);
+                     await page.render({ canvasContext: canvasCtx, viewport }).promise;
+                     renderedPageCache.set(pageNum, { page, viewport, pageCanvas });
+
+                     compositeTargets.forEach(({ q, bounds }) => {
+
+                         const pointA = viewport.convertToViewportPoint(bounds.x, bounds.y + bounds.h);
+                         const pointB = viewport.convertToViewportPoint(bounds.x + bounds.w, bounds.y);
+                         const cropX = Math.max(0, Math.min(pointA[0], pointB[0]));
+                         const cropY = Math.max(0, Math.min(pointA[1], pointB[1]));
+                         const cropW = Math.min(pageCanvas.width - cropX, Math.abs(pointB[0] - pointA[0]));
+                         const cropH = Math.min(pageCanvas.height - cropY, Math.abs(pointB[1] - pointA[1]));
+                         if (!isUsableFallbackFigureCrop(cropW, cropH)) return;
+
+                         const cropCanvas = document.createElement('canvas');
+                         cropCanvas.width = Math.ceil(cropW);
+                         cropCanvas.height = Math.ceil(cropH);
+                         const cropCtx = getSrgbCanvasContext(cropCanvas);
+                         cropCtx.drawImage(
+                             pageCanvas,
+                             cropX, cropY, cropW, cropH,
+                             0, 0, cropCanvas.width, cropCanvas.height
+                         );
+
+                         q.pageImages = [
+                             ...q.pageImages.filter(image => image.page !== pageNum),
+                             {
+                                 path: cropCanvas.toDataURL('image/png'),
+                                 x: bounds.x,
+                                 y: bounds.y,
+                                 w: bounds.w,
+                                 h: bounds.h,
+                                 legend: '',
+                                 detectedLegend: null,
+                                 displayLegend: '',
+                                 legendResolved: false,
+                                 page: pageNum,
+                                 matchedQNum: q.questionNumber,
+                             }
+                         ];
+                     });
+                 }
+             }
 
              if (parserProfile.imageAssignmentStrategy !== 'label-only') {
                  for (const [pageNumStr, pageQuestions] of Object.entries(questionsByPage)) {
@@ -4824,6 +4915,7 @@ export default function AdminPage() {
                     answer: '',
                     explanation: '',
                     sourcePages: nuclearSourcePagesByQuestion.get(q.questionNumber) || [],
+                    ...(q.optionLayout ? { optionLayout: q.optionLayout } : {}),
                     images: q.pageImages.map((img, imageIndex) => (
                         buildImportedImage(img, imageIndex, 'image_placeholder')
                     ))
@@ -5155,12 +5247,7 @@ export default function AdminPage() {
                                             対象の試験を選択してください
                                         </label>
                                         <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
-                                            {[
-                                                { id: '1', label: '1. 放射線科専門医試験' },
-                                                { id: '2', label: '2. 放射線診断専門医試験' },
-                                                { id: '3', label: '3. 核医学専門医試験' },
-                                                { id: '4', label: '4. IVR専門医試験' }
-                                            ].map(cat => (
+                                            {EXAM_IMPORT_CATEGORY_OPTIONS.map(cat => (
                                                 <label key={cat.id} style={{ display: 'flex', alignItems: 'center', gap: '0.15rem', padding: '0.45rem 0.65rem', border: `1px solid ${examCategory === cat.id ? 'var(--accent)' : 'var(--border-color)'}`, borderRadius: '0.45rem', background: examCategory === cat.id ? 'var(--surface-muted)' : 'var(--surface-raised)', cursor: 'pointer', fontSize: '0.9rem', color: 'var(--text-primary)' }}>
                                                     <input
                                                         type="radio"
