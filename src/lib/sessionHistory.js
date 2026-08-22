@@ -20,3 +20,9 @@ export const limitResumableSessions = (sessions, limit = MAX_RESUMABLE_SESSIONS)
         .sort((a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0))
         .slice(0, Math.max(0, limit))
 );
+
+export const removeExamResumableSessions = (sessions, examId) => (
+    limitResumableSessions(sessions).filter(
+        session => String(session.examId) !== String(examId)
+    )
+);

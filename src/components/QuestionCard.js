@@ -15,6 +15,17 @@ import styles from './QuestionCard.module.scss';
 import 'katex/dist/katex.min.css';
 
 const normalizeAnswer = value => Array.isArray(value) ? value : String(value || '').split(/[,、\s]+/).filter(Boolean);
+const splitColumnOption = (value, columnCount) => {
+    const cells = String(value || '').split(/\s*―\s*/s);
+    return cells.length === columnCount && cells.every(Boolean) ? cells : null;
+};
+const buildColumnGridTemplate = (columnCount, includeOptionKey = false) => {
+    const columns = Array.from({ length: columnCount }, () => 'minmax(0, 1fr)');
+    const withConnectors = columns.flatMap((column, index) => (
+        index === columns.length - 1 ? [column] : [column, '2.5rem']
+    ));
+    return [...(includeOptionKey ? ['3rem'] : []), ...withConnectors].join(' ');
+};
 const FigureLabels = ({ labels, position }) => {
     const matchingLabels = labels.filter(label => label.position === position);
     if (matchingLabels.length === 0) return null;
@@ -83,6 +94,17 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveQ
         return figures;
     }, [currentImages, imageDimensions, question.id]);
     const currentOptions = question.options || {};
+    const isColumnOptionLayout = ['paired', 'columns'].includes(question.optionLayout?.type);
+    const optionColumnCount = isColumnOptionLayout
+        ? Math.max(2, Math.min(3, Number(question.optionLayout?.columnCount)
+            || (question.optionLayout?.type === 'paired' ? 2 : question.optionLayout?.headers?.length)
+            || 2))
+        : 0;
+    const optionColumnHeaders = isColumnOptionLayout
+        && Array.isArray(question.optionLayout.headers)
+        && question.optionLayout.headers.length === optionColumnCount
+        ? question.optionLayout.headers
+        : [];
     const maxSelection = getSelectionCount(question.question || '', currentAnswer);
     const slides = useMemo(() => currentImages.map(img => ({ src: img.path?.startsWith('data:') ? img.path : `/${img.path}` })), [currentImages]);
     const selectedPdf = pdfFiles.find(pdf => pdf.key === selectedPdfKey) || pdfFiles[0];
@@ -307,7 +329,50 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveQ
                                 {displayedLegend && <div className={styles.legend} dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(displayedLegend) }} />}
                             </div>;
                         })}</div>}
-                        <div className={styles.optionsSection} style={{ marginBottom: '2rem' }}><h4>選択肢</h4><div className={styles.options}>{Object.entries(currentOptions).sort((a, b) => a[0].localeCompare(b[0])).map(([key, text]) => { const selected = selectedOptions.includes(key); const answer = normalizeAnswer(currentAnswer).includes(key); let className = styles.optionBtn; if (selected) className += ` ${styles.selected}`; if (showAnswer && answer) className += ` ${styles.correct}`; if (showAnswer && selected && !answer) className += ` ${styles.wrong}`; return <button key={key} className={className} onClick={() => toggleOption(key)}><span className={styles.optionKey}>{key}</span><span dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(text) }} /></button>; })}</div></div>
+                        <div className={styles.optionsSection} style={{ marginBottom: '2rem' }}>
+                            <h4>選択肢</h4>
+                            <div className={styles.options}>
+                                {optionColumnHeaders.length === optionColumnCount && <div
+                                    className={styles.pairedOptionHeader}
+                                    style={{ gridTemplateColumns: buildColumnGridTemplate(optionColumnCount, true) }}
+                                >
+                                    <span aria-hidden="true" />
+                                    {optionColumnHeaders.flatMap((header, index) => [
+                                        <strong key={`header-${index}`} dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(header) }} />,
+                                        ...(index < optionColumnHeaders.length - 1
+                                            ? [<span key={`header-connector-${index}`} aria-hidden="true" />]
+                                            : []),
+                                    ])}
+                                </div>}
+                                {Object.entries(currentOptions).sort((a, b) => a[0].localeCompare(b[0])).map(([key, text]) => {
+                                    const selected = selectedOptions.includes(key);
+                                    const answer = normalizeAnswer(currentAnswer).includes(key);
+                                    const columnCells = isColumnOptionLayout
+                                        ? splitColumnOption(text, optionColumnCount)
+                                        : null;
+                                    let className = styles.optionBtn;
+                                    if (selected) className += ` ${styles.selected}`;
+                                    if (showAnswer && answer) className += ` ${styles.correct}`;
+                                    if (showAnswer && selected && !answer) className += ` ${styles.wrong}`;
+                                    return <button key={key} className={className} onClick={() => toggleOption(key)}>
+                                        <span className={styles.optionKey}>{key}</span>
+                                        {columnCells
+                                            ? <span
+                                                className={styles.pairedOptionCells}
+                                                style={{ gridTemplateColumns: buildColumnGridTemplate(optionColumnCount) }}
+                                            >
+                                                {columnCells.flatMap((cell, index) => [
+                                                    <span key={`cell-${index}`} dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(cell) }} />,
+                                                    ...(index < columnCells.length - 1
+                                                        ? [<span key={`connector-${index}`} className={styles.pairedOptionConnector} aria-hidden="true">―</span>]
+                                                        : []),
+                                                ])}
+                                            </span>
+                                            : <span dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(text) }} />}
+                                    </button>;
+                                })}
+                            </div>
+                        </div>
                         <div className={styles.actionRow}>{!showAnswer ? <button className={styles.revealBtn} onClick={revealAnswer}>回答・解説を見る</button> : <div className={`${styles.explicitAnswer} ${isCorrect ? styles.correct : ''}`}><div className={styles.answerBlock}>{isEditingAnswer ? <div className={styles.inlineEditAnswer}><span className={styles.label}>正解を選択:</span><div className={styles.answerSelectionGrid}>{Object.keys(currentOptions).sort().map(key => <button type="button" key={key} className={`${styles.answerTileBtn} ${editAnswer.includes(key) ? styles.draftAnswerActive : ''}`} onClick={() => setEditAnswer(previous => previous.includes(key) ? previous.filter(item => item !== key) : [...previous, key].sort())}>{key}</button>)}</div><div className={styles.editActions}><button onClick={() => setIsEditingAnswer(false)} className={styles.cancelBtn}>キャンセル</button><button onClick={saveAnswer} className={styles.saveBtn}>保存</button></div></div> : <><div className={styles.answerText}><span className={styles.label}>正解は</span><span className={styles.value}>{normalizeAnswer(currentAnswer).join(', ')} です</span></div>{APP_FEATURES.answerEditing && <button onClick={() => { setEditAnswer(normalizeAnswer(currentAnswer)); setIsEditingAnswer(true); }} className={styles.iconEditBtn} title="正解を編集">✎</button>}</>}</div></div>}</div>
                     </>
                 )}

@@ -15,6 +15,11 @@ test('表、数式、許可された装飾を保持する', () => {
     assert.match(result, /latex="x\^2"/);
 });
 
+test('上付き文字と核種本体を結合する安全な表示クラスを保持する', () => {
+    const result = sanitizeRichHtml('<span class="pdf-script-group"><sup>90</sup>\u2060Y</span>');
+    assert.equal(result, '<span class="pdf-script-group"><sup>90</sup>\u2060Y</span>');
+});
+
 test('問題に含まれるすべてのリッチテキスト欄を無害化する', () => {
     const result = sanitizeQuestionRichText({
         question: '<img src=x onerror=alert(1)>',
