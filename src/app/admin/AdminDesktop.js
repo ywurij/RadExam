@@ -28,13 +28,16 @@ import { EXAM_IMPORT_CATEGORY_OPTIONS, getExamImportDefaults } from '@/lib/examI
 import { configurePdfJsWorker } from '@/lib/pdfJsWorker.mjs';
 import {
     assignNearestUniqueLabels,
+    buildColumnOptionText,
+    buildOptionContentText,
     buildQuestionFigureCompositeBounds,
     buildSourceGridLayouts,
     buildPairedOptionText,
     compareImageReadingOrder,
     extractQuestionTable,
     extractOptionColumnHeaders,
-    extractPairedOptionHeading,
+    extractOptionColumnHeading,
+    extractOptionKeyFromItems,
     findNearestPrecedingQuestion,
     groupNearbyLegendItems,
     groupPdfTextItemsIntoLines,
@@ -48,7 +51,7 @@ import {
     isLikelyLegendContinuationText,
     isStandaloneImageLegendText,
     isUsableFallbackFigureCrop,
-    inferPairedOptionLayout,
+    inferOptionColumnLayout,
     joinOptionContinuation,
     mergeHorizontalImagePairsBySharedLegend,
     mergeVerticallyAdjacentImageRects,
@@ -58,7 +61,6 @@ import {
     restoreTruncatedOptionText,
     shouldConsumeOptionColumnHeaders,
     shouldUseRadiationLayoutHeuristics,
-    splitOptionItemsByColumns,
     spreadPositionedLegendLabels,
 } from '@/lib/pdfImportText';
 
@@ -3559,16 +3561,22 @@ export default function AdminPage() {
             const populateQuestionOptionsAndText = (questionList) => {
                 questionList.forEach(q => {
                     let optionsStarted = false;
-                    let pairedOptionColumns = usesRadiationLayoutHeuristics
-                        && inferPairedOptionLayout(q.usedLines);
-                    let pairedOptionHeaders = [];
+                    let optionColumnLayout = inferOptionColumnLayout(q.usedLines, {
+                        requireLeader: parserProfile.name === 'ivr',
+                    });
+                    let optionColumnHeaders = [];
+                    let optionHeaderLabels = [];
                     let lastOptionKey = '';
                     let lastOptionLine = null;
                     const cleanQuestionLines = [];
                     q.options = {};
                     q.finalUsedLines = [];
-                    if (pairedOptionColumns) {
-                        q.optionLayout = { type: 'paired', headers: [] };
+                    if (optionColumnLayout) {
+                        q.optionLayout = {
+                            type: 'columns',
+                            columnCount: optionColumnLayout.columnCount,
+                            headers: [],
+                        };
                     }
 
                     q.rawTextLines.forEach((lineStr, idx) => {
@@ -3576,13 +3584,21 @@ export default function AdminPage() {
                         const trimmed = String(lineStr || '').trim();
                         if (!trimmed) return;
 
-                        const pairedHeading = usesRadiationLayoutHeuristics && !optionsStarted
-                            ? extractPairedOptionHeading(originalLine)
+                        const columnHeading = !optionsStarted
+                            ? extractOptionColumnHeading(originalLine)
                             : null;
-                        if (pairedHeading) {
-                            pairedOptionColumns = true;
-                            pairedOptionHeaders = pairedHeading.headers;
-                            q.optionLayout = { type: 'paired', headers: pairedOptionHeaders };
+                        if (columnHeading) {
+                            optionColumnHeaders = columnHeading.columns;
+                            optionColumnLayout = {
+                                columnCount: columnHeading.headers.length,
+                                starts: columnHeading.columns.slice(1).map(header => header.x),
+                            };
+                            optionHeaderLabels = columnHeading.headers;
+                            q.optionLayout = {
+                                type: 'columns',
+                                columnCount: columnHeading.headers.length,
+                                headers: optionHeaderLabels,
+                            };
                             if (originalLine) q.finalUsedLines.push(originalLine);
                             return;
                         }
@@ -3590,40 +3606,55 @@ export default function AdminPage() {
                         const detectedHeaders = extractOptionColumnHeaders(originalLine);
                         if (detectedHeaders.length >= 2) {
                             if (shouldConsumeOptionColumnHeaders(detectedHeaders, optionsStarted) && originalLine) {
-                                if (usesRadiationLayoutHeuristics) {
-                                    pairedOptionColumns = detectedHeaders.length === 2;
-                                    pairedOptionHeaders = detectedHeaders.map(header => header.label);
-                                }
-                                if (usesRadiationLayoutHeuristics && pairedOptionColumns) {
-                                    q.optionLayout = { type: 'paired', headers: pairedOptionHeaders };
-                                }
+                                optionColumnHeaders = detectedHeaders;
+                                optionHeaderLabels = detectedHeaders.map(header => header.label);
+                                optionColumnLayout = {
+                                    columnCount: detectedHeaders.length,
+                                    starts: detectedHeaders.slice(1).map(header => header.x),
+                                };
+                                q.optionLayout = {
+                                    type: 'columns',
+                                    columnCount: detectedHeaders.length,
+                                    headers: optionHeaderLabels,
+                                };
                                 q.finalUsedLines.push(originalLine);
                             }
                             return;
                         }
 
+                        const geometryOptionKey = extractOptionKeyFromItems(originalLine);
                         const match = trimmed.match(optionPattern);
-                        if (match) {
+                        if (geometryOptionKey || match) {
                             optionsStarted = true;
-                            const optKey = canonicalizeOptionKey(trimmed[0][0]);
+                            const optKey = canonicalizeOptionKey(geometryOptionKey || trimmed[0][0]);
                             if (isRepeatedOptionOrFigureLabel(optKey, q.options, optionsStarted)) {
                                 return;
                             }
-                            let pairedText = pairedOptionColumns ? buildPairedOptionText(originalLine, {
-                                italicizeLeft: /遺伝子/.test(pairedOptionHeaders[0] || ''),
-                                positionedRichText: usesRadiationLayoutHeuristics,
-                            }) : usesRadiationLayoutHeuristics
+                            let pairedText = optionColumnLayout ? buildColumnOptionText(originalLine, {
+                                headers: optionColumnHeaders,
+                                starts: optionColumnLayout.starts,
+                                splitOnLeaders: optionColumnLayout.leaderSeparated,
+                                italicizeFirst: /遺伝子/.test(optionHeaderLabels[0] || ''),
+                                positionedRichText: true,
+                            }) || (optionColumnLayout.columnCount === 2 ? buildPairedOptionText(originalLine, {
+                                italicizeLeft: /遺伝子/.test(optionHeaderLabels[0] || ''),
+                                positionedRichText: true,
+                            }) : '') : usesRadiationLayoutHeuristics
                                 ? buildPairedOptionText(originalLine, {
                                     minimumGap: 48,
                                     positionedRichText: true,
                                 })
                                 : '';
-                            if (usesRadiationLayoutHeuristics && !pairedOptionColumns && pairedText) {
-                                pairedOptionColumns = true;
-                                pairedOptionHeaders = [];
-                                q.optionLayout = { type: 'paired', headers: [] };
+                            if (usesRadiationLayoutHeuristics && !optionColumnLayout && pairedText) {
+                                optionColumnLayout = { columnCount: 2, starts: [] };
+                                optionHeaderLabels = [];
+                                q.optionLayout = { type: 'columns', columnCount: 2, headers: [] };
                             }
-                            const optText = pairedText || trimmed.substring(match[0].length).trim();
+                            const optionContentText = buildOptionContentText(originalLine, {
+                                positionedRichText: true,
+                            });
+                            const optText = pairedText || optionContentText
+                                || trimmed.substring(match?.[0]?.length || 0).trim();
                             q.options[optKey] = optText;
                             lastOptionKey = optKey;
                             lastOptionLine = originalLine;
@@ -4473,9 +4504,9 @@ export default function AdminPage() {
              parsedQuestionsList.forEach(q => {
                  const originalOptions = normalizeQuestionOptions(q.options);
                  let optionsStarted = false;
-                 let pairedOptionColumns = false;
+                 let optionColumnLayout = null;
                  let optionColumnHeaders = [];
-                 let pairedOptionHeaders = [];
+                 let optionHeaderLabels = [];
                  let lastOptionKey = '';
                  let lastOptionLine = null;
                  const cleanQuestionLines = [];
@@ -4502,14 +4533,21 @@ export default function AdminPage() {
                      return { items: sanitizedLineItems, text: lineText };
                  }).filter(Boolean);
 
-                 if (usesRadiationLayoutHeuristics && inferPairedOptionLayout(
+                 optionColumnLayout = inferOptionColumnLayout(
                      sanitizedEntries.map(entry => entry.items),
-                 )) {
-                     pairedOptionColumns = true;
-                     q.optionLayout = { type: 'paired', headers: [] };
+                     { requireLeader: parserProfile.name === 'ivr' },
+                 );
+                 if (optionColumnLayout) {
+                     q.optionLayout = {
+                         type: 'columns',
+                         columnCount: optionColumnLayout.columnCount,
+                         headers: [],
+                     };
                  }
 
-                 const firstOptionIndex = sanitizedEntries.findIndex(entry => optionPattern.test(entry.text));
+                 const firstOptionIndex = sanitizedEntries.findIndex(entry => (
+                     extractOptionKeyFromItems(entry.items) || optionPattern.test(entry.text)
+                 ));
                  const questionEntries = firstOptionIndex >= 0
                      ? sanitizedEntries.slice(0, firstOptionIndex)
                      : sanitizedEntries;
@@ -4523,33 +4561,44 @@ export default function AdminPage() {
                      if (detectedHeaders.length >= 2) {
                          if (shouldConsumeOptionColumnHeaders(detectedHeaders, optionsStarted)) {
                              optionColumnHeaders = detectedHeaders;
-                             pairedOptionColumns = detectedHeaders.length === 2;
-                             pairedOptionHeaders = detectedHeaders.map(header => header.label);
-                             if (usesRadiationLayoutHeuristics && pairedOptionColumns) {
-                                 q.optionLayout = { type: 'paired', headers: pairedOptionHeaders };
-                             }
+                             optionHeaderLabels = detectedHeaders.map(header => header.label);
+                             optionColumnLayout = {
+                                 columnCount: detectedHeaders.length,
+                                 starts: detectedHeaders.slice(1).map(header => header.x),
+                             };
+                             q.optionLayout = {
+                                 type: 'columns',
+                                 columnCount: detectedHeaders.length,
+                                 headers: optionHeaderLabels,
+                             };
                              rebuiltUsedLines.push(sanitizedLineItems);
                          }
                          return;
                      }
 
-                     const pairedHeading = usesRadiationLayoutHeuristics && !optionsStarted
-                         ? extractPairedOptionHeading(sanitizedLineItems)
+                     const columnHeading = !optionsStarted
+                         ? extractOptionColumnHeading(sanitizedLineItems)
                          : null;
-                     if (pairedHeading) {
-                         pairedOptionColumns = true;
-                         pairedOptionHeaders = pairedHeading.headers;
-                         q.optionLayout = { type: 'paired', headers: pairedOptionHeaders };
+                     if (columnHeading) {
+                         optionColumnHeaders = columnHeading.columns;
+                         optionColumnLayout = {
+                             columnCount: columnHeading.headers.length,
+                             starts: columnHeading.columns.slice(1).map(header => header.x),
+                         };
+                         optionHeaderLabels = columnHeading.headers;
+                         q.optionLayout = {
+                             type: 'columns',
+                             columnCount: columnHeading.headers.length,
+                             headers: optionHeaderLabels,
+                         };
                          rebuiltUsedLines.push(sanitizedLineItems);
                          return;
                      }
 
                      if (!optionsStarted && isPairedOptionHeader(lineText)) {
-                         pairedOptionColumns = true;
-                         pairedOptionHeaders = ['A', 'B'];
-                         if (usesRadiationLayoutHeuristics) {
-                             q.optionLayout = { type: 'paired', headers: pairedOptionHeaders };
-                         }
+                         optionColumnLayout = optionColumnLayout || { columnCount: 2, starts: [] };
+                         optionHeaderLabels = ['A', 'B'];
+                         q.optionLayout = { type: 'columns', columnCount: 2, headers: optionHeaderLabels };
                          rebuiltUsedLines.push(sanitizedLineItems);
                          return;
                      }
@@ -4559,32 +4608,40 @@ export default function AdminPage() {
                          return;
                      }
 
+                     const geometryOptionKey = extractOptionKeyFromItems(sanitizedLineItems);
                      const match = lineText.match(optionPattern);
-                     if (match) {
+                     if (geometryOptionKey || match) {
                          optionsStarted = true;
-                         const optKey = canonicalizeOptionKey(lineText[0][0]);
+                         const optKey = canonicalizeOptionKey(geometryOptionKey || lineText[0][0]);
                          if (isRepeatedOptionOrFigureLabel(optKey, rebuiltOptions, optionsStarted)) {
                              return;
                          }
-                         const columnGroups = splitOptionItemsByColumns(sanitizedLineItems, optionColumnHeaders);
-                         const columnText = columnGroups.length >= 3
-                             ? columnGroups.map(group => buildLineText(group).trim()).filter(Boolean).join(' ')
-                             : '';
-                         let pairedText = pairedOptionColumns ? buildPairedOptionText(sanitizedLineItems, {
-                             italicizeLeft: /遺伝子/.test(pairedOptionHeaders[0] || ''),
-                             positionedRichText: usesRadiationLayoutHeuristics,
-                         }) : usesRadiationLayoutHeuristics
+                         let pairedText = optionColumnLayout ? buildColumnOptionText(sanitizedLineItems, {
+                             headers: optionColumnHeaders,
+                             starts: optionColumnLayout.starts,
+                             splitOnLeaders: optionColumnLayout.leaderSeparated,
+                             italicizeFirst: /遺伝子/.test(optionHeaderLabels[0] || ''),
+                             positionedRichText: true,
+                         }) || (optionColumnLayout.columnCount === 2 ? buildPairedOptionText(sanitizedLineItems, {
+                             italicizeLeft: /遺伝子/.test(optionHeaderLabels[0] || ''),
+                             positionedRichText: true,
+                         }) : '') : usesRadiationLayoutHeuristics
                              ? buildPairedOptionText(sanitizedLineItems, {
                                  minimumGap: 48,
                                  positionedRichText: true,
                              })
                              : '';
-                         if (usesRadiationLayoutHeuristics && !pairedOptionColumns && pairedText) {
-                             pairedOptionColumns = true;
-                             pairedOptionHeaders = [];
-                             q.optionLayout = { type: 'paired', headers: [] };
+                         if (usesRadiationLayoutHeuristics && !optionColumnLayout && pairedText) {
+                             optionColumnLayout = { columnCount: 2, starts: [] };
+                             optionHeaderLabels = [];
+                             q.optionLayout = { type: 'columns', columnCount: 2, headers: [] };
                          }
-                         const optText = pairedText || columnText || stripFooterSuffix(lineText.substring(match[0].length).trim());
+                         const optionContentText = buildOptionContentText(sanitizedLineItems, {
+                             positionedRichText: true,
+                         });
+                         const optText = pairedText || stripFooterSuffix(
+                             optionContentText || lineText.substring(match?.[0]?.length || 0).trim(),
+                         );
                          rebuiltOptions[optKey] = optText;
                          lastOptionKey = optKey;
                          lastOptionLine = sanitizedLineItems;

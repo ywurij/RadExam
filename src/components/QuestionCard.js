@@ -15,9 +15,16 @@ import styles from './QuestionCard.module.scss';
 import 'katex/dist/katex.min.css';
 
 const normalizeAnswer = value => Array.isArray(value) ? value : String(value || '').split(/[,、\s]+/).filter(Boolean);
-const splitPairedOption = value => {
-    const match = String(value || '').match(/^(.*?)\s*―\s*(.*)$/s);
-    return match && match[1] && match[2] ? [match[1], match[2]] : null;
+const splitColumnOption = (value, columnCount) => {
+    const cells = String(value || '').split(/\s*―\s*/s);
+    return cells.length === columnCount && cells.every(Boolean) ? cells : null;
+};
+const buildColumnGridTemplate = (columnCount, includeOptionKey = false) => {
+    const columns = Array.from({ length: columnCount }, () => 'minmax(0, 1fr)');
+    const withConnectors = columns.flatMap((column, index) => (
+        index === columns.length - 1 ? [column] : [column, '2.5rem']
+    ));
+    return [...(includeOptionKey ? ['3rem'] : []), ...withConnectors].join(' ');
 };
 const FigureLabels = ({ labels, position }) => {
     const matchingLabels = labels.filter(label => label.position === position);
@@ -87,10 +94,15 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveQ
         return figures;
     }, [currentImages, imageDimensions, question.id]);
     const currentOptions = question.options || {};
-    const isPairedOptionLayout = question.optionLayout?.type === 'paired';
-    const pairedOptionHeaders = isPairedOptionLayout
+    const isColumnOptionLayout = ['paired', 'columns'].includes(question.optionLayout?.type);
+    const optionColumnCount = isColumnOptionLayout
+        ? Math.max(2, Math.min(3, Number(question.optionLayout?.columnCount)
+            || (question.optionLayout?.type === 'paired' ? 2 : question.optionLayout?.headers?.length)
+            || 2))
+        : 0;
+    const optionColumnHeaders = isColumnOptionLayout
         && Array.isArray(question.optionLayout.headers)
-        && question.optionLayout.headers.length === 2
+        && question.optionLayout.headers.length === optionColumnCount
         ? question.optionLayout.headers
         : [];
     const maxSelection = getSelectionCount(question.question || '', currentAnswer);
@@ -320,27 +332,41 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveQ
                         <div className={styles.optionsSection} style={{ marginBottom: '2rem' }}>
                             <h4>選択肢</h4>
                             <div className={styles.options}>
-                                {pairedOptionHeaders.length === 2 && <div className={styles.pairedOptionHeader}>
+                                {optionColumnHeaders.length === optionColumnCount && <div
+                                    className={styles.pairedOptionHeader}
+                                    style={{ gridTemplateColumns: buildColumnGridTemplate(optionColumnCount, true) }}
+                                >
                                     <span aria-hidden="true" />
-                                    <strong dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(pairedOptionHeaders[0]) }} />
-                                    <span aria-hidden="true" />
-                                    <strong dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(pairedOptionHeaders[1]) }} />
+                                    {optionColumnHeaders.flatMap((header, index) => [
+                                        <strong key={`header-${index}`} dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(header) }} />,
+                                        ...(index < optionColumnHeaders.length - 1
+                                            ? [<span key={`header-connector-${index}`} aria-hidden="true" />]
+                                            : []),
+                                    ])}
                                 </div>}
                                 {Object.entries(currentOptions).sort((a, b) => a[0].localeCompare(b[0])).map(([key, text]) => {
                                     const selected = selectedOptions.includes(key);
                                     const answer = normalizeAnswer(currentAnswer).includes(key);
-                                    const pairedCells = isPairedOptionLayout ? splitPairedOption(text) : null;
+                                    const columnCells = isColumnOptionLayout
+                                        ? splitColumnOption(text, optionColumnCount)
+                                        : null;
                                     let className = styles.optionBtn;
                                     if (selected) className += ` ${styles.selected}`;
                                     if (showAnswer && answer) className += ` ${styles.correct}`;
                                     if (showAnswer && selected && !answer) className += ` ${styles.wrong}`;
                                     return <button key={key} className={className} onClick={() => toggleOption(key)}>
                                         <span className={styles.optionKey}>{key}</span>
-                                        {pairedCells
-                                            ? <span className={styles.pairedOptionCells}>
-                                                <span dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(pairedCells[0]) }} />
-                                                <span className={styles.pairedOptionConnector} aria-hidden="true">―</span>
-                                                <span dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(pairedCells[1]) }} />
+                                        {columnCells
+                                            ? <span
+                                                className={styles.pairedOptionCells}
+                                                style={{ gridTemplateColumns: buildColumnGridTemplate(optionColumnCount) }}
+                                            >
+                                                {columnCells.flatMap((cell, index) => [
+                                                    <span key={`cell-${index}`} dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(cell) }} />,
+                                                    ...(index < columnCells.length - 1
+                                                        ? [<span key={`connector-${index}`} className={styles.pairedOptionConnector} aria-hidden="true">―</span>]
+                                                        : []),
+                                                ])}
                                             </span>
                                             : <span dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(text) }} />}
                                     </button>;

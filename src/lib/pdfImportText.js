@@ -733,47 +733,73 @@ export const extractOptionColumnHeaders = (items) => {
     return headers.length >= 2 && uniqueLabels.size === headers.length ? headers : [];
 };
 
-export const extractPairedOptionHeading = (items = []) => {
+export const extractOptionColumnHeading = (items = []) => {
     const tokens = meaningfulItems(items).sort((a, b) => a.x - b.x);
     if (tokens.length < 2) return null;
 
     const optionColumnHeaders = extractOptionColumnHeaders(tokens);
-    if (optionColumnHeaders.length >= 2) {
-        return { headers: optionColumnHeaders.map(header => header.label) };
+    if (optionColumnHeaders.length >= 2 && optionColumnHeaders.length <= 3) {
+        return {
+            headers: optionColumnHeaders.map(header => header.label),
+            columns: optionColumnHeaders,
+        };
     }
+    if (optionColumnHeaders.length > 3) return null;
 
-    // A real option row can have exactly the same two-column geometry as a
+    // A real option row can have exactly the same multi-column geometry as a
     // semantic heading. Never consume a row beginning with a-e as one.
     if (/^[a-eａ-ｅ][.．)）]?$/.test(tokens[0].text)) return null;
 
-    let splitIndex = -1;
-    let largestGap = 0;
+    const gaps = [];
     for (let index = 1; index < tokens.length; index++) {
         const gap = tokens[index].x - (tokens[index - 1].x + tokens[index - 1].width);
-        if (gap > largestGap) {
-            largestGap = gap;
-            splitIndex = index;
-        }
+        if (gap >= 24) gaps.push({ index, gap });
     }
-    if (splitIndex < 1 || largestGap < 24) return null;
+    const splitIndexes = gaps
+        .sort((first, second) => second.gap - first.gap)
+        .slice(0, 2)
+        .map(entry => entry.index)
+        .sort((first, second) => first - second);
+    if (splitIndexes.length === 0) return null;
 
-    const left = tokens.slice(0, splitIndex).map(item => item.text).join('').replace(/[\s　]/g, '');
-    const right = tokens.slice(splitIndex).map(item => item.text).join('').replace(/[\s　]/g, '');
-    if (!left || !right || left.length > 20 || right.length > 20) return null;
-    if (/[。！？!?]/.test(left + right) || /(?:どれか|選べ|正しい|誤って)/.test(left + right)) return null;
+    const groups = [];
+    let groupStart = 0;
+    [...splitIndexes, tokens.length].forEach(groupEnd => {
+        groups.push(tokens.slice(groupStart, groupEnd));
+        groupStart = groupEnd;
+    });
+    if (groups.length < 2 || groups.length > 3 || groups.some(group => group.length === 0)) return null;
 
-    const headingKeyword = /(?:項目|遺伝子|応答|測定器|線種|疾患|治療|所見|検査|薬剤|作用|分類|部位|線量|時期|方法|因子|結果|年齢|グレード|方針|病期|リンパ節|レベル|不確定要素|対策|マージン)/;
-    return headingKeyword.test(left) || headingKeyword.test(right)
-        ? { headers: [left, right] }
-        : null;
+    const headers = groups.map(group => group.map(item => item.text).join('').replace(/[\s　]/g, ''));
+    if (headers.some(header => !header || header.length > 20)) return null;
+    const combined = headers.join('');
+    if (/[。！？!?]/.test(combined) || /(?:どれか|選べ|正しい|誤って)/.test(combined)) return null;
+
+    const headingKeyword = /(?:項目|指標|遺伝子|応答|測定器|線種|疾患|腫瘍|原発巣|進展範囲|治療|所見|検査|薬剤|作用|分類|部位|線量|時期|方法|因子|結果|年齢|グレード|方針|病期|リンパ節|レベル|不確定要素|対策|マージン)/;
+    const matchingHeaderCount = headers.filter(header => headingKeyword.test(header)).length;
+    if (matchingHeaderCount < Math.min(2, headers.length)) return null;
+
+    return {
+        headers,
+        columns: groups.map((group, index) => ({
+            label: headers[index],
+            x: (Math.min(...group.map(item => item.x))
+                + Math.max(...group.map(item => item.x + item.width))) / 2,
+        })),
+    };
+};
+
+export const extractPairedOptionHeading = (items = []) => {
+    const heading = extractOptionColumnHeading(items);
+    return heading?.headers?.length === 2 ? { headers: heading.headers } : null;
 };
 
 export const isPairedOptionHeadingLine = (items = []) => Boolean(extractPairedOptionHeading(items));
 
 export const splitOptionItemsByColumns = (items, headers) => {
     if (!headers || headers.length < 2) return [];
-    const tokens = meaningfulItems(items)
-        .filter((item, index) => !(index === 0 && /^[a-eａ-ｅ][.．)）]?$/i.test(item.text)));
+    const tokens = normalizeOptionRowItems(items)
+        .filter(item => !OPTION_COLUMN_LEADER_PATTERN.test(item.text));
     return headers.map((header, index) => {
         const left = index === 0 ? -Infinity : (headers[index - 1].x + header.x) / 2;
         const right = index === headers.length - 1 ? Infinity : (header.x + headers[index + 1].x) / 2;
@@ -782,6 +808,121 @@ export const splitOptionItemsByColumns = (items, headers) => {
             return center >= left && center < right;
         });
     });
+};
+
+const OPTION_COLUMN_LEADER_PATTERN = /^([…⋯・･.．·•\-‐‑‒–—―ー－−_＿])\1{1,}$/;
+const OPTION_MARKER_PATTERN = /^[a-eａ-ｅ][.．)）]?$/i;
+const EMBEDDED_OPTION_MARKER_PATTERN = /^([a-eａ-ｅ])(?:[.．)）]|[\s\u3000]+)(.*)$/i;
+const LEADER_RUN_PATTERN = /([…⋯・･.．·•\-‐‑‒–—―ー－−_＿])\1{1,}/;
+
+const resizeTextItem = (item, text, startRatio, endRatio) => ({
+    ...item,
+    text,
+    x: item.x + item.width * startRatio,
+    width: item.width * Math.max(0, endRatio - startRatio),
+});
+
+const splitEmbeddedLeader = item => {
+    const match = String(item.text || '').match(LEADER_RUN_PATTERN);
+    if (!match) return [item];
+
+    const start = match.index || 0;
+    const end = start + match[0].length;
+    const sourceLength = Math.max(item.text.length, 1);
+    const before = item.text.slice(0, start).trimEnd();
+    const after = item.text.slice(end).trimStart();
+    return [
+        before ? resizeTextItem(item, before, 0, start / sourceLength) : null,
+        resizeTextItem(item, match[0], start / sourceLength, end / sourceLength),
+        after ? resizeTextItem(item, after, end / sourceLength, 1) : null,
+    ].filter(Boolean);
+};
+
+export const splitOptionItemsByLeaders = (items = []) => {
+    const tokens = normalizeOptionRowItems(items);
+    const groups = [[]];
+    tokens.forEach(token => {
+        if (OPTION_COLUMN_LEADER_PATTERN.test(token.text)) {
+            if (groups[groups.length - 1].length > 0) groups.push([]);
+            return;
+        }
+        groups[groups.length - 1].push(token);
+    });
+    return groups.filter(group => group.length > 0);
+};
+
+export const extractOptionKeyFromItems = (items = []) => {
+    const first = meaningfulItems(items).sort((a, b) => a.x - b.x)[0];
+    if (!first) return '';
+    const exactMatch = first.text.match(/^([a-eａ-ｅ])[.．)）]?$/i);
+    if (exactMatch) return exactMatch[1];
+    return first.text.match(EMBEDDED_OPTION_MARKER_PATTERN)?.[1] || '';
+};
+
+export const normalizeOptionRowItems = (items = []) => {
+    const tokens = meaningfulItems(items).sort((first, second) => first.x - second.x);
+    if (tokens.length === 0) return [];
+
+    const normalized = [...tokens];
+    if (OPTION_MARKER_PATTERN.test(normalized[0].text)) {
+        normalized.shift();
+    } else {
+        const embeddedMarker = normalized[0].text.match(EMBEDDED_OPTION_MARKER_PATTERN);
+        if (embeddedMarker) {
+            const markerLength = normalized[0].text.length - embeddedMarker[2].length;
+            if (embeddedMarker[2].trim()) {
+                normalized[0] = resizeTextItem(
+                    normalized[0],
+                    embeddedMarker[2].trimStart(),
+                    markerLength / Math.max(normalized[0].text.length, 1),
+                    1,
+                );
+            } else {
+                normalized.shift();
+            }
+        }
+    }
+
+    // 核医学PDFでは選択肢記号と全角ピリオドが別々の項目になる。
+    // 記号だけでなく「．本文」の形も、本文の位置を保ったまま除去する。
+    if (normalized.length > 0) {
+        const punctuationMatch = normalized[0].text.match(/^[.．)）]+\s*(.*)$/);
+        if (punctuationMatch) {
+            const prefixLength = normalized[0].text.length - punctuationMatch[1].length;
+            if (punctuationMatch[1]) {
+                normalized[0] = resizeTextItem(
+                    normalized[0],
+                    punctuationMatch[1],
+                    prefixLength / Math.max(normalized[0].text.length, 1),
+                    1,
+                );
+            } else {
+                normalized.shift();
+            }
+        }
+    }
+
+    return normalized.flatMap(splitEmbeddedLeader);
+};
+
+const withoutOptionMarkerAndLeaders = (items = []) => normalizeOptionRowItems(items)
+    .filter(item => !OPTION_COLUMN_LEADER_PATTERN.test(item.text));
+
+export const splitOptionItemsByStarts = (items, starts = [], alignmentTolerance = 8) => {
+    const normalizedStarts = [...starts]
+        .map(Number)
+        .filter(Number.isFinite)
+        .sort((first, second) => first - second);
+    if (normalizedStarts.length === 0) return [];
+
+    const columns = Array.from({ length: normalizedStarts.length + 1 }, () => []);
+    withoutOptionMarkerAndLeaders(items).forEach(item => {
+        const columnIndex = normalizedStarts.reduce((index, start) => (
+            item.x >= start - alignmentTolerance ? index + 1 : index
+        ), 0);
+        columns[Math.min(columnIndex, columns.length - 1)].push(item);
+    });
+    return columns;
 };
 
 export const buildPositionedInlineHtml = (items = []) => {
@@ -847,12 +988,22 @@ export const buildPositionedInlineHtml = (items = []) => {
     }).join('');
 };
 
+export const buildOptionContentText = (
+    items,
+    { positionedRichText = false } = {},
+) => {
+    const tokens = withoutOptionMarkerAndLeaders(items);
+    return positionedRichText
+        ? buildPositionedInlineHtml(tokens)
+        : tokens.map(item => item.text).join('');
+};
+
 export const buildPairedOptionText = (
     items,
     { italicizeLeft = false, minimumGap = 16, positionedRichText = false } = {},
 ) => {
-    const tokens = meaningfulItems(items)
-        .filter((item, index) => !(index === 0 && /^[a-eａ-ｅ][.．)）]?$/i.test(item.text)));
+    const tokens = normalizeOptionRowItems(items)
+        .filter(item => !OPTION_COLUMN_LEADER_PATTERN.test(item.text));
     if (tokens.length < 2) return '';
 
     let splitIndex = -1;
@@ -880,40 +1031,136 @@ export const buildPairedOptionText = (
     return `${left} ― ${right}`;
 };
 
+export const buildColumnOptionText = (
+    items,
+    {
+        headers = [],
+        starts = [],
+        splitOnLeaders = false,
+        italicizeFirst = false,
+        positionedRichText = false,
+    } = {},
+) => {
+    const groups = headers.length >= 2
+        ? splitOptionItemsByColumns(
+            normalizeOptionRowItems(items).filter(item => !OPTION_COLUMN_LEADER_PATTERN.test(item.text)),
+            headers,
+        )
+        : splitOnLeaders
+            ? splitOptionItemsByLeaders(items)
+        : splitOptionItemsByStarts(items, starts);
+    if (groups.length < 2 || groups.some(group => group.length === 0)) return '';
+
+    return groups.map((group, index) => {
+        const text = positionedRichText
+            ? buildPositionedInlineHtml(group)
+            : group.map(item => item.text).join('');
+        if (!text) return '';
+        return index === 0 && italicizeFirst
+            ? `<em>${positionedRichText ? text : escapeHtml(text)}</em>`
+            : text;
+    }).filter(Boolean).join(' ― ');
+};
+
+export const inferOptionColumnLayout = (
+    lines = [],
+    {
+        minimumGap = 24,
+        alignmentTolerance = 8,
+        minimumRows = 3,
+        maximumColumns = 3,
+        requireLeader = false,
+    } = {},
+) => {
+    const optionRows = (lines || []).map(items => {
+        if (!extractOptionKeyFromItems(items)) return null;
+        const contentTokens = normalizeOptionRowItems(items);
+        if (contentTokens.length < 2) return { candidates: [] };
+
+        const candidates = [];
+        let leaderCount = 0;
+        contentTokens.forEach((token, index) => {
+            if (!OPTION_COLUMN_LEADER_PATTERN.test(token.text)) return;
+            leaderCount += 1;
+            const next = contentTokens.slice(index + 1)
+                .find(candidate => !OPTION_COLUMN_LEADER_PATTERN.test(candidate.text));
+            if (next) candidates.push(next.x);
+        });
+
+        for (let index = 1; index < contentTokens.length; index++) {
+            const previous = contentTokens[index - 1];
+            const current = contentTokens[index];
+            if (OPTION_COLUMN_LEADER_PATTERN.test(previous.text) || OPTION_COLUMN_LEADER_PATTERN.test(current.text)) {
+                continue;
+            }
+            const gap = current.x - (previous.x + previous.width);
+            if (gap >= minimumGap) candidates.push(current.x);
+        }
+        return requireLeader && leaderCount === 0
+            ? null
+            : { candidates: [...new Set(candidates)], leaderCount };
+    }).filter(Boolean);
+
+    if (optionRows.length < minimumRows) return null;
+    if (requireLeader) {
+        const leaderCounts = new Map();
+        optionRows.forEach(row => {
+            if (row.leaderCount > 0 && row.leaderCount < maximumColumns) {
+                leaderCounts.set(row.leaderCount, (leaderCounts.get(row.leaderCount) || 0) + 1);
+            }
+        });
+        const repeatedLeaderLayout = [...leaderCounts.entries()]
+            .filter(([, count]) => count >= minimumRows && count / optionRows.length >= 0.6)
+            .sort((first, second) => second[1] - first[1] || first[0] - second[0])[0];
+        if (repeatedLeaderLayout) {
+            return {
+                columnCount: repeatedLeaderLayout[0] + 1,
+                starts: [],
+                leaderSeparated: true,
+            };
+        }
+    }
+    const observations = optionRows.flatMap((row, rowIndex) => (
+        row.candidates.map(position => ({ position, rowIndex }))
+    ));
+    const clusters = [];
+    [...observations].sort((first, second) => first.position - second.position).forEach(observation => {
+        const cluster = clusters.find(candidate => (
+            Math.abs(candidate.center - observation.position) <= alignmentTolerance
+        ));
+        if (cluster) {
+            cluster.observations.push(observation);
+            cluster.center = cluster.observations.reduce((sum, item) => sum + item.position, 0)
+                / cluster.observations.length;
+        } else {
+            clusters.push({ center: observation.position, observations: [observation] });
+        }
+    });
+
+    const starts = clusters
+        .filter(cluster => {
+            const matchingRows = new Set(cluster.observations.map(item => item.rowIndex)).size;
+            return matchingRows >= minimumRows && matchingRows / optionRows.length >= 0.6;
+        })
+        .sort((first, second) => first.center - second.center)
+        .slice(0, Math.max(1, maximumColumns - 1))
+        .map(cluster => cluster.center);
+
+    return starts.length > 0
+        ? { columnCount: starts.length + 1, starts }
+        : null;
+};
+
 export const inferPairedOptionLayout = (
     lines = [],
     { minimumGap = 24, alignmentTolerance = 8, minimumRows = 3 } = {},
 ) => {
-    const optionRows = (lines || []).map(items => {
-        const tokens = meaningfulItems(items).sort((first, second) => first.x - second.x);
-        if (!tokens.length || !/^[a-eａ-ｅ][.．)）]?$/i.test(tokens[0].text)) return null;
-        const contentTokens = tokens.slice(1);
-        if (contentTokens.length < 2) return { splitX: null };
-
-        let splitIndex = -1;
-        let largestGap = 0;
-        for (let index = 1; index < contentTokens.length; index++) {
-            const gap = contentTokens[index].x
-                - (contentTokens[index - 1].x + contentTokens[index - 1].width);
-            if (gap > largestGap) {
-                largestGap = gap;
-                splitIndex = index;
-            }
-        }
-        return {
-            splitX: splitIndex >= 1 && largestGap >= minimumGap
-                ? contentTokens[splitIndex].x
-                : null,
-        };
-    }).filter(Boolean);
-
-    if (optionRows.length < minimumRows) return false;
-    const splitPositions = optionRows.map(row => row.splitX).filter(Number.isFinite);
-    if (splitPositions.length < minimumRows || splitPositions.length / optionRows.length < 0.6) return false;
-
-    return splitPositions.some(anchor => (
-        splitPositions.filter(position => Math.abs(position - anchor) <= alignmentTolerance).length >= minimumRows
-    ));
+    return inferOptionColumnLayout(lines, {
+        minimumGap,
+        alignmentTolerance,
+        minimumRows,
+        maximumColumns: 2,
+    }) !== null;
 };
 
 const selectQuestionFigureSupportingText = ({

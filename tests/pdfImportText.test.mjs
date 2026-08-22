@@ -3,6 +3,8 @@ import test from 'node:test';
 
 import {
     assignNearestUniqueLabels,
+    buildColumnOptionText,
+    buildOptionContentText,
     buildPairedOptionText,
     buildPositionedInlineHtml,
     buildQuestionFigureCompositeBounds,
@@ -10,6 +12,8 @@ import {
     compareImageReadingOrder,
     extractQuestionTable,
     extractOptionColumnHeaders,
+    extractOptionColumnHeading,
+    extractOptionKeyFromItems,
     extractPairedOptionHeading,
     findNearestPrecedingQuestion,
     groupNearbyLegendItems,
@@ -26,17 +30,21 @@ import {
     isStandaloneImageLegendText,
     isUsableFallbackFigureCrop,
     inferPairedOptionLayout,
+    inferOptionColumnLayout,
     joinOptionContinuation,
     mergeHorizontalImagePairsBySharedLegend,
     mergeVerticallyAdjacentImageRects,
     mergeTwoByTwoImageGridRects,
     parsePdfQuestionStart,
+    normalizeOptionRowItems,
     repairLegacySequentialComparisonOptions,
     removeContainedImageRects,
     restoreTruncatedOptionText,
     shouldConsumeOptionColumnHeaders,
     shouldUseRadiationLayoutHeuristics,
     splitOptionItemsByColumns,
+    splitOptionItemsByLeaders,
+    splitOptionItemsByStarts,
     spreadPositionedLegendLabels,
 } from '../src/lib/pdfImportText.js';
 
@@ -550,11 +558,33 @@ test('recognizes semantic two-column headings without treating A and B as answer
         { text: '臨床病期', x: 112, width: 40 },
         { text: 'リンパ節レベル', x: 213, width: 70 },
     ]), { headers: ['臨床病期', 'リンパ節レベル'] });
+    assert.deepEqual(extractPairedOptionHeading([
+        { text: '指標', x: 119.06, width: 20 },
+        { text: '線量', x: 314.65, width: 20 },
+    ]), { headers: ['指標', '線量'] });
+    assert.deepEqual(extractPairedOptionHeading([
+        { text: '腫瘍', x: 116.22, width: 20 },
+        { text: '薬剤', x: 263.62, width: 20 },
+    ]), { headers: ['腫瘍', '薬剤'] });
+    assert.deepEqual(extractPairedOptionHeading([
+        { text: '原発巣の進展範囲', x: 119.05, width: 85 },
+        { text: 'リンパ節転移', x: 328.81, width: 60 },
+    ]), { headers: ['原発巣の進展範囲', 'リンパ節転移'] });
     assert.equal(extractPairedOptionHeading([
         { text: 'a', x: 94, width: 5 },
         { text: '治療中の呼吸性移動', x: 112, width: 89 },
         { text: 'CTVマージン', x: 320, width: 62 },
     ]), null);
+});
+
+test('recognizes a semantic three-column heading and retains its column positions', () => {
+    const heading = extractOptionColumnHeading([
+        { text: '測定器', x: 112, width: 36 },
+        { text: '線種', x: 230, width: 24 },
+        { text: '測定結果', x: 350, width: 48 },
+    ]);
+    assert.deepEqual(heading.headers, ['測定器', '線種', '測定結果']);
+    assert.deepEqual(heading.columns.map(column => column.x), [130, 242, 374]);
 });
 
 test('keeps both sides of semantic paired options separated', () => {
@@ -629,6 +659,134 @@ test('infers a paired layout from aligned right-column starts across option rows
         [{ text: 'b', x: 94, width: 5 }, { text: '単一列です。', x: 112, width: 70 }],
         [{ text: 'c', x: 94, width: 5 }, { text: '列ではありません。', x: 112, width: 90 }],
     ]), false);
+});
+
+test('infers two option columns across exams, including dotted leader rows', () => {
+    const whitespaceRows = ['a', 'b', 'c', 'd', 'e'].map((key, index) => [
+        { text: key, x: 94, width: 5 },
+        { text: `左列${index}`, x: 112, width: 55 + index * 2 },
+        { text: `右列${index}`, x: 286, width: 45 },
+    ]);
+    assert.deepEqual(inferOptionColumnLayout(whitespaceRows), {
+        columnCount: 2,
+        starts: [286],
+    });
+
+    const leaderRows = ['a', 'b', 'c', 'd', 'e'].map((key, index) => [
+        { text: key, x: 94, width: 5 },
+        { text: `病変${index}`, x: 112, width: 45 },
+        { text: '……………………', x: 178, width: 91 },
+        { text: `デバイス${index}`, x: 272, width: 60 },
+    ]);
+    assert.deepEqual(inferOptionColumnLayout(leaderRows), {
+        columnCount: 2,
+        starts: [272],
+    });
+    assert.deepEqual(
+        splitOptionItemsByStarts(leaderRows[0], [272]).map(column => column.map(token => token.text)),
+        [['病変0'], ['デバイス0']],
+    );
+});
+
+test('normalizes IVR dotted rows whose marker is attached to the left cell', () => {
+    const rightStarts = [204, 227, 249, 249, 386];
+    const rows = ['ａ', 'ｂ', 'ｃ', 'ｄ', 'ｅ'].map((key, index) => [
+        { text: `${key}．病変${index}`, x: 94, width: 67 },
+        { text: '･･････', x: 164 + index * 12, width: 36 },
+        { text: `デバイス${index}`, x: rightStarts[index], width: 60 },
+    ]);
+    assert.equal(extractOptionKeyFromItems(rows[0]), 'ａ');
+    assert.deepEqual(inferOptionColumnLayout(rows, { requireLeader: true }), {
+        columnCount: 2,
+        starts: [],
+        leaderSeparated: true,
+    });
+    assert.equal(buildColumnOptionText(rows[0], {
+        splitOnLeaders: true,
+        positionedRichText: true,
+    }), '病変0 ― デバイス0');
+    assert.deepEqual(
+        splitOptionItemsByLeaders(rows[4]).map(group => group.map(token => token.text)),
+        [['病変4'], ['デバイス4']],
+    );
+});
+
+test('does not split a diagnostic right-column phrase at mixed Japanese punctuation', () => {
+    const row = [
+        { text: 'a', x: 99, width: 5 },
+        { text: '胃憩室', x: 119, width: 34 },
+        { text: 'ヘリコバクター・ピロリ未感染の粘膜', x: 263, width: 193 },
+    ];
+    assert.deepEqual(normalizeOptionRowItems(row).map(token => token.text), [
+        '胃憩室',
+        'ヘリコバクター・ピロリ未感染の粘膜',
+    ]);
+    assert.equal(buildColumnOptionText(row, {
+        starts: [263],
+        positionedRichText: true,
+    }), '胃憩室 ― ヘリコバクター・ピロリ未感染の粘膜');
+});
+
+test('normalizes nuclear option punctuation and a leader joined to the right cell', () => {
+    const row = [
+        { text: 'a', x: 99, y: 100, width: 4, height: 10 },
+        { text: '．', x: 103, y: 100, width: 5, height: 10 },
+        { text: '67', x: 113, y: 104, width: 5, height: 5 },
+        { text: 'Ga citrate', x: 119, y: 100, width: 48, height: 10 },
+        { text: '―――― 腸管', x: 190, y: 100, width: 58, height: 10 },
+    ];
+    const normalizedTexts = normalizeOptionRowItems(row).map(token => token.text);
+    assert.deepEqual(normalizedTexts, ['67', 'Ga citrate', '――――', '腸管']);
+    assert.equal(buildColumnOptionText(row, {
+        starts: [218],
+        positionedRichText: true,
+    }), '<span class="pdf-script-group"><sup>67</sup>\u2060Ga citrate</span> ― 腸管');
+    assert.equal(buildOptionContentText([
+        { text: 'a', x: 99, width: 4 },
+        { text: '．通常の選択肢', x: 103, width: 75 },
+    ]), '通常の選択肢');
+});
+
+test('recognizes a radiology numeric option even when PDF text has no marker whitespace', () => {
+    const row = [
+        { text: 'a', x: 99.21, width: 4 },
+        { text: '1', x: 119.06, width: 5 },
+    ];
+    assert.equal(extractOptionKeyFromItems(row), 'a');
+    assert.equal(buildOptionContentText(row), '1');
+});
+
+test('builds a three-column option from an explicit A/B/C header', () => {
+    const headers = extractOptionColumnHeaders([
+        item('A', 130), item('B', 215), item('C', 303),
+    ]);
+    const row = [
+        item('a', 94, 5),
+        item('血流量', 119, 32),
+        item('酸素摂取率', 204, 52),
+        item('酸素代謝量', 292, 52),
+    ];
+    assert.equal(buildColumnOptionText(row, {
+        headers,
+        positionedRichText: true,
+    }), '血流量 ― 酸素摂取率 ― 酸素代謝量');
+});
+
+test('infers three columns only when both later starts repeat across rows', () => {
+    const rows = ['a', 'b', 'c', 'd', 'e'].map((key, index) => [
+        { text: key, x: 94, width: 5 },
+        { text: `A${index}`, x: 119, width: 18 },
+        { text: `B${index}`, x: 204, width: 18 },
+        { text: `C${index}`, x: 292, width: 18 },
+    ]);
+    assert.deepEqual(inferOptionColumnLayout(rows), {
+        columnCount: 3,
+        starts: [204, 292],
+    });
+    assert.equal(buildColumnOptionText(rows[0], {
+        starts: [204, 292],
+        positionedRichText: true,
+    }), 'A0 ― B0 ― C0');
 });
 
 test('expands any mixed PDF figure crop to include nearby axis labels and table text', () => {
