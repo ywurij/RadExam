@@ -35,6 +35,8 @@ import {
 import { processIncomingSyncChange } from '@/lib/sync/syncReceiver.mjs';
 import { resolveStoredSyncConflict } from '@/lib/sync/syncConflictResolution.mjs';
 import { sanitizeQuestionRichText } from '@/lib/sanitizeRichHtml.mjs';
+import { collectExamProgressDeletionKeys } from '@/lib/questionProgress.mjs';
+import { removeExamResumableSessions } from '@/lib/sessionHistory';
 import {
     checkSyncUpdates,
     runSyncCycle,
@@ -1391,6 +1393,34 @@ export const getAllLocalExams = async () => {
 export const deleteLocalExam = async (examId) => {
     const examData = await examsStore.getItem(examId);
     await examsStore.removeItem(examId);
+
+    const deletedQuestionIds = (examData?.questions || []).map(question => String(question.id));
+    const remainingQuestionIds = [];
+    await examsStore.iterate(value => {
+        (value?.questions || []).forEach(question => {
+            if (question?.id != null) remainingQuestionIds.push(String(question.id));
+        });
+    });
+    const storedProgressKeys = [];
+    await progressStore.iterate((_value, key) => storedProgressKeys.push(String(key)));
+    const progressKeys = collectExamProgressDeletionKeys({
+        examId,
+        progressKeys: storedProgressKeys,
+        deletedQuestionIds,
+        remainingQuestionIds,
+    });
+    await Promise.all(progressKeys.map(key => progressStore.removeItem(key)));
+
+    const currentSessions = getLocalResumableSessions();
+    const remainingSessions = removeExamResumableSessions(currentSessions, examId);
+    if (remainingSessions.length !== currentSessions.length) {
+        await replaceLocalResumableSessions(remainingSessions);
+    }
+    const legacySession = readLocalStorageJson(LEGACY_RESUMABLE_SESSION_KEY, null);
+    if (legacySession && String(legacySession.examId) === String(examId)) {
+        globalThis.localStorage?.removeItem(LEGACY_RESUMABLE_SESSION_KEY);
+    }
+
     const imageKeys = await cleanupOrphanExamImages(examId, new Set());
     const pdfKeys = [];
     await pdfStore.iterate((_value, key) => {
@@ -1405,6 +1435,10 @@ export const deleteLocalExam = async (examId) => {
         ...(examData?.questions || []).map(question => buildDeleteSyncChangeInput({
             entityType: SYNC_ENTITY_TYPES.QUESTION,
             entityId: buildQuestionEntityId(examId, question.id),
+        })),
+        ...progressKeys.map(key => buildDeleteSyncChangeInput({
+            entityType: SYNC_ENTITY_TYPES.PROGRESS,
+            entityId: key,
         })),
         ...imageKeys.map(key => buildDeleteSyncChangeInput({
             entityType: SYNC_ENTITY_TYPES.IMAGE,

@@ -5086,13 +5086,13 @@ export default function AdminPage() {
 
     // 試験の削除
     const handleDeleteExam = async (id, name) => {
-        if (!confirm(`試験「${name}」を完全に削除しますか？\n（この操作は取り消せません）`)) return;
+        if (!confirm(`試験「${name}」と、その学習進捗・中断履歴を完全に削除しますか？\n（この操作は取り消せません）`)) return;
 
         try {
             await deleteLocalExam(id);
             await initializeLocalExams(true);
             loadLocalExams();
-            setSuccessMsg('試験を削除しました。');
+            setSuccessMsg('試験と関連する学習進捗・中断履歴を削除しました。');
         } catch (e) {
             setErrorMsg(`削除に失敗しました: ${e.message}`);
         }

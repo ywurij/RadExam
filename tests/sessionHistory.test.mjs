@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { limitResumableSessions, MAX_RESUMABLE_SESSIONS, normalizeSessionConditions } from '../src/lib/sessionHistory.js';
+import {
+    limitResumableSessions,
+    MAX_RESUMABLE_SESSIONS,
+    normalizeSessionConditions,
+    removeExamResumableSessions,
+} from '../src/lib/sessionHistory.js';
 
 test('keeps only the four newest resumable sessions', () => {
     const sessions = [1, 5, 3, 2, 4].map(timestamp => ({ id: `session-${timestamp}`, timestamp, interrupted: true }));
@@ -37,4 +42,16 @@ test('preserves the original filters when a resumed session is interrupted again
     };
 
     assert.deepEqual(normalizeSessionConditions(original), original);
+});
+
+test('removes every interrupted session belonging to a deleted exam', () => {
+    const sessions = [
+        { id: 'target-new', examId: 'radiation', timestamp: 4, interrupted: true },
+        { id: 'other', examId: 'diagnostic', timestamp: 3, interrupted: true },
+        { id: 'target-old', examId: 'radiation', timestamp: 2, interrupted: true },
+    ];
+    assert.deepEqual(
+        removeExamResumableSessions(sessions, 'radiation').map(session => session.id),
+        ['other'],
+    );
 });
