@@ -201,3 +201,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: gh release upload "${RELEASE_TAG}" release-assets/SHA256SUMS.txt --clobber
+
+      - name: Publish Release as latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: gh release edit "${RELEASE_TAG}" --draft=false --latest
