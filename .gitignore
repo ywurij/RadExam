@@ -49,6 +49,9 @@ next-env.d.ts
 /tmp/
 /public/uploads/
 
+# developer-only documentation kept outside the public repository
+/.private-docs/
+
 # local VLM runtime/model assets (downloaded or added during packaging)
 /resources/vlm/models/
 /resources/vlm/runtime/
