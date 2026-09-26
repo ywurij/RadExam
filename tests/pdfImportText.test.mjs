@@ -73,6 +73,25 @@ test('parses full-width radiation oncology question numbers without changing que
     assert.equal(parsePdfQuestionStart('80PTV70', defaultQuestionPattern), null);
 });
 
+test('does not parse a decimal at the beginning of a wrapped sentence as a question number', () => {
+    assert.equal(
+        parsePdfQuestionStart('2.0mg/dL であった。造影剤腎症の診断のカットオフ値はどれか。', defaultQuestionPattern),
+        null,
+    );
+    assert.equal(
+        parsePdfQuestionStart('２.５ mg/dLを超える場合は投与しない。', defaultQuestionPattern),
+        null,
+    );
+    assert.deepEqual(
+        parsePdfQuestionStart('8. ペンタゾシンで正しいのはどれか。', defaultQuestionPattern),
+        { qNum: 8, questionText: 'ペンタゾシンで正しいのはどれか。' },
+    );
+    assert.deepEqual(
+        parsePdfQuestionStart('42．70 歳の女性。150 m の歩行で左下肢の跛行が出現した。', defaultQuestionPattern),
+        { qNum: 42, questionText: '70 歳の女性。150 m の歩行で左下肢の跛行が出現した。' },
+    );
+});
+
 test('keeps smaller body text in reading order when a PDF has oversized question numbers', () => {
     const lines = groupPdfTextItemsIntoLines([
         { text: '２', x: 50, y: 600, height: 15.62 },
@@ -709,6 +728,66 @@ test('normalizes IVR dotted rows whose marker is attached to the left cell', () 
         splitOptionItemsByLeaders(rows[4]).map(group => group.map(token => token.text)),
         [['病変4'], ['デバイス4']],
     );
+});
+
+test('normalizes IVR leaders split into characters or separated by spaces', () => {
+    const splitLeaderRow = [
+        { text: 'a．Onyx', x: 94, width: 48 },
+        { text: '･', x: 150, width: 6 },
+        { text: '･', x: 156, width: 6 },
+        { text: '･', x: 162, width: 6 },
+        { text: '硬膜動静脈瘻の動脈塞栓術', x: 176, width: 150 },
+    ];
+    const spacedLeaderRow = [
+        { text: 'b．オルダミン ･ ･ ･ 静脈奇形の硬化療法', x: 94, width: 250 },
+    ];
+
+    assert.deepEqual(
+        splitOptionItemsByLeaders(splitLeaderRow).map(group => group.map(token => token.text)),
+        [['Onyx'], ['硬膜動静脈瘻の動脈塞栓術']],
+    );
+    assert.equal(buildColumnOptionText(splitLeaderRow, {
+        splitOnLeaders: true,
+        positionedRichText: true,
+    }), 'Onyx ― 硬膜動静脈瘻の動脈塞栓術');
+    assert.deepEqual(
+        splitOptionItemsByLeaders(spacedLeaderRow).map(group => group.map(token => token.text)),
+        [['オルダミン'], ['静脈奇形の硬化療法']],
+    );
+});
+
+test('infers IVR combination columns when dotted leaders are drawing objects', () => {
+    const rows = [
+        [
+            { text: 'ａ．', x: 107.72, width: 22.68 },
+            { text: 'Onyx', x: 130.39, width: 27.71 },
+            { text: '硬膜動静脈瘻の動脈塞栓術', x: 257.95, width: 136.06 },
+        ],
+        [
+            { text: 'ｂ．オルダミン', x: 107.72, width: 76.05 },
+            { text: '静脈奇形の硬化療法', x: 257.95, width: 102.05 },
+        ],
+        [
+            { text: 'ｃ．', x: 107.72, width: 22.68 },
+            { text: 'Histoacryl', x: 130.39, width: 53.59 },
+            { text: '肺動静脈奇形の塞栓術', x: 257.95, width: 113.39 },
+        ],
+        [
+            { text: 'ｄ．ジェルパート', x: 107.72, width: 88.69 },
+            { text: '肝損傷の動脈塞栓術', x: 257.95, width: 102.05 },
+        ],
+        [
+            { text: 'ｅ．エンボスフィア', x: 107.72, width: 99.49 },
+            { text: '子宮筋腫の動脈塞栓術', x: 257.95, width: 113.39 },
+        ],
+    ];
+
+    const layout = inferOptionColumnLayout(rows, { minimumGap: 32 });
+    assert.deepEqual(layout, { columnCount: 2, starts: [257.95] });
+    assert.equal(buildColumnOptionText(rows[0], {
+        starts: layout.starts,
+        positionedRichText: true,
+    }), 'Onyx ― 硬膜動静脈瘻の動脈塞栓術');
 });
 
 test('does not split a diagnostic right-column phrase at mixed Japanese punctuation', () => {

@@ -3562,7 +3562,7 @@ export default function AdminPage() {
                 questionList.forEach(q => {
                     let optionsStarted = false;
                     let optionColumnLayout = inferOptionColumnLayout(q.usedLines, {
-                        requireLeader: parserProfile.name === 'ivr',
+                        minimumGap: parserProfile.name === 'ivr' ? 32 : 24,
                     });
                     let optionColumnHeaders = [];
                     let optionHeaderLabels = [];
@@ -3765,11 +3765,14 @@ export default function AdminPage() {
                          const rawQNum = parsedStart.qNum;
                          let qNum = rawQNum;
                          if (parserProfile.name === 'ivr') {
-                             if (currentQuestion && rawQNum <= (currentQuestion.rawQuestionNumber || currentQuestion.questionNumber)) {
+                             if (
+                                 currentQuestion
+                                 && ivrSectionTransitionPending
+                                 && rawQNum <= (currentQuestion.rawQuestionNumber || currentQuestion.questionNumber)
+                             ) {
                                  ivrQuestionNumberOffset = currentQuestion.questionNumber;
                              }
                              qNum = ivrQuestionNumberOffset + rawQNum;
-                             ivrSectionTransitionPending = false;
                          }
                          // ガード条件:
                          // 1. 問題番号が1〜150の範囲内
@@ -3794,6 +3797,7 @@ export default function AdminPage() {
                                  anchorY: Math.max(...line.map(item => item.y)),
                                  usedLines: [line]
                              };
+                             ivrSectionTransitionPending = false;
                          } else if (currentQuestion) {
                              currentQuestion.rawTextLines.push(lineText);
                              currentQuestion.question += '\n' + lineText;
@@ -4535,7 +4539,7 @@ export default function AdminPage() {
 
                  optionColumnLayout = inferOptionColumnLayout(
                      sanitizedEntries.map(entry => entry.items),
-                     { requireLeader: parserProfile.name === 'ivr' },
+                     { minimumGap: parserProfile.name === 'ivr' ? 32 : 24 },
                  );
                  if (optionColumnLayout) {
                      q.optionLayout = {

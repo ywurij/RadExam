@@ -36,6 +36,13 @@ export const parsePdfQuestionStart = (lineText, questionPattern) => {
         return null;
     }
 
+    // A wrapped sentence can legitimately begin with a decimal value (for example,
+    // "2.0mg/dL").  Treating the decimal point as a question-number delimiter
+    // splits the current question and can also look like an IVR section reset.
+    if (/^\s*\d{1,3}\.\d/.test(digitNormalizedLineText)) {
+        return null;
+    }
+
     const standardMatch = digitNormalizedLineText.match(questionPattern);
     if (standardMatch) {
         const qNum = Number.parseInt(standardMatch[1] || standardMatch[2], 10);
@@ -810,10 +817,11 @@ export const splitOptionItemsByColumns = (items, headers) => {
     });
 };
 
-const OPTION_COLUMN_LEADER_PATTERN = /^([…⋯・･.．·•\-‐‑‒–—―ー－−_＿])\1{1,}$/;
+const OPTION_COLUMN_LEADER_CHARACTER_PATTERN = /^[…⋯・･.．·•\-‐‑‒–—―ー－−_＿]+$/;
+const OPTION_COLUMN_LEADER_PATTERN = /^([…⋯・･.．·•\-‐‑‒–—―ー－−_＿])(?:[\s\u3000]*\1){1,}$/;
 const OPTION_MARKER_PATTERN = /^[a-eａ-ｅ][.．)）]?$/i;
 const EMBEDDED_OPTION_MARKER_PATTERN = /^([a-eａ-ｅ])(?:[.．)）]|[\s\u3000]+)(.*)$/i;
-const LEADER_RUN_PATTERN = /([…⋯・･.．·•\-‐‑‒–—―ー－−_＿])\1{1,}/;
+const LEADER_RUN_PATTERN = /([…⋯・･.．·•\-‐‑‒–—―ー－−_＿])(?:[\s\u3000]*\1){1,}/;
 
 const resizeTextItem = (item, text, startRatio, endRatio) => ({
     ...item,
@@ -836,6 +844,37 @@ const splitEmbeddedLeader = item => {
         resizeTextItem(item, match[0], start / sourceLength, end / sourceLength),
         after ? resizeTextItem(item, after, end / sourceLength, 1) : null,
     ].filter(Boolean);
+};
+
+const mergeAdjacentLeaderTokens = (items = []) => {
+    const merged = [];
+    let leaderRun = [];
+    const flushLeaderRun = () => {
+        if (leaderRun.length === 0) return;
+        if (leaderRun.length === 1) {
+            merged.push(leaderRun[0]);
+        } else {
+            const first = leaderRun[0];
+            const last = leaderRun[leaderRun.length - 1];
+            merged.push({
+                ...first,
+                text: leaderRun.map(item => item.text).join(''),
+                width: Math.max(0, (last.x + last.width) - first.x),
+            });
+        }
+        leaderRun = [];
+    };
+
+    items.forEach(item => {
+        if (OPTION_COLUMN_LEADER_CHARACTER_PATTERN.test(item.text)) {
+            leaderRun.push(item);
+            return;
+        }
+        flushLeaderRun();
+        merged.push(item);
+    });
+    flushLeaderRun();
+    return merged;
 };
 
 export const splitOptionItemsByLeaders = (items = []) => {
@@ -902,7 +941,7 @@ export const normalizeOptionRowItems = (items = []) => {
         }
     }
 
-    return normalized.flatMap(splitEmbeddedLeader);
+    return mergeAdjacentLeaderTokens(normalized.flatMap(splitEmbeddedLeader));
 };
 
 const withoutOptionMarkerAndLeaders = (items = []) => normalizeOptionRowItems(items)
