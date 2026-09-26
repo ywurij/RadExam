@@ -18,6 +18,16 @@ test('resolves result status and favorite from the global progress ID', () => {
     });
 });
 
+test('does not reuse legacy progress for a newly registered exam with the same question ID', () => {
+    const question = { examId: 'diagnostic', id: '2022048' };
+    const savedProgress = {
+        '2022048': { status: 'incorrect', isLiked: true },
+    };
+
+    assert.deepEqual(resolveQuestionProgress(savedProgress, question), {});
+    assert.deepEqual(resolveQuestionProgress(savedProgress, { id: '2022048' }), savedProgress['2022048']);
+});
+
 test('collects scoped progress and only unambiguous legacy progress when deleting an exam', () => {
     assert.equal(isProgressKeyForExam('test_radiation_2024001', 'radiation'), true);
     assert.equal(isProgressKeyForExam('test_radiology_2024001', 'radiation'), false);

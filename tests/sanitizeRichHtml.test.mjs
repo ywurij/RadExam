@@ -25,11 +25,13 @@ test('問題に含まれるすべてのリッチテキスト欄を無害化す�
         question: '<img src=x onerror=alert(1)>',
         explanation: '<script>alert(1)</script><b>解説</b>',
         options: { a: '<a href="javascript:alert(1)">選択肢</a>' },
+        optionLayout: { type: 'columns', columnCount: 2, headers: ['<b>検査</b>', '<img src=x onerror=alert(1)>'] },
         images: [{ legend: '<svg onload=alert(1)>危険</svg>', legendLayout: { title: '<i>図</i>', labels: [{ text: '<span onclick=alert(1)>A</span>' }] } }],
     });
     assert.equal(result.question, '<img src="x" />');
     assert.equal(result.explanation, '<b>解説</b>');
     assert.equal(result.options.a, '<a>選択肢</a>');
+    assert.deepEqual(result.optionLayout.headers, ['<b>検査</b>', '<img src="x" />']);
     assert.equal(result.images[0].legend, '危険');
     assert.equal(result.images[0].legendLayout.title, '<i>図</i>');
     assert.equal(result.images[0].legendLayout.labels[0].text, '<span>A</span>');

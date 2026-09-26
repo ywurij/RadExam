@@ -1293,6 +1293,19 @@ export const synchronizeLocalData = provider => runSyncCycle(createLocalSyncOpti
 
 // --- カスタム試験 (Custom Exams) 関連のAPI ---
 
+const removeStoredExamProgress = async ({ examId, deletedQuestionIds = [], remainingQuestionIds = [] }) => {
+    const storedProgressKeys = [];
+    await progressStore.iterate((_value, key) => storedProgressKeys.push(String(key)));
+    const progressKeys = collectExamProgressDeletionKeys({
+        examId,
+        progressKeys: storedProgressKeys,
+        deletedQuestionIds,
+        remainingQuestionIds,
+    });
+    await Promise.all(progressKeys.map(key => progressStore.removeItem(key)));
+    return progressKeys;
+};
+
 /**
  * カスタム試験データを保存する
  * @param {string} examId - 試験ID (例: 'my_exam_2026')
@@ -1345,7 +1358,17 @@ export const saveLocalExam = async (examId, name, questions, isMerge = false) =>
     };
     
     await examsStore.setItem(examId, examData);
-    await recordSyncChangesSafely(buildExamSyncChanges(previousExam, examData, deletedImageKeys));
+    // 同じ試験IDを再登録しても、以前の登録に残った正誤・お気に入りを引き継がない。
+    const staleProgressKeys = previousExam
+        ? []
+        : await removeStoredExamProgress({ examId });
+    await recordSyncChangesSafely([
+        ...buildExamSyncChanges(previousExam, examData, deletedImageKeys),
+        ...staleProgressKeys.map(key => buildDeleteSyncChangeInput({
+            entityType: SYNC_ENTITY_TYPES.PROGRESS,
+            entityId: key,
+        })),
+    ]);
 };
 
 /**
@@ -1401,15 +1424,11 @@ export const deleteLocalExam = async (examId) => {
             if (question?.id != null) remainingQuestionIds.push(String(question.id));
         });
     });
-    const storedProgressKeys = [];
-    await progressStore.iterate((_value, key) => storedProgressKeys.push(String(key)));
-    const progressKeys = collectExamProgressDeletionKeys({
+    const progressKeys = await removeStoredExamProgress({
         examId,
-        progressKeys: storedProgressKeys,
         deletedQuestionIds,
         remainingQuestionIds,
     });
-    await Promise.all(progressKeys.map(key => progressStore.removeItem(key)));
 
     const currentSessions = getLocalResumableSessions();
     const remainingSessions = removeExamResumableSessions(currentSessions, examId);

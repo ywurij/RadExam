@@ -1,6 +1,7 @@
 
 import { useState } from 'react';
 import { resolveQuestionProgress } from '@/lib/questionProgress.mjs';
+import { sanitizeRichHtml } from '@/lib/sanitizeRichHtml.mjs';
 import styles from './QuizResult.module.scss';
 
 
@@ -66,7 +67,10 @@ export default function QuizResult({ questions, userProgress, onHome, onToggleLi
                                         onClick={() => setModalQ(q)}
                                         style={{ cursor: 'pointer' }}
                                     >
-                                        {q.question.substring(0, 40)}...
+                                        <div
+                                            className={styles.questionPreview}
+                                            dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(q.question) }}
+                                        />
                                         <span className={styles.infoIcon}>ⓘ</span>
                                     </td>
                                     <td className={status === 'correct' ? styles.correct : styles.incorrect}>
@@ -108,10 +112,10 @@ export default function QuizResult({ questions, userProgress, onHome, onToggleLi
                     style={{ top: mousePos.y + 20, left: Math.min(mousePos.x, window.innerWidth - 320) }}
                 >
                     <div className={styles.tooltipContent}>
-                        <p className={styles.fullQuestion}>{hoveredQ.question}</p>
+                        <div className={styles.fullQuestion} dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(hoveredQ.question) }} />
                         <ul className={styles.optionsList}>
                             {Object.entries(hoveredQ.options).map(([key, val]) => (
-                                <li key={key}><b>{key}</b>: {val}</li>
+                                <li key={key}><b>{key}</b>: <div className={styles.optionValue} dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(val) }} /></li>
                             ))}
                         </ul>
                     </div>
@@ -124,10 +128,10 @@ export default function QuizResult({ questions, userProgress, onHome, onToggleLi
                     <div className={styles.modalContent} onClick={e => e.stopPropagation()}>
                         <button className={styles.closeBtn} onClick={() => setModalQ(null)}>×</button>
                         <h3 className={styles.modalTitle}>問題詳細</h3>
-                        <p className={styles.fullQuestion}>{modalQ.question}</p>
+                        <div className={styles.fullQuestion} dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(modalQ.question) }} />
                         <ul className={styles.optionsList}>
                             {Object.entries(modalQ.options).map(([key, val]) => (
-                                <li key={key}><b>{key}</b>: {val}</li>
+                                <li key={key}><b>{key}</b>: <div className={styles.optionValue} dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(val) }} /></li>
                             ))}
                         </ul>
                         <div className={styles.modalFooter}>

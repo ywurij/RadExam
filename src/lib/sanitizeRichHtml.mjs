@@ -81,6 +81,16 @@ export const sanitizeQuestionRichText = (question) => {
                     : question.options,
             }
             : {}),
+        ...(Object.hasOwn(question, 'optionLayout') && question.optionLayout && typeof question.optionLayout === 'object'
+            ? {
+                optionLayout: {
+                    ...question.optionLayout,
+                    ...(Array.isArray(question.optionLayout.headers)
+                        ? { headers: question.optionLayout.headers.map(sanitizeRichHtml) }
+                        : {}),
+                },
+            }
+            : {}),
         ...(Object.hasOwn(question, 'images') ? { images: sanitizeImages(question.images) } : {}),
     };
 };

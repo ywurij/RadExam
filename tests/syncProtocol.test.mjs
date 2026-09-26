@@ -168,6 +168,24 @@ test('represents a removed option as an unset field', () => {
     }), next);
 });
 
+test('組み合わせ列名の編集を問題の変更として同期する', () => {
+    const previous = {
+        id: '2025001',
+        optionLayout: { type: 'columns', columnCount: 2, headers: ['検査', '適応'] },
+    };
+    const next = {
+        ...previous,
+        optionLayout: { ...previous.optionLayout, headers: ['薬剤', '適応'] },
+    };
+    const delta = diffQuestionFields(previous, next);
+
+    assert.deepEqual(delta.changedFields, ['optionLayout']);
+    assert.deepEqual(applySyncFieldDelta(previous, {
+        operation: SYNC_OPERATIONS.UPSERT,
+        ...delta,
+    }), next);
+});
+
 test('includes the full question and all options when a question is first created', () => {
     const next = {
         id: '2025001',

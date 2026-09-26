@@ -120,7 +120,7 @@ function SourcePageCanvas({ sourcePage, pdfRecord }) {
     const previewSrc = focused ? renderedPages.focused : renderedPages.full;
 
     return (
-        <section style={{ width: sectionWidth, maxWidth: '100%', margin: '0 auto', border: '1px solid var(--border-color)', borderRadius: '0.6rem', overflow: 'hidden', background: 'var(--surface-soft)' }}>
+        <section style={{ width: '100%', maxWidth: sectionWidth, minWidth: 0, margin: '0 auto', border: '1px solid var(--border-color)', borderRadius: '0.6rem', overflow: 'hidden', background: 'var(--surface-soft)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', padding: '0.5rem 0.7rem', background: 'var(--surface-soft)', borderBottom: '1px solid var(--border-color)' }}>
                 <strong style={{ fontSize: '0.85rem', color: 'var(--text-primary)' }}>{sourcePage.pageNumber}ページ</strong>
                 {focus && (
@@ -177,7 +177,7 @@ export default function QuestionSourcePages({ sourcePages = [], pdfFiles = [] })
             <div style={{ marginBottom: '0.55rem', fontWeight: 800, color: 'var(--text-primary)' }}>
                 {sourcePages.some(sourcePage => sourcePage.sourceType === 'nuclear-appendix') ? '巻末図（別紙）' : '登録元PDFページ'}
             </div>
-            <div style={{ display: 'grid', gap: '0.8rem' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 480px), 1fr))', alignItems: 'start', gap: '0.8rem' }}>
                 {resolvedPages.map(({ sourcePage, pdfRecord }, index) => (
                     pdfRecord ? (
                         <SourcePageCanvas key={`${sourcePage.pdfName}-${sourcePage.pageNumber}-${index}`} sourcePage={sourcePage} pdfRecord={pdfRecord} />

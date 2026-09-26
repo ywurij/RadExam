@@ -89,10 +89,20 @@
 
 .questionText {
     max-width: 300px;
+    color: var(--text-primary);
+}
+
+.questionPreview {
+    display: inline-block;
+    max-width: calc(100% - 1.5rem);
+    vertical-align: middle;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    color: var(--text-primary);
+
+    :global(*) {
+        display: inline;
+    }
 }
 
 .correct {
@@ -205,6 +215,7 @@
     margin-bottom: 0.75rem;
     line-height: 1.5;
     color: var(--text-primary);
+    white-space: pre-wrap;
 }
 
 .optionsList {
@@ -218,6 +229,10 @@
         padding: 0.25rem 0.5rem;
         border-radius: 0.25rem;
     }
+}
+
+.optionValue {
+    display: inline;
 }
 
 /* Modal */

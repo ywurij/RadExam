@@ -10,7 +10,7 @@ test('provides the requested exam ID and name for every PDF import category', ()
     });
     assert.deepEqual(getExamImportDefaults('2'), {
         id: 'diagnostic',
-        name: '放射線科診断専門医',
+        name: '放射線診断専門医',
     });
     assert.deepEqual(getExamImportDefaults('3'), {
         id: 'nuclear',

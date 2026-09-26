@@ -137,6 +137,13 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveQ
         setDraft({
             question: question.question || '',
             options: { ...currentOptions },
+            ...(isColumnOptionLayout ? {
+                optionLayout: {
+                    ...question.optionLayout,
+                    columnCount: optionColumnCount,
+                    headers: Array.isArray(question.optionLayout?.headers) ? [...question.optionLayout.headers] : [],
+                },
+            } : {}),
             images: currentImages.map(image => ({ ...image })),
         });
         setSelectedPdfKey(questionPdfKey);
@@ -265,6 +272,23 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveQ
                         <div className={styles.optionEditorGrid}>
                             {Object.keys(draft.options).sort().map(key => <div key={key}><strong>{key}.</strong><input value={draft.options[key] || ''} onChange={event => setDraft(previous => ({ ...previous, options: { ...previous.options, [key]: event.target.value } }))} /></div>)}
                         </div>
+                        {draft.optionLayout && <div className={styles.optionColumnEditor}>
+                            <label className={styles.editorLabel}>組み合わせ列名</label>
+                            <div className={styles.optionColumnHeaders}>
+                                {Array.from({ length: optionColumnCount }, (_, index) => <label key={index}>
+                                    {index + 1}列目
+                                    <input value={draft.optionLayout.headers[index] || ''} onChange={event => setDraft(previous => ({
+                                        ...previous,
+                                        optionLayout: {
+                                            ...previous.optionLayout,
+                                            headers: Array.from({ length: optionColumnCount }, (_, headerIndex) => (
+                                                headerIndex === index ? event.target.value : previous.optionLayout.headers[headerIndex] || ''
+                                            )),
+                                        },
+                                    }))} />
+                                </label>)}
+                            </div>
+                        </div>}
 
                         <label className={styles.editorLabel}>画像・レジェンド</label>
                         <div className={styles.imageEditToolbar}>
@@ -332,7 +356,7 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveQ
                         <div className={styles.optionsSection} style={{ marginBottom: '2rem' }}>
                             <h4>選択肢</h4>
                             <div className={styles.options}>
-                                {optionColumnHeaders.length === optionColumnCount && <div
+                                {optionColumnHeaders.length === optionColumnCount && optionColumnHeaders.some(header => String(header).trim()) && <div
                                     className={styles.pairedOptionHeader}
                                     style={{ gridTemplateColumns: buildColumnGridTemplate(optionColumnCount, true) }}
                                 >

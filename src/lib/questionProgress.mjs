@@ -26,5 +26,6 @@ export const getQuestionProgressKey = question => (
 
 export const resolveQuestionProgress = (progress, question) => {
     if (!progress || !question) return {};
-    return progress[getQuestionProgressKey(question)] || progress[question.id] || {};
+    const scopedKey = getQuestionProgressKey(question);
+    return progress[scopedKey] || (!question.examId ? progress[question.id] : null) || {};
 };
