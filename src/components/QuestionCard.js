@@ -5,12 +5,14 @@ import Lightbox from 'yet-another-react-lightbox';
 import Zoom from 'yet-another-react-lightbox/plugins/zoom';
 import 'yet-another-react-lightbox/styles.css';
 import AnswerEditor from './AnswerEditor';
+import OptionFormatEditor from './OptionFormatEditor';
 import PdfClipper from '@target/pdf-clipper';
 import QuestionSourcePages from './QuestionSourcePages';
 import StructuredLegendEditor, { createStructuredLegendFromText } from '@target/structured-legend-editor';
 import { getSelectionCount } from '@/lib/utils';
 import { APP_FEATURES } from '@/lib/appTarget';
 import { sanitizeQuestionRichText, sanitizeRichHtml } from '@/lib/sanitizeRichHtml.mjs';
+import { getOptionColumnCount, getOptionLayoutError, getOptionLayoutMode } from '@/lib/optionLayout.mjs';
 import styles from './QuestionCard.module.scss';
 import 'katex/dist/katex.min.css';
 
@@ -48,6 +50,7 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveQ
     const [showAnswer, setShowAnswer] = useState(false);
     const [isEditing, setIsEditing] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
+    const [saveError, setSaveError] = useState('');
     const [isEditingAnswer, setIsEditingAnswer] = useState(false);
     const [isEditingGenre, setIsEditingGenre] = useState(false);
     const [isEditingExplanation, setIsEditingExplanation] = useState(false);
@@ -94,12 +97,8 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveQ
         return figures;
     }, [currentImages, imageDimensions, question.id]);
     const currentOptions = question.options || {};
-    const isColumnOptionLayout = ['paired', 'columns'].includes(question.optionLayout?.type);
-    const optionColumnCount = isColumnOptionLayout
-        ? Math.max(2, Math.min(3, Number(question.optionLayout?.columnCount)
-            || (question.optionLayout?.type === 'paired' ? 2 : question.optionLayout?.headers?.length)
-            || 2))
-        : 0;
+    const isColumnOptionLayout = getOptionLayoutMode(question.optionLayout) !== 'normal';
+    const optionColumnCount = isColumnOptionLayout ? getOptionColumnCount(question.optionLayout) : 0;
     const optionColumnHeaders = isColumnOptionLayout
         && Array.isArray(question.optionLayout.headers)
         && question.optionLayout.headers.length === optionColumnCount
@@ -137,15 +136,10 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveQ
         setDraft({
             question: question.question || '',
             options: { ...currentOptions },
-            ...(isColumnOptionLayout ? {
-                optionLayout: {
-                    ...question.optionLayout,
-                    columnCount: optionColumnCount,
-                    headers: Array.isArray(question.optionLayout?.headers) ? [...question.optionLayout.headers] : [],
-                },
-            } : {}),
+            optionLayout: question.optionLayout ? { ...question.optionLayout, headers: [...(question.optionLayout.headers || [])] } : null,
             images: currentImages.map(image => ({ ...image })),
         });
+        setSaveError('');
         setSelectedPdfKey(questionPdfKey);
         setIsEditing(true);
         onEditingChange?.(true);
@@ -160,6 +154,13 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveQ
 
     const saveAll = async () => {
         if (!draft || isSaving) return;
+        const formatError = getOptionLayoutError(draft.options, draft.optionLayout);
+        const formatChanged = JSON.stringify(draft.options) !== JSON.stringify(currentOptions)
+            || JSON.stringify(draft.optionLayout) !== JSON.stringify(question.optionLayout ?? null);
+        if (formatChanged && formatError) {
+            setSaveError(formatError);
+            return;
+        }
         setIsSaving(true);
         try {
             await onSaveQuestionData?.(question.id, sanitizeQuestionRichText(draft));
@@ -269,26 +270,14 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveQ
                         <AnswerEditor content={draft.question} onChange={value => setDraft(previous => ({ ...previous, question: value }))} />
 
                         <label className={styles.editorLabel}>選択肢</label>
-                        <div className={styles.optionEditorGrid}>
-                            {Object.keys(draft.options).sort().map(key => <div key={key}><strong>{key}.</strong><input value={draft.options[key] || ''} onChange={event => setDraft(previous => ({ ...previous, options: { ...previous.options, [key]: event.target.value } }))} /></div>)}
-                        </div>
-                        {draft.optionLayout && <div className={styles.optionColumnEditor}>
-                            <label className={styles.editorLabel}>組み合わせ列名</label>
-                            <div className={styles.optionColumnHeaders}>
-                                {Array.from({ length: optionColumnCount }, (_, index) => <label key={index}>
-                                    {index + 1}列目
-                                    <input value={draft.optionLayout.headers[index] || ''} onChange={event => setDraft(previous => ({
-                                        ...previous,
-                                        optionLayout: {
-                                            ...previous.optionLayout,
-                                            headers: Array.from({ length: optionColumnCount }, (_, headerIndex) => (
-                                                headerIndex === index ? event.target.value : previous.optionLayout.headers[headerIndex] || ''
-                                            )),
-                                        },
-                                    }))} />
-                                </label>)}
-                            </div>
-                        </div>}
+                        <OptionFormatEditor
+                            options={draft.options}
+                            optionLayout={draft.optionLayout}
+                            onChange={updates => {
+                                setDraft(previous => ({ ...previous, ...updates }));
+                                setSaveError('');
+                            }}
+                        />
 
                         <label className={styles.editorLabel}>画像・レジェンド</label>
                         <div className={styles.imageEditToolbar}>
@@ -310,6 +299,7 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveQ
                                 <div><button type="button" disabled={!selectedPdf} onClick={() => setPdfTarget({ mode: 'replace', index })}>PDFから差し替え</button><button type="button" className={styles.deleteImageBtn} onClick={() => setDraft(previous => ({ ...previous, images: previous.images.filter((_, imageIndex) => imageIndex !== index) }))}>削除</button></div>
                             </div>
                         ))}</div>}
+                        {saveError && <p className={styles.saveError} role="alert">{saveError}</p>}
                         <div className={styles.unifiedEditActions}><button type="button" onClick={closeEditing} disabled={isSaving}>キャンセル</button><button type="button" onClick={saveAll} disabled={isSaving}>{isSaving ? '保存中…' : '変更を保存'}</button></div>
                     </div>
                     {selectedPdf && <aside className={styles.pdfReferencePanel}>

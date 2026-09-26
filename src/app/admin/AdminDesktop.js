@@ -1,9 +1,10 @@
 "use client";
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import PdfClipper from '@/components/PdfClipper';
 import StructuredLegendEditor, { createStructuredLegendFromText } from '@/components/StructuredLegendEditor';
+import OptionFormatEditor from '@/components/OptionFormatEditor';
 import CloudSyncPage from '@/app/sync/page';
 import ThemeController from '@/components/ThemeController';
 import adminStyles from './AdminEdit.module.scss';
@@ -25,6 +26,7 @@ import {
 } from '@/lib/nuclearFigureGeometry.mjs';
 import { buildNuclearSourcePageAssignments } from '@/lib/nuclearSourcePages.mjs';
 import { EXAM_IMPORT_CATEGORY_OPTIONS, getExamImportDefaults } from '@/lib/examImportDefaults.mjs';
+import { getOptionLayoutError } from '@/lib/optionLayout.mjs';
 import { configurePdfJsWorker } from '@/lib/pdfJsWorker.mjs';
 import {
     assignNearestUniqueLabels,
@@ -2905,6 +2907,7 @@ export default function AdminPage() {
     const [editingExamId, setEditingExamId] = useState('');
     const [editingExamName, setEditingExamName] = useState('');
     const [editingQuestions, setEditingQuestions] = useState([]);
+    const initialEditingOptionState = useRef(new Map());
     const [editingYearFilter, setEditingYearFilter] = useState('all');
     const [editingPdfFiles, setEditingPdfFiles] = useState([]);
     const [selectedEditingPdfKey, setSelectedEditingPdfKey] = useState('');
@@ -3090,6 +3093,7 @@ export default function AdminPage() {
                 const questionNumber = Number(q.questionNumber ?? String(q.id ?? '').slice(-3) ?? index + 1) || (index + 1);
                 const id = buildQuestionId(year, questionNumber);
                 return {
+                    ...q,
                     id,
                     year,
                     questionNumber,
@@ -3099,11 +3103,10 @@ export default function AdminPage() {
                     answer: q.answer || '',
                     explanation: q.explanation || '',
                     images: Array.isArray(q.images) ? q.images.map((img) => ({
+                        ...img,
                         path: img.path || 'image_placeholder',
                         legend: img.legend ?? '',
                         storageKey: img.storageKey || '',
-                        ...(img.layout ? { layout: img.layout } : {}),
-                        ...(img.legendLayout ? { legendLayout: img.legendLayout } : {}),
                     })) : [],
                 };
             });
@@ -3111,6 +3114,10 @@ export default function AdminPage() {
             setEditingExamId(exam.id);
             setEditingExamName(exam.name);
             setEditingQuestions(normalizedQuestions);
+            initialEditingOptionState.current = new Map(normalizedQuestions.map(question => [
+                question.id,
+                JSON.stringify({ options: question.options, optionLayout: question.optionLayout ?? null }),
+            ]));
             setActiveEditingQuestionIndex(0);
             setPdfClipQuestionIndex(null);
             setEditingPdfFiles(pdfs);
@@ -3152,16 +3159,6 @@ export default function AdminPage() {
         updateEditingQuestion(questionIndex, (question) => ({
             ...question,
             [field]: value,
-        }));
-    };
-
-    const handleEditingOptionChange = (questionIndex, optionKey, value) => {
-        updateEditingQuestion(questionIndex, (question) => ({
-            ...question,
-            options: {
-                ...question.options,
-                [optionKey]: value,
-            },
         }));
     };
 
@@ -3305,6 +3302,18 @@ export default function AdminPage() {
     const handleSaveEditedExam = async () => {
         if (!editingExamId || !editingExamName.trim()) {
             setErrorMsg('編集対象の試験IDと試験名が必要です。');
+            return;
+        }
+
+        const invalidQuestion = editingQuestions.find(question => (
+            getOptionLayoutError(question.options, question.optionLayout)
+            && initialEditingOptionState.current.get(question.id) !== JSON.stringify({
+                options: question.options,
+                optionLayout: question.optionLayout ?? null,
+            })
+        ));
+        if (invalidQuestion) {
+            setErrorMsg(`${invalidQuestion.year}年 ${invalidQuestion.questionNumber}問: ${getOptionLayoutError(invalidQuestion.options, invalidQuestion.optionLayout)}`);
             return;
         }
 
@@ -6303,14 +6312,12 @@ export default function AdminPage() {
 
                                         <div style={{ marginBottom: '1rem' }}>
                                             <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '0.5rem' }}>選択肢</label>
-                                            <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '0.5rem' }}>
-                                                {['a', 'b', 'c', 'd', 'e'].map((optionKey) => (
-                                                    <div key={optionKey} style={{ display: 'grid', gridTemplateColumns: '36px 1fr', gap: '0.5rem', alignItems: 'center' }}>
-                                                        <span style={{ fontWeight: 'bold' }}>{optionKey}.</span>
-                                                        <input value={question.options?.[optionKey] || ''} onChange={(e) => handleEditingOptionChange(questionIndex, optionKey, e.target.value)} style={{ width: '100%', padding: '0.5rem', borderRadius: '0.375rem', border: '1px solid var(--border-color)' }} />
-                                                    </div>
-                                                ))}
-                                            </div>
+                                            <OptionFormatEditor
+                                                options={question.options}
+                                                optionLayout={question.optionLayout}
+                                                optionKeys={['a', 'b', 'c', 'd', 'e']}
+                                                onChange={updates => updateEditingQuestion(questionIndex, previous => ({ ...previous, ...updates }))}
+                                            />
                                         </div>
 
                                         <div>

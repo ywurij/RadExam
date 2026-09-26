@@ -1,0 +1,42 @@
+.editor {
+    display: grid;
+    gap: 0.7rem;
+}
+
+.modeLabel,
+.headers label {
+    display: grid;
+    gap: 0.3rem;
+    color: var(--text-secondary);
+    font-size: 0.82rem;
+    font-weight: 700;
+}
+
+.modeLabel select,
+.headers input,
+.optionRow input {
+    min-width: 0;
+    width: 100%;
+    padding: 0.55rem;
+    border: 1px solid var(--border-color);
+    border-radius: 0.35rem;
+    background: var(--surface-raised);
+    color: var(--text-primary);
+}
+
+.modeLabel select { max-width: 20rem; }
+
+.headers,
+.cells {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(10rem, 100%), 1fr));
+    gap: 0.5rem;
+    min-width: 0;
+}
+
+.options { display: grid; gap: 0.5rem; }
+.optionRow { display: grid; grid-template-columns: 2rem minmax(0, 1fr); align-items: center; gap: 0.4rem; }
+.hint,
+.error { margin: 0; font-size: 0.78rem; }
+.hint { color: var(--text-secondary); }
+.error { color: var(--danger-text); font-weight: 700; }

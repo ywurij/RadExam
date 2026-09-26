@@ -186,6 +186,18 @@ test('組み合わせ列名の編集を問題の変更として同期する', ()
     }), next);
 });
 
+test('通常形式と組み合わせ形式の切替を同期する', () => {
+    const regular = { id: '2025002', options: { a: 'A ― B' }, optionLayout: null };
+    const combined = { ...regular, optionLayout: { type: 'columns', columnCount: 2, headers: ['A', 'B'] } };
+    const toCombined = diffQuestionFields(regular, combined);
+    assert.deepEqual(toCombined.changedFields, ['optionLayout']);
+    assert.deepEqual(applySyncFieldDelta(regular, { operation: SYNC_OPERATIONS.UPSERT, ...toCombined }), combined);
+
+    const toRegular = diffQuestionFields(combined, regular);
+    assert.deepEqual(toRegular.changedFields, ['optionLayout']);
+    assert.deepEqual(applySyncFieldDelta(combined, { operation: SYNC_OPERATIONS.UPSERT, ...toRegular }), regular);
+});
+
 test('includes the full question and all options when a question is first created', () => {
     const next = {
         id: '2025001',
