@@ -727,6 +727,9 @@ export const isPairedOptionHeader = (text) => {
 
 export const extractOptionColumnHeaders = (items) => {
     const tokens = meaningfulItems(items);
+    // A short answer such as "a D" or "b E" is an option row, not an A/D
+    // column heading. Explicit PDF headings use uppercase A/B/C markers.
+    if (/^[a-eａ-ｅ][.．)）]?$/.test(tokens[0]?.text || '')) return [];
     if (tokens.some(item => !/^[（(]?[A-E][）)]?$/i.test(item.text) && !/^[,、]$/.test(item.text))) {
         return [];
     }
@@ -740,7 +743,7 @@ export const extractOptionColumnHeaders = (items) => {
     return headers.length >= 2 && uniqueLabels.size === headers.length ? headers : [];
 };
 
-export const extractOptionColumnHeading = (items = []) => {
+export const extractOptionColumnHeading = (items = [], { alignedLayout = null, firstOptionRow = null } = {}) => {
     const tokens = meaningfulItems(items).sort((a, b) => a.x - b.x);
     if (tokens.length < 2) return null;
 
@@ -784,7 +787,20 @@ export const extractOptionColumnHeading = (items = []) => {
 
     const headingKeyword = /(?:項目|指標|遺伝子|応答|測定器|線種|疾患|腫瘍|原発巣|進展範囲|治療|所見|検査|薬剤|作用|分類|部位|線量|時期|方法|因子|結果|年齢|グレード|方針|病期|リンパ節|レベル|不確定要素|対策|マージン)/;
     const matchingHeaderCount = headers.filter(header => headingKeyword.test(header)).length;
-    if (matchingHeaderCount < Math.min(2, headers.length)) return null;
+    if (matchingHeaderCount < Math.min(2, headers.length)) {
+        // Some genuine headings have no dictionary keyword (e.g. "標的" or "症候").
+        // Accept them only immediately above option a, with the same column
+        // starts repeated across the actual option rows.
+        const optionContent = normalizeOptionRowItems(firstOptionRow || []);
+        const expectedStarts = [optionContent[0]?.x, ...(alignedLayout?.starts || [])];
+        const headingStarts = groups.map(group => Math.min(...group.map(item => item.x)));
+        if (
+            alignedLayout?.columnCount !== headers.length
+            || expectedStarts.length !== headers.length
+            || expectedStarts.some((start, index) => !Number.isFinite(start)
+                || Math.abs(start - headingStarts[index]) > (index === 0 ? 12 : 24))
+        ) return null;
+    }
 
     return {
         headers,
@@ -896,6 +912,15 @@ export const extractOptionKeyFromItems = (items = []) => {
     const exactMatch = first.text.match(/^([a-eａ-ｅ])[.．)）]?$/i);
     if (exactMatch) return exactMatch[1];
     return first.text.match(EMBEDDED_OPTION_MARKER_PATTERN)?.[1] || '';
+};
+
+export const shouldTreatPdfOptionKeyAsOption = (rawKey, optionsStarted = false, parserName = 'default') => {
+    if (!rawKey) return false;
+    if (parserName !== 'radiation') return true;
+    // Radiation choices use lowercase a-e. An uppercase staging grade such as
+    // "B（スコア7点）" can otherwise become option b before option a appears.
+    return /^[a-eａ-ｅ]$/.test(rawKey)
+        && (optionsStarted || /^[aａ]$/.test(rawKey));
 };
 
 export const normalizeOptionRowItems = (items = []) => {
@@ -1029,9 +1054,21 @@ export const buildPositionedInlineHtml = (items = []) => {
 
 export const buildOptionContentText = (
     items,
-    { positionedRichText = false } = {},
+    { positionedRichText = false, restoreNumericRange = false } = {},
 ) => {
     const tokens = withoutOptionMarkerAndLeaders(items);
+    if (restoreNumericRange && tokens.length === 2) {
+        const [left, right] = tokens;
+        const numeric = /^\d+(?:\.\d+)?$/;
+        const gap = right.x - (left.x + left.width);
+        const letterHeight = Math.max(Number(left.height) || 0, Number(right.height) || 0);
+        // Some PDFs draw a soft hyphen that PDF.js omits entirely. Keep this
+        // fallback to close, numeric-only pairs in range questions.
+        if (numeric.test(left.text) && numeric.test(right.text)
+            && letterHeight > 0 && gap >= letterHeight * 0.35 && gap <= letterHeight * 1.25) {
+            return `${left.text}-${right.text}`;
+        }
+    }
     return positionedRichText
         ? buildPositionedInlineHtml(tokens)
         : tokens.map(item => item.text).join('');
@@ -1080,11 +1117,17 @@ export const buildColumnOptionText = (
         positionedRichText = false,
     } = {},
 ) => {
+    // Repeated option rows give a more accurate right-column start than the
+    // midpoint between short headings. A closing parenthesis at the end of a
+    // wide left cell can otherwise fall on the wrong side of that midpoint.
+    const alignedStarts = starts.length === headers.length - 1 && starts.length > 0;
     const groups = headers.length >= 2
-        ? splitOptionItemsByColumns(
-            normalizeOptionRowItems(items).filter(item => !OPTION_COLUMN_LEADER_PATTERN.test(item.text)),
-            headers,
-        )
+        ? alignedStarts
+            ? splitOptionItemsByStarts(items, starts)
+            : splitOptionItemsByColumns(
+                normalizeOptionRowItems(items).filter(item => !OPTION_COLUMN_LEADER_PATTERN.test(item.text)),
+                headers,
+            )
         : splitOnLeaders
             ? splitOptionItemsByLeaders(items)
         : splitOptionItemsByStarts(items, starts);

@@ -62,6 +62,7 @@ import {
     removeContainedImageRects,
     restoreTruncatedOptionText,
     shouldConsumeOptionColumnHeaders,
+    shouldTreatPdfOptionKeyAsOption,
     shouldUseRadiationLayoutHeuristics,
     spreadPositionedLegendLabels,
 } from '@/lib/pdfImportText';
@@ -3580,6 +3581,14 @@ export default function AdminPage() {
                     const cleanQuestionLines = [];
                     q.options = {};
                     q.finalUsedLines = [];
+                    const firstOptionIndex = q.usedLines.findIndex((line, index) => {
+                        const key = extractOptionKeyFromItems(line)
+                            || String(q.rawTextLines[index] || '').trim().match(optionPattern)?.[0]?.[0]
+                            || '';
+                        return /^[aａ]$/i.test(key);
+                    });
+                    const restoreNumericRange = parserProfile.name === 'ivr'
+                        && /(?:範囲|サイズ|径|長さ|距離|幅)/.test(q.rawTextLines.join(' '));
                     if (optionColumnLayout) {
                         q.optionLayout = {
                             type: 'columns',
@@ -3594,13 +3603,19 @@ export default function AdminPage() {
                         if (!trimmed) return;
 
                         const columnHeading = !optionsStarted
-                            ? extractOptionColumnHeading(originalLine)
+                            ? extractOptionColumnHeading(originalLine, usesRadiationLayoutHeuristics && idx === firstOptionIndex - 1
+                                ? { alignedLayout: optionColumnLayout, firstOptionRow: q.usedLines[firstOptionIndex] }
+                                : {})
                             : null;
                         if (columnHeading) {
                             optionColumnHeaders = columnHeading.columns;
+                            const alignedStarts = optionColumnLayout?.columnCount === columnHeading.headers.length
+                                && optionColumnLayout.starts?.length === columnHeading.headers.length - 1
+                                ? optionColumnLayout.starts
+                                : columnHeading.columns.slice(1).map(header => header.x);
                             optionColumnLayout = {
                                 columnCount: columnHeading.headers.length,
-                                starts: columnHeading.columns.slice(1).map(header => header.x),
+                                starts: alignedStarts,
                             };
                             optionHeaderLabels = columnHeading.headers;
                             q.optionLayout = {
@@ -3634,8 +3649,14 @@ export default function AdminPage() {
                         const geometryOptionKey = extractOptionKeyFromItems(originalLine);
                         const match = trimmed.match(optionPattern);
                         if (geometryOptionKey || match) {
+                            const rawOptionKey = geometryOptionKey || trimmed[0][0];
+                            const optKey = canonicalizeOptionKey(rawOptionKey);
+                            if (!shouldTreatPdfOptionKeyAsOption(rawOptionKey, optionsStarted, parserProfile.name)) {
+                                cleanQuestionLines.push(lineStr);
+                                if (originalLine) q.finalUsedLines.push(originalLine);
+                                return;
+                            }
                             optionsStarted = true;
-                            const optKey = canonicalizeOptionKey(geometryOptionKey || trimmed[0][0]);
                             if (isRepeatedOptionOrFigureLabel(optKey, q.options, optionsStarted)) {
                                 return;
                             }
@@ -3661,6 +3682,7 @@ export default function AdminPage() {
                             }
                             const optionContentText = buildOptionContentText(originalLine, {
                                 positionedRichText: true,
+                                restoreNumericRange: restoreNumericRange && !optionColumnLayout,
                             });
                             const optText = pairedText || optionContentText
                                 || trimmed.substring(match?.[0]?.length || 0).trim();
@@ -4559,7 +4581,9 @@ export default function AdminPage() {
                  }
 
                  const firstOptionIndex = sanitizedEntries.findIndex(entry => (
-                     extractOptionKeyFromItems(entry.items) || optionPattern.test(entry.text)
+                     usesRadiationLayoutHeuristics
+                         ? /^[aａ]$/.test(extractOptionKeyFromItems(entry.items) || entry.text.match(optionPattern)?.[0]?.[0] || '')
+                         : extractOptionKeyFromItems(entry.items) || optionPattern.test(entry.text)
                  ));
                  const questionEntries = firstOptionIndex >= 0
                      ? sanitizedEntries.slice(0, firstOptionIndex)
@@ -4590,13 +4614,19 @@ export default function AdminPage() {
                      }
 
                      const columnHeading = !optionsStarted
-                         ? extractOptionColumnHeading(sanitizedLineItems)
+                         ? extractOptionColumnHeading(sanitizedLineItems, usesRadiationLayoutHeuristics && entryIndex === firstOptionIndex - 1
+                             ? { alignedLayout: optionColumnLayout, firstOptionRow: sanitizedEntries[firstOptionIndex]?.items }
+                             : {})
                          : null;
                      if (columnHeading) {
                          optionColumnHeaders = columnHeading.columns;
+                         const alignedStarts = optionColumnLayout?.columnCount === columnHeading.headers.length
+                             && optionColumnLayout.starts?.length === columnHeading.headers.length - 1
+                             ? optionColumnLayout.starts
+                             : columnHeading.columns.slice(1).map(header => header.x);
                          optionColumnLayout = {
                              columnCount: columnHeading.headers.length,
-                             starts: columnHeading.columns.slice(1).map(header => header.x),
+                             starts: alignedStarts,
                          };
                          optionHeaderLabels = columnHeading.headers;
                          q.optionLayout = {
@@ -4624,8 +4654,15 @@ export default function AdminPage() {
                      const geometryOptionKey = extractOptionKeyFromItems(sanitizedLineItems);
                      const match = lineText.match(optionPattern);
                      if (geometryOptionKey || match) {
+                         const rawOptionKey = geometryOptionKey || lineText[0][0];
+                         const optKey = canonicalizeOptionKey(rawOptionKey);
+                         if (!shouldTreatPdfOptionKeyAsOption(rawOptionKey, optionsStarted, parserProfile.name)) {
+                             const parsedStart = parseQuestionStart(lineText);
+                             cleanQuestionLines.push(parsedStart ? parsedStart.questionText : lineText);
+                             rebuiltUsedLines.push(sanitizedLineItems);
+                             return;
+                         }
                          optionsStarted = true;
-                         const optKey = canonicalizeOptionKey(geometryOptionKey || lineText[0][0]);
                          if (isRepeatedOptionOrFigureLabel(optKey, rebuiltOptions, optionsStarted)) {
                              return;
                          }
@@ -4651,6 +4688,9 @@ export default function AdminPage() {
                          }
                          const optionContentText = buildOptionContentText(sanitizedLineItems, {
                              positionedRichText: true,
+                             restoreNumericRange: parserProfile.name === 'ivr'
+                                 && !optionColumnLayout
+                                 && /(?:範囲|サイズ|径|長さ|距離|幅)/.test(q.question),
                          });
                          const optText = pairedText || stripFooterSuffix(
                              optionContentText || lineText.substring(match?.[0]?.length || 0).trim(),

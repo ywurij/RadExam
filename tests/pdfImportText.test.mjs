@@ -41,6 +41,7 @@ import {
     removeContainedImageRects,
     restoreTruncatedOptionText,
     shouldConsumeOptionColumnHeaders,
+    shouldTreatPdfOptionKeyAsOption,
     shouldUseRadiationLayoutHeuristics,
     splitOptionItemsByColumns,
     splitOptionItemsByLeaders,
@@ -604,6 +605,123 @@ test('recognizes a semantic three-column heading and retains its column position
     ]);
     assert.deepEqual(heading.headers, ['測定器', '線種', '測定結果']);
     assert.deepEqual(heading.columns.map(column => column.x), [130, 242, 374]);
+});
+
+test('uses repeated column starts instead of heading midpoints for wide left cells', () => {
+    const rows = [
+        ['舌癌（', 'T3N0M0', '）', '低線量率組織内照射', 141.38, 180.69],
+        ['声門癌（', 'T1bN0M0', '）', '寡分割照射', 151.30, 196.30],
+        ['上咽頭癌（', 'T1N0M0', '）', '化学放射線療法', 161.22, 200.53],
+        ['中咽頭癌（', 'T3N1M0', '）', '重粒子線治療', 161.22, 200.53],
+        ['下咽頭癌（', 'T4aN0M0', '）', '高線量率組織内照射', 161.22, 205.49],
+    ].map(([left, stage, closing, treatment, stageX, closingX], index) => [
+        { text: 'abcde'[index], x: 94.25, width: 5 },
+        { text: left, x: 111.61, width: stageX - 111.61 },
+        { text: stage, x: stageX, width: closingX - stageX },
+        { text: closing, x: closingX, width: 9.92 },
+        { text: treatment, x: 240.59, width: 75 },
+    ]);
+    const layout = inferOptionColumnLayout(rows);
+    const heading = extractOptionColumnHeading([
+        { text: '病態', x: 111.61, width: 19.84 },
+        { text: '治療法', x: 240.59, width: 29.76 },
+    ], { alignedLayout: layout, firstOptionRow: rows[0] });
+    assert.deepEqual(layout, { columnCount: 2, starts: [240.59] });
+    assert.deepEqual(heading.headers, ['病態', '治療法']);
+    assert.deepEqual(rows.map(row => buildColumnOptionText(row, {
+        headers: heading.columns,
+        starts: layout.starts,
+        positionedRichText: true,
+    })), [
+        '舌癌（T3N0M0） ― 低線量率組織内照射',
+        '声門癌（T1bN0M0） ― 寡分割照射',
+        '上咽頭癌（T1N0M0） ― 化学放射線療法',
+        '中咽頭癌（T3N1M0） ― 重粒子線治療',
+        '下咽頭癌（T4aN0M0） ― 高線量率組織内照射',
+    ]);
+});
+
+test('diagnosticの短い選択肢a D・b Eを列見出しとして消費しない', () => {
+    const rowA = [
+        { text: 'a', x: 99.21, width: 5.67 },
+        { text: 'D', x: 119.05, width: 8.61 },
+    ];
+    const rowB = [
+        { text: 'b', x: 99.21, width: 6.51 },
+        { text: 'E', x: 119.05, width: 7.77 },
+    ];
+    assert.deepEqual(extractOptionColumnHeaders(rowA), []);
+    assert.deepEqual(extractOptionColumnHeaders(rowB), []);
+    assert.equal(extractOptionColumnHeading(rowA), null);
+    assert.equal(buildOptionContentText(rowA), 'D');
+    assert.equal(buildOptionContentText(rowB), 'E');
+    assert.deepEqual(extractOptionColumnHeaders([
+        { text: 'A', x: 119, width: 8 },
+        { text: 'B', x: 219, width: 8 },
+    ]).map(header => header.label), ['A', 'B']);
+});
+
+test('radiationの非辞書語の列名も選択肢との位置関係で認識する', () => {
+    const firstOption = [
+        { text: 'a', x: 94, width: 5 },
+        { text: '非切除', x: 112, width: 30 },
+        { text: '45 Gy/25 回', x: 238, width: 58 },
+    ];
+    const heading = [
+        { text: '切除の程度', x: 112, width: 50 },
+        { text: '放射線治療', x: 238, width: 50 },
+    ];
+    assert.equal(extractOptionColumnHeading(heading), null);
+    assert.deepEqual(extractOptionColumnHeading(heading, {
+        alignedLayout: { columnCount: 2, starts: [238] },
+        firstOptionRow: firstOption,
+    })?.headers, ['切除の程度', '放射線治療']);
+    assert.equal(extractOptionColumnHeading([
+        { text: '本文の続き', x: 94, width: 55 },
+        { text: '治療について', x: 238, width: 65 },
+    ], {
+        alignedLayout: { columnCount: 2, starts: [238] },
+        firstOptionRow: firstOption,
+    }), null);
+
+    const threeColumnHeading = [
+        { text: '原疾患', x: 112, width: 30 },
+        { text: '個数', x: 298, width: 20 },
+        { text: '脳転移症状', x: 366, width: 50 },
+    ];
+    assert.deepEqual(extractOptionColumnHeading(threeColumnHeading, {
+        alignedLayout: { columnCount: 3, starts: [303, 368] },
+        firstOptionRow: [
+            { text: 'a', x: 94, width: 5 },
+            { text: '乳癌', x: 112, width: 20 },
+            { text: '3個', x: 303, width: 20 },
+            { text: '有症状', x: 368, width: 40 },
+        ],
+    })?.headers, ['原疾患', '個数', '脳転移症状']);
+});
+
+test('radiationの病期Bを選択肢bとしない', () => {
+    assert.equal(shouldTreatPdfOptionKeyAsOption('B', false, 'radiation'), false);
+    assert.equal(shouldTreatPdfOptionKeyAsOption('b', false, 'radiation'), false);
+    assert.equal(shouldTreatPdfOptionKeyAsOption('a', false, 'radiation'), true);
+    assert.equal(shouldTreatPdfOptionKeyAsOption('b', true, 'radiation'), true);
+    assert.equal(shouldTreatPdfOptionKeyAsOption('B', false, 'default'), true);
+});
+
+test('IVRのPDF.jsが脱落させた数値範囲のハイフンだけを復元する', () => {
+    const missingHyphen = [
+        { text: 'ａ．', x: 107.72, width: 22.68, height: 11.34 },
+        { text: '0.90', x: 130.39, width: 19.84, height: 11.34 },
+        { text: '1.00', x: 158.74, width: 19.84, height: 11.34 },
+    ];
+    assert.equal(buildOptionContentText(missingHyphen, { positionedRichText: true, restoreNumericRange: true }), '0.90-1.00');
+    assert.equal(buildOptionContentText(missingHyphen, { positionedRichText: true }), '0.90 1.00');
+    assert.equal(buildOptionContentText([
+        { text: 'a', x: 107, width: 5, height: 11 },
+        { text: '100', x: 130, width: 17, height: 11 },
+        { text: '-', x: 148, width: 5, height: 11 },
+        { text: '300', x: 154, width: 17, height: 11 },
+    ], { positionedRichText: true, restoreNumericRange: true }), '100-300');
 });
 
 test('keeps both sides of semantic paired options separated', () => {
