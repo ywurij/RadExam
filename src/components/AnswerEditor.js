@@ -420,10 +420,10 @@ const MenuBar = ({ editor }) => {
                                         if (sortOrder === 'id') return String(a.id || '').localeCompare(String(b.id || ''), undefined, { numeric: true });
                                         return 0; // relevance
                                     })
-                                    .map(res => {
+                                    .map((res, index) => {
                                         const isExpanded = expandedIds.has(res.id);
                                         return (
-                                            <div key={res.id || Math.random()} className={styles.searchResultItem}>
+                                            <div key={res.id || `result-${index}`} className={styles.searchResultItem}>
                                                 <div className={styles.resultHeader} onClick={() => toggleExpand(res.id)}>
                                                     <div className={styles.headerContent}>
                                                         <div className={styles.resultMeta}>{res.year} - {res.genre || 'その他'} (ID: {res.id})</div>

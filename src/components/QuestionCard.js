@@ -45,7 +45,14 @@ const FigureLabels = ({ labels, position }) => {
     </div>;
 };
 
-export default function QuestionCard({ question, userProgress, onAnswer, onSaveQuestionData, onUpdateStatus, availableGenres, pdfFiles = [], onEditingChange }) {
+export default function QuestionCard(props) {
+    const pdfFiles = props.pdfFiles || [];
+    const questionPdfKey = pdfFiles.find(pdf => Number(pdf.year) === Number(props.question.year))?.key || pdfFiles[0]?.key || '';
+    // 問題や参照PDFが変わるときは、前の問題の選択・編集状態ごとリセットする。
+    return <QuestionCardContent key={JSON.stringify([props.question.id, questionPdfKey])} {...props} initialPdfKey={questionPdfKey} />;
+}
+
+function QuestionCardContent({ question, userProgress, onAnswer, onSaveQuestionData, onUpdateStatus, availableGenres, pdfFiles = [], onEditingChange, initialPdfKey }) {
     const [selectedOptions, setSelectedOptions] = useState([]);
     const [showAnswer, setShowAnswer] = useState(false);
     const [isEditing, setIsEditing] = useState(false);
@@ -60,7 +67,7 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveQ
     const [draft, setDraft] = useState(null);
     const [draggedImageIndex, setDraggedImageIndex] = useState(null);
     const [pdfTarget, setPdfTarget] = useState(null);
-    const [selectedPdfKey, setSelectedPdfKey] = useState('');
+    const [selectedPdfKey, setSelectedPdfKey] = useState(initialPdfKey);
     const [lightboxOpen, setLightboxOpen] = useState(false);
     const [lightboxIndex, setLightboxIndex] = useState(0);
     const [imageDimensions, setImageDimensions] = useState({});
@@ -110,17 +117,8 @@ export default function QuestionCard({ question, userProgress, onAnswer, onSaveQ
     const questionPdfKey = pdfFiles.find(pdf => Number(pdf.year) === Number(question.year))?.key || pdfFiles[0]?.key || '';
 
     useEffect(() => {
-        setSelectedOptions([]);
-        setShowAnswer(false);
-        setIsEditing(false);
         onEditingChange?.(false);
-        setIsEditingAnswer(false);
-        setIsEditingGenre(false);
-        setIsEditingExplanation(false);
-        setDraft(null);
-        setPdfTarget(null);
-        setSelectedPdfKey(questionPdfKey);
-    }, [question.id, questionPdfKey, onEditingChange]);
+    }, [onEditingChange]);
 
     useEffect(() => {
         if (!showAnswer) return;

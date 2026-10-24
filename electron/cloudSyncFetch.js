@@ -1,5 +1,8 @@
 const MAX_REQUEST_BODY_BYTES = 32 * 1024 * 1024;
 const MAX_RESPONSE_BODY_BYTES = 512 * 1024 * 1024;
+const CLOUD_TRANSFER_TIMEOUT_MS = 15 * 60 * 1000;
+const MAX_REDIRECTS = 5;
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
 const allowedRequestHeaders = new Set([
   'accept',
@@ -41,7 +44,7 @@ const assertAllowedCloudUrl = rawUrl => {
   } catch {
     throw new Error('クラウド通信先URLの形式が不正です。');
   }
-  if (url.protocol !== 'https:' || url.username || url.password) {
+  if (url.protocol !== 'https:' || url.username || url.password || url.port) {
     throw new Error('許可されていないクラウド通信先です。');
   }
   const googleApi = (
@@ -77,51 +80,129 @@ const normalizeHeaders = rawHeaders => {
 
 const normalizeBody = body => {
   if (body == null) return undefined;
-  const bytes = body instanceof Uint8Array
-    ? body
-    : new Uint8Array(body);
-  if (bytes.byteLength > MAX_REQUEST_BODY_BYTES) {
+  if (!(body instanceof ArrayBuffer) && !ArrayBuffer.isView(body)) {
+    throw new Error('クラウドへ送信するデータ形式が不正です。');
+  }
+  if (body.byteLength > MAX_REQUEST_BODY_BYTES) {
     throw new Error('一度に送信するクラウドデータが大きすぎます。');
   }
-  return bytes;
+  return body instanceof ArrayBuffer
+    ? new Uint8Array(body)
+    : new Uint8Array(body.buffer, body.byteOffset, body.byteLength);
 };
 
 const responseHeaders = headers => [...headers.entries()]
   .filter(([name]) => name.toLowerCase() !== 'set-cookie');
 
+const cancelBody = response => {
+  void response.body?.cancel().catch(() => {});
+};
+
+const readLimitedBody = async (response, signal, maxBytes) => {
+  const tooLarge = () => new Error('クラウド上のファイルがMac/PC版で取得できるサイズを超えています。');
+  const declaredLength = Number(response.headers.get('content-length'));
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+    cancelBody(response);
+    throw tooLarge();
+  }
+  if (!response.body) return new ArrayBuffer(0);
+
+  const reader = response.body.getReader();
+  const abort = () => { void reader.cancel(signal.reason).catch(() => {}); };
+  signal.addEventListener('abort', abort, { once: true });
+  const chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      signal.throwIfAborted();
+      const { value, done } = await reader.read();
+      signal.throwIfAborted();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        void reader.cancel().catch(() => {});
+        throw tooLarge();
+      }
+      chunks.push(value);
+    }
+    const bytes = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return bytes.buffer;
+  } finally {
+    signal.removeEventListener('abort', abort);
+    reader.releaseLock();
+  }
+};
+
 const performCloudSyncFetch = async (request, {
   fetchImpl = globalThis.fetch,
+  timeoutMs = CLOUD_TRANSFER_TIMEOUT_MS,
+  maxResponseBodyBytes = MAX_RESPONSE_BODY_BYTES,
 } = {}) => {
   if (!request || typeof request !== 'object') {
     throw new Error('クラウド通信要求の形式が不正です。');
   }
-  const url = assertAllowedCloudUrl(request.url);
-  const method = String(request.method || 'GET').toUpperCase();
+  let url = assertAllowedCloudUrl(request.url);
+  let method = String(request.method || 'GET').toUpperCase();
   if (!['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD'].includes(method)) {
     throw new Error('許可されていないクラウド通信方法です。');
   }
-  const response = await fetchImpl(url, {
-    method,
-    headers: normalizeHeaders(request.headers),
-    body: ['GET', 'HEAD'].includes(method) ? undefined : normalizeBody(request.body),
-    redirect: 'follow',
-  });
-  const declaredLength = Number(response.headers.get('content-length'));
-  if (Number.isFinite(declaredLength) && declaredLength > MAX_RESPONSE_BODY_BYTES) {
-    throw new Error('クラウド上のファイルがMac/PC版で取得できるサイズを超えています。');
+  const headers = normalizeHeaders(request.headers);
+  let body = ['GET', 'HEAD'].includes(method) ? undefined : normalizeBody(request.body);
+  const controller = new AbortController();
+  // リダイレクトと本文の読み取りを含む通信全体を制限する。
+  const timer = setTimeout(() => {
+    const error = new Error('クラウド通信が制限時間を超えました。');
+    error.name = 'TimeoutError';
+    controller.abort(error);
+  }, timeoutMs);
+  try {
+    for (let redirects = 0; ; redirects += 1) {
+      controller.signal.throwIfAborted();
+      const response = await fetchImpl(url, {
+        method,
+        headers,
+        body,
+        redirect: 'manual',
+        signal: controller.signal,
+      });
+      const location = response.headers.get('location');
+      if (REDIRECT_STATUSES.has(response.status) && location) {
+        cancelBody(response);
+        if (redirects >= MAX_REDIRECTS) {
+          throw new Error('クラウド通信のリダイレクト回数が上限を超えています。');
+        }
+        // 自動追跡すると最初のURLしか検証できないため、各段で検証する。
+        const nextUrl = assertAllowedCloudUrl(new URL(location, url).toString());
+        if (new URL(nextUrl).origin !== new URL(url).origin) {
+          headers.delete('authorization');
+        }
+        if ((response.status === 303 && method !== 'HEAD')
+          || ([301, 302].includes(response.status) && method === 'POST')) {
+          method = 'GET';
+          body = undefined;
+          headers.delete('content-type');
+          headers.delete('content-range');
+        }
+        url = nextUrl;
+        continue;
+      }
+      const responseBody = await readLimitedBody(response, controller.signal, maxResponseBodyBytes);
+      return {
+        status: response.status,
+        statusText: response.statusText,
+        headers: responseHeaders(response.headers),
+        // Windowsを含め、IPCへは通常のArrayBufferを渡す。
+        body: responseBody,
+      };
+    }
+  } finally {
+    clearTimeout(timer);
   }
-  const body = new Uint8Array(await response.arrayBuffer());
-  if (body.byteLength > MAX_RESPONSE_BODY_BYTES) {
-    throw new Error('クラウド上のファイルがMac/PC版で取得できるサイズを超えています。');
-  }
-  return {
-    status: response.status,
-    statusText: response.statusText,
-    headers: responseHeaders(response.headers),
-    // ArrayBufferとしてIPCへ渡す。Node側のUint8Arrayを直接返すと、Electronの
-    // structured clone後に環境によって通常のオブジェクトとして見えることがある。
-    body: body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength),
-  };
 };
 
 module.exports = {

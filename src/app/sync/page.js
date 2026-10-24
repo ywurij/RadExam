@@ -233,7 +233,7 @@ export default function CloudSyncPage({ embedded = false }) {
         ? (isMobileTarget ? MICROSOFT_CLIENT_ID : MICROSOFT_DESKTOP_CLIENT_ID)
         : (isMobileTarget ? GOOGLE_CLIENT_ID : GOOGLE_DESKTOP_CLIENT_ID);
 
-    const refreshState = useCallback(async () => {
+    const refreshState = useCallback(() => {
         const readState = async targetProvider => {
             const targetClientId = targetProvider === SYNC_PROVIDERS.ONE_DRIVE
                 ? (isMobileTarget ? MICROSOFT_CLIENT_ID : MICROSOFT_DESKTOP_CLIENT_ID)
@@ -247,16 +247,17 @@ export default function CloudSyncPage({ embedded = false }) {
                 ? getGoogleDriveSyncState()
                 : getGoogleDriveDesktopSyncState({ clientId: targetClientId });
         };
-        let nextState = await readState(selectedProvider);
-        if (
-            nextState.config.enabled
-            && nextState.config.provider
-            && nextState.config.provider !== selectedProvider
-        ) {
-            setSelectedProvider(nextState.config.provider);
-            nextState = await readState(nextState.config.provider);
-        }
-        setSyncState(nextState);
+        return readState(selectedProvider).then(async nextState => {
+            if (
+                nextState.config.enabled
+                && nextState.config.provider
+                && nextState.config.provider !== selectedProvider
+            ) {
+                setSelectedProvider(nextState.config.provider);
+                nextState = await readState(nextState.config.provider);
+            }
+            setSyncState(nextState);
+        });
     }, [selectedProvider]);
 
     useEffect(() => {
