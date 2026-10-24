@@ -271,7 +271,9 @@ export const checkGoogleDriveUpdates = options => runGoogleDriveDirection({
 });
 export const pullGoogleDriveUpdates = options => runGoogleDriveDirection({
     ...options,
-    action: pullLocalDataFromCloud,
+    action: provider => pullLocalDataFromCloud(provider, {
+        replaceLocalWithSnapshot: options?.replaceLocalWithSnapshot === true,
+    }),
 });
 export const pushGoogleDriveChanges = options => runGoogleDriveDirection({
     ...options,

@@ -219,6 +219,7 @@ export default function CloudSyncPage({ embedded = false }) {
     const [busyPhase, setBusyPhase] = useState('');
     const [message, setMessage] = useState('');
     const [error, setError] = useState('');
+    const [snapshotRecoveryRequired, setSnapshotRecoveryRequired] = useState(false);
     const [progress, setProgress] = useState(null);
     const [progressClock, setProgressClock] = useState(0);
     const [encryptionPassphrase, setEncryptionPassphrase] = useState('');
@@ -339,6 +340,7 @@ export default function CloudSyncPage({ embedded = false }) {
             return actionResult;
         } catch (actionError) {
             console.error('Cloud sync action failed:', actionError);
+            setSnapshotRecoveryRequired(actionError.code === 'SYNC_SNAPSHOT_LOCAL_CHANGES');
             setError(actionError.message || 'クラウド同期に失敗しました。');
             await refreshState().catch(() => {});
             return null;
@@ -397,7 +399,16 @@ export default function CloudSyncPage({ embedded = false }) {
         ), 'pulling', {
             refreshExams: true,
         });
-        if (response) setMessage(`クラウドから更新を取得しました。受信 ${response.result.appliedChanges || 0}件。`);
+        if (response) {
+            setSnapshotRecoveryRequired(false);
+            setMessage(response.result.restoredSnapshot
+                ? `クラウドの全体データを復元しました。追加の差分受信 ${response.result.appliedChanges || 0}件。`
+                : (response.result.conflicts || 0) > 0
+                    ? `受信 ${response.result.appliedChanges || 0}件、競合 ${response.result.conflicts}件。競合一覧から採用する内容を選んでください。`
+                    : (response.result.appliedChanges || 0) > 0
+                        ? `クラウドから更新を取得しました。受信 ${response.result.appliedChanges}件。`
+                        : 'クラウドに新しく適用する差分はありませんでした。');
+        }
     };
 
     const handlePush = async () => {
@@ -500,6 +511,21 @@ export default function CloudSyncPage({ embedded = false }) {
         link.click();
         link.remove();
         window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    };
+
+    const handleRestoreCloudSnapshot = async () => {
+        if (!window.confirm(
+            'この端末のデータをバックアップに書き出してから、クラウドの全体データに置き換えます。\n'
+            + 'この端末の未送信の変更はクラウドへ送信されず、バックアップ内に残ります。続行しますか？'
+        )) return;
+        const response = await runAction(async () => {
+            await saveEmergencyBackup('radexam-before-cloud-restore');
+            return directionalAction('pull')({ clientId, replaceLocalWithSnapshot: true });
+        }, 'pulling', { refreshExams: true });
+        if (response) {
+            setSnapshotRecoveryRequired(false);
+            setMessage('端末データのバックアップを書き出し、クラウドの全体データを復元しました。');
+        }
     };
 
     const handleLocalDevelopmentReset = async () => {
@@ -769,6 +795,14 @@ export default function CloudSyncPage({ embedded = false }) {
                         </>
                     )}
                 </div>
+                {connected && snapshotRecoveryRequired && (
+                    <div className={styles.encryptionArea}>
+                        <p>この端末に未送信データがあるため、クラウドの全体データを自動で上書きできません。端末の内容をバックアップに残してから復元できます。</p>
+                        <button type="button" className={styles.secondaryButton} disabled={busy || unavailable || encryptionLocked} onClick={handleRestoreCloudSnapshot}>
+                            端末をバックアップしてクラウドから復元
+                        </button>
+                    </div>
+                )}
                 {connected && encryptionLocked && (
                     <div className={styles.encryptionArea}>
                         <strong>🔒 暗号化された同期データです</strong>

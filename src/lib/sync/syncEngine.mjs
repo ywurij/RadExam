@@ -406,6 +406,7 @@ const restoreRemoteSnapshotIfNeeded = async ({
     restoreLocalSnapshot,
     allowCheckpointRestore = false,
     pendingChanges = null,
+    replaceLocalWithSnapshot = false,
 }) => {
     const snapshot = manifest.latestSnapshot;
     if (!snapshot) return { restoredSnapshot: false };
@@ -421,9 +422,10 @@ const restoreRemoteSnapshotIfNeeded = async ({
         if (!allowCheckpointRestore) return { restoredSnapshot: false };
     }
     const pending = pendingChanges || await journal.listPendingChanges();
-    if (pending.length > 0) {
-        // ローカルに独自データがある端末は、無断で全体を上書きしない。
-        return { restoredSnapshot: false };
+    if (pending.length > 0 && !replaceLocalWithSnapshot) {
+        const error = new Error('クラウドの初期データを取り込むには、この端末の未送信データをバックアップしてから復元する必要があります。');
+        error.code = 'SYNC_SNAPSHOT_LOCAL_CHANGES';
+        throw error;
     }
     if (typeof provider.downloadSnapshot !== 'function' || typeof restoreLocalSnapshot !== 'function') {
         throw new Error('クラウドの初期データを復元する機能がありません。');
@@ -438,6 +440,10 @@ const restoreRemoteSnapshotIfNeeded = async ({
     }
     reportProgress(provider, { phase: 'restoring-snapshot' });
     await restoreLocalSnapshot(blob, snapshot);
+    // 明示的な復元が成功した後にだけ、置き換え前の未送信キューを破棄する。
+    if (replaceLocalWithSnapshot && pending.length > 0) {
+        await journal.discardChanges(pending.map(change => change.changeId));
+    }
     await journal.configure({
         lastAppliedSnapshotId: snapshot.snapshotId,
         lastAppliedSnapshotAt: new Date().toISOString(),
@@ -1006,6 +1012,7 @@ export const runSyncPull = async ({
     journal,
     dataStore,
     restoreLocalSnapshot,
+    replaceLocalWithSnapshot = false,
 }) => {
     if (!await assertSyncReady({ provider, journal, dataStore, dataStoreRequired: true })) {
         return { status: 'disabled' };
@@ -1042,13 +1049,14 @@ export const runSyncPull = async ({
             restoreLocalSnapshot,
             allowCheckpointRestore,
             pendingChanges: pending,
+            replaceLocalWithSnapshot,
         });
         const pull = await pullRemoteBatches({
             provider,
             journal,
             dataStore,
             manifest,
-            localState,
+            localState: snapshotPull.restoredSnapshot ? null : localState,
         });
         const finishedAt = new Date().toISOString();
         const remaining = await inspectRemoteUpdates({ journal, manifest });

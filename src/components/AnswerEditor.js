@@ -518,7 +518,7 @@ export default function AnswerEditor({ content, onChange }) {
             },
             // Bold, Italic input rules (markdown) are enabled by default
         }),
-        ImageExtension,
+        ImageExtension.configure({ allowBase64: true }),
         Link,
         Underline,
         TextStyle,
@@ -622,10 +622,10 @@ export default function AnswerEditor({ content, onChange }) {
 
     // Sync content updates from parent (e.g. initial load)
     useEffect(() => {
-        if (editor && content && editor.getHTML() !== content) {
+        if (editor && editor.getHTML() !== (content || '')) {
             // Avoid resetting cursor or creating loop if content is essentially same
             // Simple check: if editor is empty or content changed significantly
-            editor.commands.setContent(content);
+            editor.commands.setContent(content || '', { emitUpdate: false });
         }
     }, [editor, content]);
 
