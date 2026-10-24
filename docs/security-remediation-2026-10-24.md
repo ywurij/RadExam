@@ -50,14 +50,20 @@
 - 作成した.appのfusesを読み取り、RunAsNode・NODE_OPTIONS・inspect引数・file特権がOFF、Cookie暗号化・ASAR整合性検証・OnlyLoadAppFromAsarがONであることを確認。
 - 最終モバイル本番ビルドでホームとデータ管理・クラウド同期設定画面の描画をブラウザーで確認。
 
+## リリース前の最終確認
+
+- v0.1.16の公開前に再監査し、全依存の既知の脆弱性0件、テスト267成功、lintエラー0・既存警告8を確認。
+- ユーザーがMac / Windowsで簡易確認し、画像保存・クラウド同期の修正が解決したと報告。保存後の表見出しも編集時と同じダークモードの背景色へ修正し、確認済み。
+- 検証用R3のMac DMG・署名、Windows ZIP・Windows用sharp、両配布物に含まれる修正済みCSSとElectron fusesを検証。モバイルPreviewの配信成功を確認。
+
 ## 残る作業・制約
 
-- Windows実機、macOS Intel実機、iOS/Android実機での確認は未実施。
+- macOS Intel実機、iOS/Android実機での網羅的な確認は未実施。
 - OAuthの実アカウント接続、クラウドサービスへの実送受信、大容量PDFの実データ操作、PWAのオフライン利用は今回の動作確認に含めていない。関連する既存の自動テストは成功している。
 - macOS Developer ID署名・Hardened Runtime・公証、Windowsコード署名は未導入。証明書・資格情報の準備と、各OS上での配布確認を伴う別工程として残す。
 - Electron 45は既存safeStorageの同期APIに非推奨警告を出す。今回は従来のOS暗号化保存を維持しており、非同期APIへの移行は今後の課題。
 - CSPのunsafe-inline許可と、端末内学習データのアプリ独自の保存時暗号化については、当初のレポートに記載した改善余地が残る。
-- GitHubへのpush、Release公開、モバイル版デプロイは行っていない。既存配布物・公開PWAにこの修正が適用されたという意味ではない。
+- 修正ブランチはGitHubへpushし、モバイルPreviewへ配信済み。本番への反映はmainへのマージ、デスクトップの配布はv0.1.16のリリースCIを通じて行う。
 - audit 0件は確認時点のレジストリに既知の警告がないことを示すもので、すべての脆弱性がないという保証ではない。
 
 修正後の根拠: [npm audit](security-review-2026-10-24/npm-audit-after.json)、[監査コマンド](security-review-2026-10-24/security-check-after.txt)、[自動テスト](security-review-2026-10-24/tests-after.txt)、[lint](security-review-2026-10-24/lint-after.txt)。
