@@ -1,0 +1,5 @@
+
+> exam-app@0.1.15 security:check
+> npm audit --audit-level=high
+
+found 0 vulnerabilities

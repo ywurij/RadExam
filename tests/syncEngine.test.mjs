@@ -927,3 +927,81 @@ test('does not block a one-change sync with an old weekly checkpoint', async () 
     assert.equal(result.createdPeriodicSnapshot, false);
     assert.equal(snapshotCreations, 0);
 });
+
+const snapshotCloudWithExistingTarget = async () => {
+    const cloud = createInMemorySyncCloud();
+    const source = await createDevice('snapshot-source', new InMemorySyncProvider(cloud));
+    await source.journal.recordChanges([{
+        entityType: SYNC_ENTITY_TYPES.PROGRESS,
+        entityId: 'cloud-initial',
+        changedFields: ['status'],
+        payload: { status: 'correct' },
+    }]);
+    await runSyncPush({
+        ...source,
+        snapshotThreshold: 1,
+        createLocalSnapshot: async () => ({ blob: new Blob(['cloud-snapshot']) }),
+    });
+    await source.journal.recordChanges([{
+        entityType: SYNC_ENTITY_TYPES.PROGRESS,
+        entityId: 'cloud-later',
+        changedFields: ['status'],
+        payload: { status: 'review' },
+    }]);
+    await runSyncPush(source);
+    const target = await createDevice('snapshot-target', new InMemorySyncProvider(cloud));
+    await target.journal.recordChanges([{
+        entityType: SYNC_ENTITY_TYPES.PROGRESS,
+        entityId: 'local-unsent',
+        changedFields: ['status'],
+        payload: { status: 'incorrect' },
+    }]);
+    return { cloud, target };
+};
+
+test('初回スナップショットが未送信データで阻まれたら受信0件の成功にしない', async () => {
+    const { target } = await snapshotCloudWithExistingTarget();
+    let restored = false;
+    await assert.rejects(runSyncPull({
+        ...target,
+        restoreLocalSnapshot: async () => { restored = true; },
+    }), { code: 'SYNC_SNAPSHOT_LOCAL_CHANGES' });
+    assert.equal(restored, false);
+    assert.equal((await target.journal.listPendingChanges()).length, 1);
+    assert.equal(Number((await target.journal.getConfig()).lastPulledGeneration) || 0, 0);
+});
+
+test('明示的なクラウド復元は復元成功後に旧キューを破棄し新しい差分を適用する', async () => {
+    const { cloud, target } = await snapshotCloudWithExistingTarget();
+    let restored = false;
+    const result = await runSyncPull({
+        ...target,
+        replaceLocalWithSnapshot: true,
+        restoreLocalSnapshot: async blob => {
+            assert.equal(await blob.text(), 'cloud-snapshot');
+            assert.equal((await target.journal.listPendingChanges()).length, 1);
+            restored = true;
+        },
+    });
+    assert.equal(restored, true);
+    assert.equal(result.restoredSnapshot, true);
+    assert.equal(result.appliedChanges, 1);
+    assert.equal(result.pendingChanges, 0);
+    assert.equal((await target.journal.listPendingChanges()).length, 0);
+    assert.equal(target.dataStore.get(SYNC_ENTITY_TYPES.PROGRESS, 'cloud-later').status, 'review');
+    assert.equal((await target.journal.getConfig()).lastPulledGeneration, cloud.manifest.generation);
+});
+
+test('クラウド復元の検証・保存失敗では端末の未送信キューを消さない', async () => {
+    for (const failure of ['hash', 'restore']) {
+        const { target } = await snapshotCloudWithExistingTarget();
+        if (failure === 'hash') target.provider.downloadSnapshot = async () => new Blob(['corrupt']);
+        await assert.rejects(runSyncPull({
+            ...target,
+            replaceLocalWithSnapshot: true,
+            restoreLocalSnapshot: async () => { throw new Error('restore failed'); },
+        }), failure === 'hash' ? /破損/ : /restore failed/);
+        assert.equal((await target.journal.listPendingChanges()).length, 1);
+        assert.equal(Number((await target.journal.getConfig()).lastPulledGeneration) || 0, 0);
+    }
+});

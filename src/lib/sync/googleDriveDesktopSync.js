@@ -284,7 +284,9 @@ export const checkGoogleDriveDesktopUpdates = options => runGoogleDriveDesktopDi
 });
 export const pullGoogleDriveDesktopUpdates = options => runGoogleDriveDesktopDirection({
     ...options,
-    action: pullLocalDataFromCloud,
+    action: provider => pullLocalDataFromCloud(provider, {
+        replaceLocalWithSnapshot: options?.replaceLocalWithSnapshot === true,
+    }),
 });
 export const pushGoogleDriveDesktopChanges = options => runGoogleDriveDesktopDirection({
     ...options,

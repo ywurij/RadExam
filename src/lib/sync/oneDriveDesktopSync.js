@@ -289,7 +289,9 @@ export const checkOneDriveDesktopUpdates = options => runOneDriveDesktopDirectio
 });
 export const pullOneDriveDesktopUpdates = options => runOneDriveDesktopDirection({
     ...options,
-    action: pullLocalDataFromCloud,
+    action: provider => pullLocalDataFromCloud(provider, {
+        replaceLocalWithSnapshot: options?.replaceLocalWithSnapshot === true,
+    }),
 });
 export const pushOneDriveDesktopChanges = options => runOneDriveDesktopDirection({
     ...options,

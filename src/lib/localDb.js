@@ -1285,7 +1285,9 @@ export const checkLocalDataSyncUpdates = provider => checkSyncUpdates({
     journal: localSyncJournal,
 });
 
-export const pullLocalDataFromCloud = provider => runSyncPull(createLocalSyncOptions(provider));
+export const pullLocalDataFromCloud = (provider, { replaceLocalWithSnapshot = false } = {}) => (
+    runSyncPull({ ...createLocalSyncOptions(provider), replaceLocalWithSnapshot })
+);
 
 export const pushLocalDataToCloud = provider => runSyncPush(createLocalSyncOptions(provider));
 

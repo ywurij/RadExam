@@ -34,6 +34,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Electron is a devDependency but is the shipped desktop runtime.
+      - name: Check all dependencies for high and critical vulnerabilities
+        run: npm run security:check
+
       - name: Match tag and package version
         run: node scripts/check-release-tag.mjs "${GITHUB_REF_NAME}"
 

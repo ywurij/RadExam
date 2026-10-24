@@ -274,7 +274,9 @@ export const checkOneDriveUpdates = options => runOneDriveDirection({
 });
 export const pullOneDriveUpdates = options => runOneDriveDirection({
     ...options,
-    action: pullLocalDataFromCloud,
+    action: provider => pullLocalDataFromCloud(provider, {
+        replaceLocalWithSnapshot: options?.replaceLocalWithSnapshot === true,
+    }),
 });
 export const pushOneDriveChanges = options => runOneDriveDirection({
     ...options,

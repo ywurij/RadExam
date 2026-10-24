@@ -43,7 +43,7 @@ export default function DataTransferPage() {
     const refresh = async () => setExams(await getAllLocalExams());
 
     useEffect(() => {
-        refresh();
+        getAllLocalExams().then(setExams);
     }, []);
 
     const handleImport = async (event) => {

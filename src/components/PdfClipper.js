@@ -185,7 +185,7 @@ export default function PdfClipper({ pdfBlob, onClip, initialSearchText = '', sc
                 <button type="button" disabled={currentPage <= 1} onClick={() => moveToPage(currentPage - 1)}>前のページ</button>
                 <strong>{pageCount ? `${currentPage} / ${pageCount}` : '読込中…'}</strong>
                 <button type="button" disabled={!pageCount || currentPage >= pageCount} onClick={() => moveToPage(currentPage + 1)}>次のページ</button>
-                {onClip && <button type="button" disabled={!clipActionRef.current} onClick={() => clipActionRef.current?.()} style={{ marginLeft: '0.8rem', background: clipActionRef.current ? '#3182ce' : '#a0aec0', color: '#fff', border: 0, borderRadius: '0.35rem', padding: '0.45rem 0.8rem', fontWeight: 'bold', cursor: clipActionRef.current ? 'pointer' : 'default' }}>{clipReadyPage ? `${clipReadyPage}ページの選択範囲を画像登録` : 'PDF上で範囲を選択'}</button>}
+                {onClip && <button type="button" disabled={!clipReadyPage} onClick={() => clipActionRef.current?.()} style={{ marginLeft: '0.8rem', background: clipReadyPage ? '#3182ce' : '#a0aec0', color: '#fff', border: 0, borderRadius: '0.35rem', padding: '0.45rem 0.8rem', fontWeight: 'bold', cursor: clipReadyPage ? 'pointer' : 'default' }}>{clipReadyPage ? `${clipReadyPage}ページの選択範囲を画像登録` : 'PDF上で範囲を選択'}</button>}
             </div>
             <p style={{ margin: '0 0 0.5rem', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
                 {onClip ? '上下にスクロールできます。PDF上をドラッグして登録範囲を選択してください。' : '上下にスクロールしてPDFを連続閲覧できます。'}
