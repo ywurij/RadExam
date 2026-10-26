@@ -44,14 +44,14 @@
     "katex": "^0.19.1",
     "localforage": "^1.10.0",
     "next": "^16.4.3",
-    "pdfjs-dist": "^6.2.108",
+    "pdfjs-dist": "^6.4.299",
     "pngjs": "^7.0.0",
-    "react": "^19.2.3",
-    "react-dom": "^19.2.3",
-    "react-hook-form": "^7.69.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "react-hook-form": "^7.90.0",
     "sanitize-html": "^2.18.1",
-    "sass": "^1.97.1",
-    "yet-another-react-lightbox": "^3.27.0"
+    "sass": "^1.106.1",
+    "yet-another-react-lightbox": "^3.32.2"
   },
   "devDependencies": {
     "@electron/fuses": "^2.1.3",
